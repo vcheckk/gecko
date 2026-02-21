@@ -1,14 +1,22 @@
 pub fn branch<const OP: u32>(ctx: &mut crate::gekko::Gekko, instr: crate::cpu::semantics::Instruction) {
     if instr.lk() {
-        ctx.cpu.write_gpr(0, ctx.cpu.current_pc.wrapping_add(4));
+        ctx.cpu.lr = ctx.cpu.cia.wrapping_add(4);
     }
 
-    let target = if instr.aa() {
-        instr.li() as u32
-    } else {
-        ctx.cpu.current_pc.wrapping_add_signed(instr.li())
+    let target = match OP {
+        crate::cpu::lut::OP_BX => {
+            if instr.aa() {
+                instr.li() as u32
+            } else {
+                ctx.cpu.cia.wrapping_add_signed(instr.li())
+            }
+        }
+        crate::cpu::lut::OP_BCLRX => {
+            ctx.cpu.lr
+        }
+        _ => todo!("branch instruction with OP = {OP:#x}")
     };
-    ctx.cpu.next_pc = target;
+    ctx.cpu.nia = target;
 }
 
 pub fn alu<const OP: u32>(ctx: &mut crate::gekko::Gekko, instr: crate::cpu::semantics::Instruction) {
@@ -28,6 +36,35 @@ pub fn alu<const OP: u32>(ctx: &mut crate::gekko::Gekko, instr: crate::cpu::sema
             ctx.cpu.gprs[instr.ra()] = ctx.cpu.gprs[instr.rs()] | (instr.uimm() << 16);
         }
         _ => todo!("ALU instruction with OP = {OP:#x}")
+    }
+}
+
+pub fn msr<const OP: u32>(_ctx: &mut crate::gekko::Gekko, _instr: crate::cpu::semantics::Instruction) {
+    match OP {
+        crate::cpu::lut::OP_MTMSR => {
+            println!("OP_MTMSR!!");
+        }
+        crate::cpu::lut::OP_MFMSR => {
+            println!("OP_MFMSR!!");
+        }
+        _ => todo!("MSR instruction with OP = {OP:#x}")
+    }
+}
+
+pub fn spr<const OP: u32>(ctx: &mut crate::gekko::Gekko, instr: crate::cpu::semantics::Instruction) {
+    match OP {
+        crate::cpu::lut::OP_MTSPR => {
+            println!("OP_MTSPR!! {}", instr.spr());
+        }
+        crate::cpu::lut::OP_MFSPR => {
+            match instr.spr() {
+                1 => ctx.cpu.gprs[instr.rd()] = ctx.cpu.xer,
+                8 => ctx.cpu.gprs[instr.rd()] = ctx.cpu.lr,
+                9 => ctx.cpu.gprs[instr.rd()] = ctx.cpu.ctr,
+                _ => todo!("unimplemented SPR number {}", instr.spr())
+            }
+        }
+        _ => todo!("SPR instruction with OP = {OP:#x}")
     }
 }
 
@@ -113,7 +150,6 @@ pub fn lwzux(_ctx: &mut crate::gekko::Gekko, _instr: crate::cpu::semantics::Inst
 pub fn andcx(_ctx: &mut crate::gekko::Gekko, _instr: crate::cpu::semantics::Instruction) { todo!("andcx") }
 pub fn mulhwx(_ctx: &mut crate::gekko::Gekko, _instr: crate::cpu::semantics::Instruction) { todo!("mulhwx") }
 pub fn mfcr(_ctx: &mut crate::gekko::Gekko, _instr: crate::cpu::semantics::Instruction) { todo!("mfcr") }
-pub fn mfmsr(_ctx: &mut crate::gekko::Gekko, _instr: crate::cpu::semantics::Instruction) { todo!("mfmsr") }
 pub fn dcbf(_ctx: &mut crate::gekko::Gekko, _instr: crate::cpu::semantics::Instruction) { todo!("dcbf") }
 pub fn lbzx(_ctx: &mut crate::gekko::Gekko, _instr: crate::cpu::semantics::Instruction) { todo!("lbzx") }
 pub fn negx(_ctx: &mut crate::gekko::Gekko, _instr: crate::cpu::semantics::Instruction) { todo!("negx") }
@@ -122,7 +158,6 @@ pub fn norx(_ctx: &mut crate::gekko::Gekko, _instr: crate::cpu::semantics::Instr
 pub fn subfex(_ctx: &mut crate::gekko::Gekko, _instr: crate::cpu::semantics::Instruction) { todo!("subfex") }
 pub fn addex(_ctx: &mut crate::gekko::Gekko, _instr: crate::cpu::semantics::Instruction) { todo!("addex") }
 pub fn mtcrf(_ctx: &mut crate::gekko::Gekko, _instr: crate::cpu::semantics::Instruction) { todo!("mtcrf") }
-pub fn mtmsr(_ctx: &mut crate::gekko::Gekko, _instr: crate::cpu::semantics::Instruction) { todo!("mtmsr") }
 pub fn stwcx_dot(_ctx: &mut crate::gekko::Gekko, _instr: crate::cpu::semantics::Instruction) { todo!("stwcx_dot") }
 pub fn stwx(_ctx: &mut crate::gekko::Gekko, _instr: crate::cpu::semantics::Instruction) { todo!("stwx") }
 pub fn stwux(_ctx: &mut crate::gekko::Gekko, _instr: crate::cpu::semantics::Instruction) { todo!("stwux") }
@@ -144,7 +179,6 @@ pub fn tlbie(_ctx: &mut crate::gekko::Gekko, _instr: crate::cpu::semantics::Inst
 pub fn eciwx(_ctx: &mut crate::gekko::Gekko, _instr: crate::cpu::semantics::Instruction) { todo!("eciwx") }
 pub fn lhzux(_ctx: &mut crate::gekko::Gekko, _instr: crate::cpu::semantics::Instruction) { todo!("lhzux") }
 pub fn xorx(_ctx: &mut crate::gekko::Gekko, _instr: crate::cpu::semantics::Instruction) { todo!("xorx") }
-pub fn mfspr(_ctx: &mut crate::gekko::Gekko, _instr: crate::cpu::semantics::Instruction) { todo!("mfspr") }
 pub fn lhax(_ctx: &mut crate::gekko::Gekko, _instr: crate::cpu::semantics::Instruction) { todo!("lhax") }
 pub fn tlbia(_ctx: &mut crate::gekko::Gekko, _instr: crate::cpu::semantics::Instruction) { todo!("tlbia") }
 pub fn mftb(_ctx: &mut crate::gekko::Gekko, _instr: crate::cpu::semantics::Instruction) { todo!("mftb") }
@@ -155,7 +189,6 @@ pub fn ecowx(_ctx: &mut crate::gekko::Gekko, _instr: crate::cpu::semantics::Inst
 pub fn sthux(_ctx: &mut crate::gekko::Gekko, _instr: crate::cpu::semantics::Instruction) { todo!("sthux") }
 pub fn orx(_ctx: &mut crate::gekko::Gekko, _instr: crate::cpu::semantics::Instruction) { todo!("orx") }
 pub fn divwux(_ctx: &mut crate::gekko::Gekko, _instr: crate::cpu::semantics::Instruction) { todo!("divwux") }
-pub fn mtspr(_ctx: &mut crate::gekko::Gekko, _instr: crate::cpu::semantics::Instruction) { todo!("mtspr") }
 pub fn dcbi(_ctx: &mut crate::gekko::Gekko, _instr: crate::cpu::semantics::Instruction) { todo!("dcbi") }
 pub fn nandx(_ctx: &mut crate::gekko::Gekko, _instr: crate::cpu::semantics::Instruction) { todo!("nandx") }
 pub fn divwx(_ctx: &mut crate::gekko::Gekko, _instr: crate::cpu::semantics::Instruction) { todo!("divwx") }

@@ -20,13 +20,13 @@ impl Gekko {
     }
 
     pub fn run_until_event(&mut self) {
-        self.cpu.current_pc = self.cpu.pc;
-        self.cpu.next_pc = self.cpu.current_pc.wrapping_add(4);
+        self.cpu.cia = self.cpu.pc;
+        self.cpu.nia = self.cpu.cia.wrapping_add(4);
 
-        let instr = cpu::semantics::Instruction(self.mmu.read_u32(self.cpu.current_pc));
+        let instr = cpu::semantics::Instruction(self.mmu.read_u32(self.cpu.cia));
         cpu::lut::dispatch(self, instr);
         self.scheduler.cycles += 1;
         
-        self.cpu.pc = self.cpu.next_pc;
+        self.cpu.pc = self.cpu.nia;
     }
 }

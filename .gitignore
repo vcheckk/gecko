@@ -1,3 +1,5 @@
 target/
 rsrc/*.dol
 rsrc/*.bin
+.idea/
+.vscode/

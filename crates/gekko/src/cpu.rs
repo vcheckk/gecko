@@ -9,9 +9,16 @@ pub mod lut {
 pub struct Cpu {
     pub gprs: [u32; 32],
     pub fprs: [f64; 32],
-    pub current_pc: u32,
-    pub next_pc: u32,
     pub pc: u32,
+    pub lr: u32,
+    pub ctr: u32,
+    pub xer: u32,
+
+    // These are used during instruction execution to track the current
+    // and next PC values. In essence, by writing to `next_pc`, instructions
+    // can change the flow of execution (e.g. for branches and jumps).
+    pub cia: u32, // Current Instruction Address
+    pub nia: u32, // Next Instruction Address
 }
 
 impl Cpu {
@@ -19,25 +26,12 @@ impl Cpu {
         Cpu {
             gprs: [0; 32],
             fprs: [0.0; 32],
-            current_pc: 0x100,
-            next_pc: 0x104,
             pc: 0x100,
+            cia: 0x100,
+            nia: 0x104,
+            lr: 0,
+            ctr: 0,
+            xer: 0,
         }
-    }
-
-    pub fn read_gpr(&self, reg: usize) -> u32 {
-        self.gprs[reg]
-    }
-
-    pub fn write_gpr(&mut self, reg: usize, value: u32) {
-        self.gprs[reg] = value;
-    }
-
-    pub fn read_fpr(&self, reg: usize) -> f64 {
-        self.fprs[reg]
-    }
-
-    pub fn write_fpr(&mut self, reg: usize, value: f64) {
-        self.fprs[reg] = value;
     }
 }

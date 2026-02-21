@@ -10,8 +10,10 @@ fn main() {
         .handler_mod("crate::cpu::interpreter")
         .ctx_type("crate::gekko::Gekko")
         .instr_type("crate::cpu::semantics::Instruction")
-        .group("branch", ["bx"])
-        .group("alu", ["ori", "addi", "addis"]);
+        .group("branch", ["bx", "bclrx"])
+        .group("alu", ["ori", "addi", "addis"])
+        .group("msr", ["mtmsr", "mfmsr"])
+        .group("spr", ["mtspr", "mfspr"]);
 
     // Always regenerate the LUT dispatch tables
     builder
