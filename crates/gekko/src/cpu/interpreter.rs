@@ -136,7 +136,31 @@ pub fn store_load<const OP: u32>(
                 ctx.cpu.gprs[instr.ra()] = addr;
             }
         }
+        crate::cpu::lut::OP_LWZ | crate::cpu::lut::OP_LWZU => {
+            let addr = ctx.cpu.gprs[instr.ra()].wrapping_add_signed(instr.disp());
+            ctx.cpu.gprs[instr.rd()] = ctx.mmu.virt_read_u32(addr);
+            if OP == crate::cpu::lut::OP_LWZU {
+                ctx.cpu.gprs[instr.ra()] = addr;
+            }
+        }
         _ => todo!("Store/Load instruction with OP = {OP:#x}"),
+    }
+}
+
+pub fn compare<const OP: u32>(
+    ctx: &mut crate::gekko::Gekko,
+    instr: crate::cpu::semantics::Instruction,
+) {
+    match OP {
+        crate::cpu::lut::OP_CMPI => {
+            let result = (ctx.cpu.gprs[instr.ra()] as i32).cmp(&instr.simm());
+            // ctx.cpu.cr[instr.bi() as usize] = match result {
+            //     std::cmp::Ordering::Less => 0b100,
+            //     std::cmp::Ordering::Equal => 0b010,
+            //     std::cmp::Ordering::Greater => 0b001,
+            // };
+        }
+        _ => todo!("Compare instruction with OP = {OP:#x}"),
     }
 }
 
@@ -178,7 +202,6 @@ pub fn store_load<const OP: u32>(
 #[rustfmt::skip] pub fn mulli(_ctx: &mut crate::gekko::Gekko, _instr: crate::cpu::semantics::Instruction) { todo!("mulli") }
 #[rustfmt::skip] pub fn subfic(_ctx: &mut crate::gekko::Gekko, _instr: crate::cpu::semantics::Instruction) { todo!("subfic") }
 #[rustfmt::skip] pub fn cmpli(_ctx: &mut crate::gekko::Gekko, _instr: crate::cpu::semantics::Instruction) { todo!("cmpli") }
-#[rustfmt::skip] pub fn cmpi(_ctx: &mut crate::gekko::Gekko, _instr: crate::cpu::semantics::Instruction) { todo!("cmpi") }
 #[rustfmt::skip] pub fn addic(_ctx: &mut crate::gekko::Gekko, _instr: crate::cpu::semantics::Instruction) { todo!("addic") }
 #[rustfmt::skip] pub fn addic_dot(_ctx: &mut crate::gekko::Gekko, _instr: crate::cpu::semantics::Instruction) { todo!("addic_dot") }
 #[rustfmt::skip] pub fn bcx(_ctx: &mut crate::gekko::Gekko, _instr: crate::cpu::semantics::Instruction) { todo!("bcx") }
@@ -297,8 +320,6 @@ pub fn store_load<const OP: u32>(
 #[rustfmt::skip] pub fn tlbld(_ctx: &mut crate::gekko::Gekko, _instr: crate::cpu::semantics::Instruction) { todo!("tlbld") }
 #[rustfmt::skip] pub fn tlbli(_ctx: &mut crate::gekko::Gekko, _instr: crate::cpu::semantics::Instruction) { todo!("tlbli") }
 #[rustfmt::skip] pub fn dcbz(_ctx: &mut crate::gekko::Gekko, _instr: crate::cpu::semantics::Instruction) { todo!("dcbz") }
-#[rustfmt::skip] pub fn lwz(_ctx: &mut crate::gekko::Gekko, _instr: crate::cpu::semantics::Instruction) { todo!("lwz") }
-#[rustfmt::skip] pub fn lwzu(_ctx: &mut crate::gekko::Gekko, _instr: crate::cpu::semantics::Instruction) { todo!("lwzu") }
 #[rustfmt::skip] pub fn lbz(_ctx: &mut crate::gekko::Gekko, _instr: crate::cpu::semantics::Instruction) { todo!("lbz") }
 #[rustfmt::skip] pub fn lbzu(_ctx: &mut crate::gekko::Gekko, _instr: crate::cpu::semantics::Instruction) { todo!("lbzu") }
 #[rustfmt::skip] pub fn stw(_ctx: &mut crate::gekko::Gekko, _instr: crate::cpu::semantics::Instruction) { todo!("stw") }

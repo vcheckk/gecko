@@ -14,7 +14,8 @@ fn main() {
         .group("alu", ["ori", "addi", "addis"])
         .group("msr", ["mtmsr", "mfmsr"])
         .group("spr", ["mtspr", "mfspr"])
-        .group("store_load", ["stwu", "sth", "sthu"]);
+        .group("store_load", ["stw", "stwu", "sth", "sthu", "lwz", "lwzu"])
+        .group("compare", ["cmpi"]);
 
     // Always regenerate the LUT dispatch tables
     builder
