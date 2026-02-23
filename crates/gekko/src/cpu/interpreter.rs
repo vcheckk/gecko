@@ -58,23 +58,31 @@ pub fn alu<const OP: u32>(
             let ra = if instr.ra() == 0 {
                 0
             } else {
-                ctx.cpu.gprs[instr.ra()]
+                ctx.cpu.read_gpr(instr.ra())
             };
-            ctx.cpu.gprs[instr.rd()] = ra.wrapping_add_signed(instr.simm());
+            ctx.cpu
+                .write_gpr(instr.rd(), ra.wrapping_add_signed(instr.simm()));
         }
         crate::cpu::lut::OP_ADDIS => {
             let ra = if instr.ra() == 0 {
                 0
             } else {
-                ctx.cpu.gprs[instr.ra()]
+                ctx.cpu.read_gpr(instr.ra())
             };
-            ctx.cpu.gprs[instr.rd()] = ra.wrapping_add_signed(instr.simm() << 16);
+            ctx.cpu
+                .write_gpr(instr.rd(), ra.wrapping_add_signed(instr.simm() << 16));
         }
         crate::cpu::lut::OP_ORI => {
-            ctx.cpu.gprs[instr.ra()] = ctx.cpu.gprs[instr.rs()] | instr.uimm();
+            ctx.cpu.write_gpr(
+                instr.ra(),
+                ctx.cpu.read_gpr(instr.rs()) | instr.uimm() as u32,
+            );
         }
         crate::cpu::lut::OP_ORIS => {
-            ctx.cpu.gprs[instr.ra()] = ctx.cpu.gprs[instr.rs()] | (instr.uimm() << 16);
+            ctx.cpu.write_gpr(
+                instr.ra(),
+                ctx.cpu.read_gpr(instr.rs()) | ((instr.uimm() as u32) << 16),
+            );
         }
         _ => todo!("ALU instruction with OP = {OP:#x}"),
     }
@@ -100,16 +108,16 @@ pub fn spr<const OP: u32>(
     instr: crate::cpu::semantics::Instruction,
 ) {
     match OP {
-        crate::cpu::lut::OP_MTSPR => match instr.spr() {
-            1 => ctx.cpu.xer = ctx.cpu.gprs[instr.rs()],
-            8 => ctx.cpu.lr = ctx.cpu.gprs[instr.rs()],
-            9 => ctx.cpu.ctr = ctx.cpu.gprs[instr.rs()],
+        crate::cpu::lut::OP_MTSPR => match instr.spr_swapped() {
+            1 => ctx.cpu.xer = ctx.cpu.read_gpr(instr.rs()),
+            8 => ctx.cpu.lr = ctx.cpu.read_gpr(instr.rs()),
+            9 => ctx.cpu.ctr = ctx.cpu.read_gpr(instr.rs()),
             _ => todo!("unimplemented SPR number {}", instr.spr()),
         },
-        crate::cpu::lut::OP_MFSPR => match instr.spr() {
-            1 => ctx.cpu.gprs[instr.rd()] = ctx.cpu.xer,
-            8 => ctx.cpu.gprs[instr.rd()] = ctx.cpu.lr,
-            9 => ctx.cpu.gprs[instr.rd()] = ctx.cpu.ctr,
+        crate::cpu::lut::OP_MFSPR => match instr.spr_swapped() {
+            1 => ctx.cpu.write_gpr(instr.rd(), ctx.cpu.xer),
+            8 => ctx.cpu.write_gpr(instr.rd(), ctx.cpu.lr),
+            9 => ctx.cpu.write_gpr(instr.rd(), ctx.cpu.ctr),
             _ => todo!("unimplemented SPR number {}", instr.spr()),
         },
         _ => todo!("SPR instruction with OP = {OP:#x}"),
@@ -122,25 +130,34 @@ pub fn store_load<const OP: u32>(
 ) {
     match OP {
         crate::cpu::lut::OP_STW | crate::cpu::lut::OP_STWU => {
-            let addr = ctx.cpu.gprs[instr.ra()].wrapping_add_signed(instr.disp());
-            ctx.mmu.virt_write_u32(addr, ctx.cpu.gprs[instr.rs()]);
+            let addr = ctx
+                .cpu
+                .read_gpr(instr.ra())
+                .wrapping_add_signed(instr.disp());
+            ctx.mmu.virt_write_u32(addr, ctx.cpu.read_gpr(instr.rs()));
             if OP == crate::cpu::lut::OP_STWU {
-                ctx.cpu.gprs[instr.ra()] = addr;
+                ctx.cpu.write_gpr(instr.ra(), addr);
             }
         }
         crate::cpu::lut::OP_STH | crate::cpu::lut::OP_STHU => {
-            let addr = ctx.cpu.gprs[instr.ra()].wrapping_add_signed(instr.disp());
+            let addr = ctx
+                .cpu
+                .read_gpr(instr.ra())
+                .wrapping_add_signed(instr.disp());
             ctx.mmu
-                .virt_write_u16(addr, (ctx.cpu.gprs[instr.rs()] & 0xffff) as u16);
+                .virt_write_u16(addr, (ctx.cpu.read_gpr(instr.rs()) & 0xffff) as u16);
             if OP == crate::cpu::lut::OP_STHU {
-                ctx.cpu.gprs[instr.ra()] = addr;
+                ctx.cpu.write_gpr(instr.ra(), addr);
             }
         }
         crate::cpu::lut::OP_LWZ | crate::cpu::lut::OP_LWZU => {
-            let addr = ctx.cpu.gprs[instr.ra()].wrapping_add_signed(instr.disp());
-            ctx.cpu.gprs[instr.rd()] = ctx.mmu.virt_read_u32(addr);
+            let addr = ctx
+                .cpu
+                .read_gpr(instr.ra())
+                .wrapping_add_signed(instr.disp());
+            ctx.cpu.write_gpr(instr.rd(), ctx.mmu.virt_read_u32(addr));
             if OP == crate::cpu::lut::OP_LWZU {
-                ctx.cpu.gprs[instr.ra()] = addr;
+                ctx.cpu.write_gpr(instr.ra(), addr);
             }
         }
         _ => todo!("Store/Load instruction with OP = {OP:#x}"),
@@ -153,8 +170,8 @@ pub fn compare<const OP: u32>(
 ) {
     match OP {
         crate::cpu::lut::OP_CMPI => {
-            let result = (ctx.cpu.gprs[instr.ra()] as i32).cmp(&instr.simm());
-            // ctx.cpu.cr[instr.bi() as usize] = match result {
+            let _result = (ctx.cpu.read_gpr(instr.ra()) as i32).cmp(&instr.simm());
+            // ctx.cpu.cr[instr.bi() as usize] = match _result {
             //     std::cmp::Ordering::Less => 0b100,
             //     std::cmp::Ordering::Equal => 0b010,
             //     std::cmp::Ordering::Greater => 0b001,

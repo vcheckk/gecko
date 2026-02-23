@@ -74,6 +74,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a0b1c8f88248e1712bda8e8b64ae1359bb01e953abd5f76c53ddabf32be88fa1"
 
 [[package]]
+name = "chipi"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "804b48113bfcabe42a604d0db98786210fe860c0b7ced8b9bb85aa7c74f86b85"
+
+[[package]]
 name = "clap"
 version = "4.5.59"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -132,7 +138,7 @@ dependencies = [
 name = "disasm"
 version = "0.1.0"
 dependencies = [
- "chipi",
+ "chipi 0.4.0",
 ]
 
 [[package]]
@@ -147,7 +153,7 @@ dependencies = [
 name = "gekko"
 version = "0.1.0"
 dependencies = [
- "chipi",
+ "chipi 0.5.1",
  "tracing",
 ]
 

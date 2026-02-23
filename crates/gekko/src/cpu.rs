@@ -35,4 +35,14 @@ impl Cpu {
             xer: 0,
         }
     }
+
+    #[inline(always)]
+    pub fn read_gpr(&self, index: u8) -> u32 {
+        self.gprs[index as usize]
+    }
+
+    #[inline(always)]
+    pub fn write_gpr(&mut self, index: u8, value: u32) {
+        self.gprs[index as usize] = value;
+    }
 }

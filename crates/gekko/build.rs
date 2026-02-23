@@ -17,6 +17,11 @@ fn main() {
         .group("store_load", ["stw", "stwu", "sth", "sthu", "lwz", "lwzu"])
         .group("compare", ["cmpi"]);
 
+    // Generate the instruction type with accessor methods
+    builder
+        .build_instr_type(out_dir.join("gekko_instr.rs").to_str().unwrap())
+        .expect("failed to generate instruction type");
+
     // Always regenerate the LUT dispatch tables
     builder
         .build_lut(out_dir.join("gekko_lut.rs").to_str().unwrap())

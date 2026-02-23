@@ -21,37 +21,53 @@ fn main() {
 
     let mut gekko = gekko::gekko::Gekko::new(&path);
     let mut prev_snapshot = CpuSnapshot::from_cpu(&gekko.cpu);
+    let mut current_addr = gekko.cpu.pc;
+    let mut is_busyloop = false;
 
     loop {
-        let instr = GekkoInstruction::decode(gekko.mmu.virt_slice(gekko.cpu.pc, 4))
-            .expect("failed to decode instruction")
-            .0;
+        if !is_busyloop {
+            let instr = GekkoInstruction::decode(gekko.mmu.virt_slice(gekko.cpu.pc, 4))
+                .expect("failed to decode instruction")
+                .0;
 
-        if is_debug {
-            dbg!(&instr);
-        }
+            if is_debug {
+                dbg!(&instr);
+            }
 
-        let refs = fmt::gpr_refs(&instr);
-        let comment = fmt::reg_comment(&prev_snapshot.gprs, &refs);
+            let refs = fmt::gpr_refs(&instr);
+            let comment = fmt::reg_comment(&prev_snapshot.gprs, &refs);
 
-        let prefix = format!(
-            "{}: {}",
-            format!("{:08X}", gekko.cpu.pc).bold(),
-            fmt::colorize_instr(&instr)
-        );
-        const COMMENT_COL: usize = 50;
-        let pad = COMMENT_COL.saturating_sub(fmt::visible_len(&prefix));
+            let prefix = format!(
+                "{}: {}",
+                format!("{:08X}", gekko.cpu.pc).bold(),
+                fmt::colorize_instr(&instr)
+            );
+            const COMMENT_COL: usize = 50;
+            let pad = COMMENT_COL.saturating_sub(fmt::visible_len(&prefix));
 
-        if comment.is_empty() {
-            println!("{}", prefix);
-        } else {
-            println!("{}{}{}", prefix, " ".repeat(pad), comment);
+            if comment.is_empty() {
+                println!("{}", prefix);
+            } else {
+                println!("{}{}{}", prefix, " ".repeat(pad), comment);
+            }
         }
 
         gekko.run_until_event();
+
         let curr_snapshot = CpuSnapshot::from_cpu(&gekko.cpu);
 
-        if is_debug {
+        if current_addr == gekko.cpu.pc {
+            if !is_busyloop {
+                println!("{}", "Busyloop detected!".bright_red().bold());
+                is_busyloop = true;
+            }
+        } else {
+            is_busyloop = false;
+        }
+
+        current_addr = gekko.cpu.pc;
+
+        if is_debug && !is_busyloop {
             dump_registers(&curr_snapshot, &prev_snapshot);
         }
 
