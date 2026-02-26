@@ -1,8 +1,11 @@
+use gekko::cpu::condition::ConditionRegister;
+
 #[derive(Clone, Copy)]
 pub struct CpuSnapshot {
     pub gprs: [u32; 32],
     pub lr: u32,
     pub ctr: u32,
+    pub cr: ConditionRegister,
 }
 
 impl CpuSnapshot {
@@ -11,6 +14,7 @@ impl CpuSnapshot {
             gprs: cpu.gprs,
             lr: cpu.lr,
             ctr: cpu.ctr,
+            cr: cpu.cr,
         }
     }
 }

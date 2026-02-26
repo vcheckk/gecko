@@ -105,5 +105,40 @@ fn dump_registers(curr: &CpuSnapshot, prev: &CpuSnapshot) {
         .trim_end()
     );
 
+    let cr_fields = [
+        ("cr0", curr.cr.cr0(), prev.cr.cr0()),
+        ("cr1", curr.cr.cr1(), prev.cr.cr1()),
+        ("cr2", curr.cr.cr2(), prev.cr.cr2()),
+        ("cr3", curr.cr.cr3(), prev.cr.cr3()),
+        ("cr4", curr.cr.cr4(), prev.cr.cr4()),
+        ("cr5", curr.cr.cr5(), prev.cr.cr5()),
+        ("cr6", curr.cr.cr6(), prev.cr.cr6()),
+        ("cr7", curr.cr.cr7(), prev.cr.cr7()),
+    ];
+
+    let fmt_cr_field = |label: &str,
+                        val: gekko::cpu::condition::ConditionField,
+                        prev_val: gekko::cpu::condition::ConditionField| {
+        let flags = format!(
+            "{}{}{}{}",
+            if val.lt() { "L" } else { "·" },
+            if val.gt() { "G" } else { "·" },
+            if val.eq() { "Z" } else { "·" },
+            if val.so() { "O" } else { "·" },
+        );
+        let text = format!("{}[{}] ", label, flags);
+        if val.raw() != prev_val.raw() {
+            format!("{}", text.bright_red().bold())
+        } else {
+            format!("{}", text.dimmed())
+        }
+    };
+
+    let cr_line: String = cr_fields
+        .iter()
+        .map(|(label, val, prev_val)| fmt_cr_field(label, *val, *prev_val))
+        .collect();
+    println!("{}", cr_line.trim_end());
+
     println!();
 }

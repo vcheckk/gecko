@@ -55,3 +55,61 @@ impl BranchControl {
         )
     }
 }
+
+#[chapa::bitfield(u8, width = 4, order = msb0)]
+#[derive(Clone, Copy)]
+pub struct ConditionField {
+    #[bits(0, alias = ["less_than", "fx", "fp_exception"])]
+    pub lt: bool,
+    #[bits(1, alias = ["greater_than", "fex", "fp_enabled_exception"])]
+    pub gt: bool,
+    #[bits(2, alias = ["equal", "vx", "fp_invalid_exception"])]
+    pub eq: bool,
+    #[bits(3, alias = ["summary_overflow", "ox", "fp_overflow_exception"])]
+    pub so: bool, 
+}
+
+#[chapa::bitfield(u32, order = msb0)]
+#[derive(Clone, Copy)]
+pub struct ConditionRegister {
+    #[bits(0..=3)] pub cr0: ConditionField,
+    #[bits(4..=7)] pub cr1: ConditionField,
+    #[bits(8..=11)] pub cr2: ConditionField,
+    #[bits(12..=15)] pub cr3: ConditionField,
+    #[bits(16..=19)] pub cr4: ConditionField,
+    #[bits(20..=23)] pub cr5: ConditionField,
+    #[bits(24..=27)] pub cr6: ConditionField,
+    #[bits(28..=31)] pub cr7: ConditionField,
+}
+
+impl ConditionRegister {
+    #[inline]
+    pub fn set_field(&mut self, index: u8, value: ConditionField) {
+        match index {
+            0 => self.set_cr0(value),
+            1 => self.set_cr1(value),
+            2 => self.set_cr2(value),
+            3 => self.set_cr3(value),
+            4 => self.set_cr4(value),
+            5 => self.set_cr5(value),
+            6 => self.set_cr6(value),
+            7 => self.set_cr7(value),
+            _ => panic!("Invalid CR field index: {}", index),
+        }
+    }
+
+    #[inline]
+    pub fn get_field(&self, index: u8) -> ConditionField {
+        match index {
+            0 => self.cr0(),
+            1 => self.cr1(),
+            2 => self.cr2(),
+            3 => self.cr3(),
+            4 => self.cr4(),
+            5 => self.cr5(),
+            6 => self.cr6(),
+            7 => self.cr7(),
+            _ => panic!("Invalid CR field index: {}", index),
+        }
+    }
+}

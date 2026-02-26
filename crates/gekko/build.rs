@@ -15,7 +15,7 @@ fn main() {
         .group("msr", ["mtmsr", "mfmsr"])
         .group("spr", ["mtspr", "mfspr"])
         .group("store_load", ["stw", "stwu", "sth", "sthu", "lwz", "lwzu"])
-        .group("compare", ["cmpi"]);
+        .group("compare", ["cmp", "cmpi"]);
 
     // Generate the instruction type with accessor methods
     builder

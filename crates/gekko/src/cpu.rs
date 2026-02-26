@@ -1,6 +1,8 @@
+use crate::cpu::condition::ConditionRegister;
+
 pub mod interpreter;
 pub mod semantics;
-pub mod branch;
+pub mod condition;
 
 #[allow(dead_code, unused_variables, non_upper_case_globals, clippy::all)]
 pub mod lut {
@@ -14,6 +16,7 @@ pub struct Cpu {
     pub lr: u32,
     pub ctr: u32,
     pub xer: u32,
+    pub cr: ConditionRegister,
 
     // These are used during instruction execution to track the current
     // and next PC values. In essence, by writing to `next_pc`, instructions
@@ -33,6 +36,7 @@ impl Cpu {
             lr: 0,
             ctr: 0,
             xer: 0,
+            cr: ConditionRegister::new(),
         }
     }
 

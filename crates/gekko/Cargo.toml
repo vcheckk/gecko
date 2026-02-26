@@ -7,4 +7,5 @@ edition = "2024"
 chipi = "0.5.1"
 
 [dependencies]
+chapa = { path = "../../../chapa/chapa" }
 tracing = "0.1.44"

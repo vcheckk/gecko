@@ -1,4 +1,4 @@
-use crate::cpu::branch::BranchControl;
+use crate::cpu::condition::{self, BranchControl, ConditionField};
 
 pub fn branch<const OP: u32>(
     ctx: &mut crate::gekko::Gekko,
@@ -24,8 +24,15 @@ pub fn branch<const OP: u32>(
                 ctx.cpu.ctr = ctx.cpu.ctr.wrapping_sub(1);
             }
 
-            // TODO: cond missing
-            if !ctrl.should_branch(ctx.cpu.ctr, true) {
+            let (crf, bit) = (instr.bi() >> 2, instr.bi() & 0b11);
+            let condition = match bit {
+                0 => ctx.cpu.cr.get_field(crf).lt(),
+                1 => ctx.cpu.cr.get_field(crf).gt(),
+                2 => ctx.cpu.cr.get_field(crf).eq(),
+                3 => ctx.cpu.cr.get_field(crf).so(),
+                _ => panic!("Invalid CR bit index: {}", bit),
+            };
+            if !ctrl.should_branch(ctx.cpu.ctr, condition) {
                 return;
             }
 
@@ -168,17 +175,23 @@ pub fn compare<const OP: u32>(
     ctx: &mut crate::gekko::Gekko,
     instr: crate::cpu::semantics::Instruction,
 ) {
-    match OP {
-        crate::cpu::lut::OP_CMPI => {
-            let _result = (ctx.cpu.read_gpr(instr.ra()) as i32).cmp(&instr.simm());
-            // ctx.cpu.cr[instr.bi() as usize] = match _result {
-            //     std::cmp::Ordering::Less => 0b100,
-            //     std::cmp::Ordering::Equal => 0b010,
-            //     std::cmp::Ordering::Greater => 0b001,
-            // };
-        }
+    let (a, b) = match OP {
+        crate::cpu::lut::OP_CMP => (
+            ctx.cpu.read_gpr(instr.ra()) as i32,
+            ctx.cpu.read_gpr(instr.rb()) as i32,
+        ),
+        crate::cpu::lut::OP_CMPI => (ctx.cpu.read_gpr(instr.ra()) as i32, instr.simm()),
         _ => todo!("Compare instruction with OP = {OP:#x}"),
-    }
+    };
+
+    ctx.cpu.cr.set_field(
+        instr.crfd(),
+        match a.cmp(&b) {
+            std::cmp::Ordering::Less => ConditionField::new().with_lt(true),
+            std::cmp::Ordering::Equal => ConditionField::new().with_eq(true),
+            std::cmp::Ordering::Greater => ConditionField::new().with_gt(true),
+        },
+    );
 }
 
 #[rustfmt::skip] pub fn twi(_ctx: &mut crate::gekko::Gekko, _instr: crate::cpu::semantics::Instruction) { todo!("twi") }
