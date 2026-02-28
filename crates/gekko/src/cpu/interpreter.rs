@@ -178,7 +178,7 @@ pub fn store_load<const OP: u32>(
                 .cpu
                 .read_gpr(instr.ra())
                 .wrapping_add_signed(instr.disp());
-            ctx.mmu.virt_write_u32(addr, ctx.cpu.read_gpr(instr.rs()));
+            ctx.mmio.virt_write_u32(addr, ctx.cpu.read_gpr(instr.rs()));
             if OP == crate::cpu::lut::OP_STWU {
                 ctx.cpu.write_gpr(instr.ra(), addr);
             }
@@ -188,7 +188,7 @@ pub fn store_load<const OP: u32>(
                 .cpu
                 .read_gpr(instr.ra())
                 .wrapping_add_signed(instr.disp());
-            ctx.mmu
+            ctx.mmio
                 .virt_write_u16(addr, (ctx.cpu.read_gpr(instr.rs()) & 0xffff) as u16);
             if OP == crate::cpu::lut::OP_STHU {
                 ctx.cpu.write_gpr(instr.ra(), addr);
@@ -199,7 +199,7 @@ pub fn store_load<const OP: u32>(
                 .cpu
                 .read_gpr(instr.ra())
                 .wrapping_add_signed(instr.disp());
-            ctx.cpu.write_gpr(instr.rd(), ctx.mmu.virt_read_u32(addr));
+            ctx.cpu.write_gpr(instr.rd(), ctx.mmio.virt_read_u32(addr));
             if OP == crate::cpu::lut::OP_LWZU {
                 ctx.cpu.write_gpr(instr.ra(), addr);
             }

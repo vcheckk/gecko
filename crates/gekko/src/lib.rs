@@ -1,4 +1,5 @@
 pub mod cpu;
 pub mod scheduler;
 pub mod gekko;
-pub mod mmu;
+pub mod mmio;
+pub mod vi;

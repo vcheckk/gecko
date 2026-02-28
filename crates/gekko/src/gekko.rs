@@ -1,17 +1,17 @@
 use crate::{
     cpu::{self, semantics::Instruction},
-    mmu, scheduler,
+    mmio, scheduler,
 };
 
 pub struct Gekko {
     pub cpu: cpu::Cpu,
     pub scheduler: scheduler::Scheduler,
-    pub mmu: mmu::Mmu,
+    pub mmio: mmio::Mmio,
 }
 
 impl Gekko {
     pub fn new(path: &str) -> Self {
-        let mut mmu = mmu::Mmu::new();
+        let mut mmio = mmio::Mmio::new();
         let data = std::fs::read(path).expect("failed to read ROM");
         let dol = dol::Dol::parse(&data);
 
@@ -20,7 +20,7 @@ impl Gekko {
             for i in 0..section.size {
                 let addr = section.vaddr + i;
                 let value = data[(section.offset + i) as usize];
-                mmu.virt_write_u8(addr, value);
+                mmio.virt_write_u8(addr, value);
             }
         }
 
@@ -29,20 +29,20 @@ impl Gekko {
             for i in 0..section.size {
                 let addr = section.vaddr + i;
                 let value = data[(section.offset + i) as usize];
-                mmu.virt_write_u8(addr, value);
+                mmio.virt_write_u8(addr, value);
             }
         }
 
         // Zero out the BSS section
         for i in 0..dol.bss_size {
             let addr = dol.bss_start + i;
-            mmu.virt_write_u8(addr, 0);
+            mmio.virt_write_u8(addr, 0);
         }
 
         Gekko {
             cpu: cpu::Cpu::new(dol.entry_point),
             scheduler: scheduler::Scheduler { cycles: 0 },
-            mmu,
+            mmio,
         }
     }
 
@@ -50,7 +50,7 @@ impl Gekko {
         self.cpu.cia = self.cpu.pc;
         self.cpu.nia = self.cpu.cia.wrapping_add(4);
 
-        let instr = Instruction(self.mmu.virt_read_u32(self.cpu.cia));
+        let instr = Instruction(self.mmio.virt_read_u32(self.cpu.cia));
         cpu::lut::dispatch(self, instr);
         self.scheduler.cycles += 1;
 

@@ -1,15 +1,24 @@
 mod fmt;
 mod snaptshot;
 
+use base64::Engine as _;
 use colored::Colorize;
 use disasm::gekko::GekkoInstruction;
+use gekko::vi;
 use snaptshot::CpuSnapshot;
 
 fn main() {
-    let path = std::env::args()
-        .nth(1)
-        .expect("Usage: debugger <path_to_rom>");
-    let is_debug = std::env::args().any(|arg| arg == "--debug");
+    let args: Vec<String> = std::env::args().collect();
+    let path = args.get(1).expect("Usage: debugger <path_to_rom>").clone();
+    let is_debug = args.iter().any(|arg| arg == "--debug");
+    let until_addr: Option<u32> = args
+        .iter()
+        .position(|arg| arg == "--until")
+        .and_then(|i| args.get(i + 1))
+        .map(|s| {
+            u32::from_str_radix(s.trim_start_matches("0x"), 16)
+                .expect("--until: invalid hex address")
+        });
 
     tracing_subscriber::fmt()
         .without_time()
@@ -26,10 +35,10 @@ fn main() {
 
     loop {
         if !is_busyloop {
-            let instr = GekkoInstruction::decode(gekko.mmu.virt_slice(gekko.cpu.pc, 4))
+            let instr = GekkoInstruction::decode(gekko.mmio.virt_slice(gekko.cpu.pc, 4))
                 .unwrap_or_else(|| {
                     dump_registers(&prev_snapshot, &prev_snapshot);
-                    dump_memory(&gekko.mmu, gekko.cpu.read_gpr(1));
+                    dump_memory(&gekko.mmio, gekko.cpu.read_gpr(1));
 
                     panic!("Failed to decode instruction at {:08X}", gekko.cpu.pc)
                 })
@@ -72,12 +81,23 @@ fn main() {
 
         current_addr = gekko.cpu.pc;
 
+        if let Some(until) = until_addr {
+            if gekko.cpu.pc == until {
+                break;
+            }
+        }
+
         if is_debug && !is_busyloop {
             dump_registers(&curr_snapshot, &prev_snapshot);
         }
 
         prev_snapshot = curr_snapshot;
     }
+
+    dump_mmio(&gekko.mmio);
+
+    let pixels = vi::render_xfb(&mut gekko.mmio);
+    render_kitty(&pixels, vi::XFB_WIDTH, vi::XFB_HEIGHT);
 }
 
 fn dump_registers(curr: &CpuSnapshot, prev: &CpuSnapshot) {
@@ -148,10 +168,10 @@ fn dump_registers(curr: &CpuSnapshot, prev: &CpuSnapshot) {
     println!();
 }
 
-fn dump_memory(mmu: &gekko::mmu::Mmu, addr: u32) {
+fn dump_memory(mmio: &gekko::mmio::Mmio, addr: u32) {
     let aligned_addr = addr & !0xF;
     let start = aligned_addr.wrapping_sub(0x40);
-    let data = mmu.virt_slice(start, 0x80);
+    let data = mmio.virt_slice(start, 0x80);
 
     for (i, line) in data.chunks(16).enumerate() {
         let line_addr = start.wrapping_add((i as u32) * 16);
@@ -166,4 +186,65 @@ fn dump_memory(mmu: &gekko::mmu::Mmu, addr: u32) {
 
         println!("{} {}", format!("{:08X}:", line_addr).blue().bold(), hex);
     }
+}
+
+fn dump_mmio(mmio: &gekko::mmio::Mmio) {
+    let dcr = mmio.read_register::<vi::regs::DisplayConfiguration>();
+    println!("Display Configuration: {:?}", dcr);
+    let tfbl = mmio.read_register::<vi::regs::BottomFieldBase>();
+    println!("Bottom Field Base: {:08X?}", tfbl);
+    let tfbr = mmio.read_register::<vi::regs::TopFieldBase>();
+    println!("Top Field Base: {:08X?}", tfbr);
+    println!("XFB Address: {:08X}", vi::xfb_addr(mmio));
+}
+
+/// Render pixels (packed 0x00RRGGBB u32s) to the terminal via the Kitty
+/// graphics protocol
+///
+/// Protocol: APC escape  \x1b_G<key=value,...>;<base64-payload>\x1b\\
+///   a=T     – transmit + display immediately
+///   f=32    – 32-bit RGBA pixels
+///   s=W,v=H – dimensions
+///   m=1     – more chunks follow; m=0 – last (or only) chunk
+fn render_kitty(pixels: &[u32], width: usize, height: usize) {
+    use std::io::Write as _;
+
+    // Convert packed RGB to RGBA (alpha = 0xFF).
+    let mut rgba: Vec<u8> = Vec::with_capacity(width * height * 4);
+    for &px in pixels {
+        rgba.push(((px >> 16) & 0xFF) as u8); // R
+        rgba.push(((px >>  8) & 0xFF) as u8); // G
+        rgba.push(( px        & 0xFF) as u8); // B
+        rgba.push(0xFF);                        // A
+    }
+
+    let encoded = base64::engine::general_purpose::STANDARD.encode(&rgba);
+
+    // Kitty protocol requires chunks of at most 4096 base64 characters
+    const CHUNK: usize = 4096;
+    let chunks: Vec<&str> = encoded
+        .as_bytes()
+        .chunks(CHUNK)
+        .map(|c| std::str::from_utf8(c).unwrap())
+        .collect();
+
+    let stdout = std::io::stdout();
+    let mut out = stdout.lock();
+
+    for (idx, chunk) in chunks.iter().enumerate() {
+        let more = if idx + 1 < chunks.len() { 1 } else { 0 };
+        if idx == 0 {
+            // First chunk: include image metadata
+            write!(
+                out,
+                "\x1b_Ga=T,f=32,s={},v={},m={};{}\x1b\\",
+                width, height, more, chunk
+            )
+            .unwrap();
+        } else {
+            write!(out, "\x1b_Gm={};{}\x1b\\", more, chunk).unwrap();
+        }
+    }
+
+    writeln!(out).unwrap();
 }

@@ -2,17 +2,19 @@
 mod tests;
 
 pub mod constants;
+pub mod traits;
+
 use constants::*;
 
-pub struct Mmu {
+pub struct Mmio {
     pub ram: Vec<u8>,
     pub efb: Vec<u8>,
     pub hwr: Vec<u8>,
 }
 
-impl Mmu {
+impl Mmio {
     pub fn new() -> Self {
-        Mmu {
+        Mmio {
             ram: vec![0; RAM_SIZE],
             efb: vec![0; EFB_SIZE],
             hwr: vec![0; HW_REG_SIZE],
@@ -24,7 +26,9 @@ impl Mmu {
     fn resolve(&self, phys: u32) -> (&[u8], usize) {
         match phys {
             RAM_BASE..=RAM_END => (&self.ram, phys as usize),
-            EFB_BASE..=EFB_END => (&self.efb, (phys - EFB_BASE) as usize),
+            EFB_BASE..=EFB_END => {
+                (&self.efb, (phys - EFB_BASE) as usize)
+            },
             HW_REG_BASE..=HW_REG_END => {
                 tracing::warn!(phys_addr = format!("{:08X}", phys), "read from mmio");
                 (&self.hwr, (phys - HW_REG_BASE) as usize)
@@ -161,9 +165,30 @@ impl Mmu {
         self.phys_slice(Self::virt_to_phys(addr), len)
     }
 
-    // Simple virtual to physical translation that ignores caching and other MMU features
-    pub fn virt_to_phys(addr: u32) -> u32 {
-        tracing::trace!(virt_addr = format!("{:08X}", addr), "virt_to_phys");
+    /// Read a typed MMIO register from its physical address
+    pub fn read_register<T: traits::MmioRegister>(&self) -> T {
+        let raw = match T::SIZE {
+            1 => self.phys_read_u8(T::ADDR) as u32,
+            2 => self.phys_read_u16(T::ADDR) as u32,
+            4 => self.phys_read_u32(T::ADDR),
+            _ => panic!("unsupported register size {}", T::SIZE),
+        };
+        T::from_raw(raw)
+    }
+
+    /// Write a typed MMIO register to its physical address
+    pub fn write_register<T: traits::MmioRegister>(&mut self, value: T) {
+        let raw = value.to_raw();
+        match T::SIZE {
+            1 => self.phys_write_u8(T::ADDR, raw as u8),
+            2 => self.phys_write_u16(T::ADDR, raw as u16),
+            4 => self.phys_write_u32(T::ADDR, raw),
+            _ => panic!("unsupported register size {}", T::SIZE),
+        }
+    }
+
+    // Simple virtual to physical translation that ignores caching and other MMIO features
+    pub const fn virt_to_phys(addr: u32) -> u32 {
         addr & 0x3FFFFFFF
     }
 }
