@@ -2,6 +2,7 @@
 mod tests;
 
 pub mod constants;
+pub mod macros;
 pub mod traits;
 pub mod bus;
 

@@ -191,8 +191,8 @@ fn dump_memory(mmio: &gekko::mmio::Mmio, addr: u32) {
 
 fn dump_mmio(vi: &gekko::vi::Vi) {
     println!("Display Configuration: {:?}", vi.dcr);
-    println!("Bottom Field Base: {:08X?}", vi.bottom_field_base);
-    println!("Top Field Base: {:08X?}", vi.top_field_base);
+    println!("Bottom Field Base: {:08X?}", vi.bfbl);
+    println!("Top Field Base: {:08X?}", vi.tfbl);
     println!("XFB Address: {:08X}", vi.xfb_addr());
 }
 

@@ -3,7 +3,7 @@ use crate::mmio::traits::MmioRegister;
 
 fn vi_with_top(raw: u32) -> Vi {
     let mut vi = Vi::new();
-    vi.top_field_base = regs::TopFieldBase::from_raw(raw);
+    vi.tfbl = regs::TopFieldBase::from_raw(raw);
     vi
 }
 
@@ -20,14 +20,14 @@ const DCR_OFF: u32 = regs::DisplayConfiguration::ADDR - VI_BASE;
 fn u16_write_upper_half_of_u32_register() {
     let mut vi = vi_with_top(0xAABBCCDD);
     vi.mmio_write_u16(TOP_OFF, 0x1234);
-    assert_eq!(vi.top_field_base.to_raw(), 0x1234CCDD);
+    assert_eq!(vi.tfbl.to_raw(), 0x1234CCDD);
 }
 
 #[test]
 fn u16_write_lower_half_of_u32_register() {
     let mut vi = vi_with_top(0xAABBCCDD);
     vi.mmio_write_u16(TOP_OFF + 2, 0x5678);
-    assert_eq!(vi.top_field_base.to_raw(), 0xAABB5678);
+    assert_eq!(vi.tfbl.to_raw(), 0xAABB5678);
 }
 
 #[test]
@@ -49,14 +49,14 @@ fn u8_write_each_byte_of_u32_register() {
     vi.mmio_write_u8(TOP_OFF + 1, 0xBB);
     vi.mmio_write_u8(TOP_OFF + 2, 0xCC);
     vi.mmio_write_u8(TOP_OFF + 3, 0xDD);
-    assert_eq!(vi.top_field_base.to_raw(), 0xAABBCCDD);
+    assert_eq!(vi.tfbl.to_raw(), 0xAABBCCDD);
 }
 
 #[test]
 fn u8_write_does_not_disturb_other_bytes_in_u32() {
     let mut vi = vi_with_top(0xAABBCCDD);
     vi.mmio_write_u8(TOP_OFF + 1, 0xFF);
-    assert_eq!(vi.top_field_base.to_raw(), 0xAAFFCCDD);
+    assert_eq!(vi.tfbl.to_raw(), 0xAAFFCCDD);
 }
 
 #[test]
