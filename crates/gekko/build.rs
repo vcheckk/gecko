@@ -11,7 +11,20 @@ fn main() {
         .ctx_type("crate::gekko::Gekko")
         .instr_type("crate::cpu::semantics::Instruction")
         .group("branch", ["bx", "bcx", "bclrx"])
-        .group("alu", ["ori", "oris", "addx", "addi", "addis"])
+        .group(
+            "alu",
+            [
+                "ori",
+                "oris",
+                "addx",
+                "addi",
+                "addis",
+                "xori",
+                "xoris",
+                "andi_dot",
+                "andis_dot",
+            ],
+        )
         .group("rotate", ["rlwinmx"])
         .group("msr", ["mtmsr", "mfmsr", "rfi"])
         .group("spr", ["mtspr", "mfspr"])

@@ -53,4 +53,16 @@ impl Cpu {
     pub fn write_gpr(&mut self, index: u8, value: u32) {
         self.gprs[index as usize] = value;
     }
+
+    #[inline]
+    pub fn update_cr0(&mut self, val: u32) {
+        let so = (self.spr.xer >> 31) != 0; // SO is copied from XER[SO]
+        self.cr.set_cr0(
+            condition::ConditionField::new()
+                .with_lt((val as i32) < 0)
+                .with_gt(val > 0)
+                .with_eq(val == 0)
+                .with_so(so),
+        );
+    }
 }

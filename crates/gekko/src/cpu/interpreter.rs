@@ -65,49 +65,55 @@ pub fn alu<const OP: u32>(
 ) {
     match OP {
         crate::cpu::lut::OP_ADDX => {
-            let (res, carry) = ctx
+            let res = ctx
                 .cpu
                 .read_gpr(instr.ra())
-                .overflowing_add(ctx.cpu.read_gpr(instr.rb()));
+                .wrapping_add(ctx.cpu.read_gpr(instr.rb()));
             ctx.cpu.write_gpr(instr.rd(), res);
             if instr.rc() {
-                let cr0 = ConditionField::new()
-                    .with_lt((res as i32) < 0)
-                    .with_gt(res > 0)
-                    .with_eq(res == 0)
-                    .with_so(carry);
-                ctx.cpu.cr.set_cr0(cr0);
+                ctx.cpu.update_cr0(res);
             }
         }
-        crate::cpu::lut::OP_ADDI => {
+        crate::cpu::lut::OP_ADDI | crate::cpu::lut::OP_ADDIS => {
             let ra = if instr.ra() == 0 {
                 0
             } else {
                 ctx.cpu.read_gpr(instr.ra())
             };
-            ctx.cpu
-                .write_gpr(instr.rd(), ra.wrapping_add_signed(instr.simm()));
-        }
-        crate::cpu::lut::OP_ADDIS => {
-            let ra = if instr.ra() == 0 {
-                0
+            let simm = if OP == crate::cpu::lut::OP_ADDIS {
+                instr.simm() << 16
             } else {
-                ctx.cpu.read_gpr(instr.ra())
+                instr.simm()
+            };
+            ctx.cpu.write_gpr(instr.rd(), ra.wrapping_add_signed(simm));
+        }
+        crate::cpu::lut::OP_ORI | crate::cpu::lut::OP_ORIS => {
+            let imm = if OP == crate::cpu::lut::OP_ORIS {
+                (instr.uimm() as u32) << 16
+            } else {
+                instr.uimm() as u32
             };
             ctx.cpu
-                .write_gpr(instr.rd(), ra.wrapping_add_signed(instr.simm() << 16));
+                .write_gpr(instr.ra(), ctx.cpu.read_gpr(instr.rs()) | imm);
         }
-        crate::cpu::lut::OP_ORI => {
-            ctx.cpu.write_gpr(
-                instr.ra(),
-                ctx.cpu.read_gpr(instr.rs()) | instr.uimm() as u32,
-            );
+        crate::cpu::lut::OP_XORI | crate::cpu::lut::OP_XORIS => {
+            let imm = if OP == crate::cpu::lut::OP_XORIS {
+                (instr.uimm() as u32) << 16
+            } else {
+                instr.uimm() as u32
+            };
+            ctx.cpu
+                .write_gpr(instr.ra(), ctx.cpu.read_gpr(instr.rs()) ^ imm);
         }
-        crate::cpu::lut::OP_ORIS => {
-            ctx.cpu.write_gpr(
-                instr.ra(),
-                ctx.cpu.read_gpr(instr.rs()) | ((instr.uimm() as u32) << 16),
-            );
+        crate::cpu::lut::OP_ANDI_DOT | crate::cpu::lut::OP_ANDIS_DOT => {
+            let mask = if OP == crate::cpu::lut::OP_ANDIS_DOT {
+                (instr.uimm() as u32) << 16
+            } else {
+                instr.uimm() as u32
+            };
+            let val = ctx.cpu.read_gpr(instr.rs()) & mask;
+            ctx.cpu.write_gpr(instr.ra(), val);
+            ctx.cpu.update_cr0(val);
         }
         _ => todo!("ALU instruction with OP = {OP:#x}"),
     }
@@ -129,7 +135,11 @@ pub fn rotate<const OP: u32>(
                 0xFFFF_FFFFu32 >> (me + 1)
             };
             let m = if mb <= me { begin & !end } else { begin | !end };
-            ctx.cpu.write_gpr(instr.ra(), r & m);
+            let res = r & m;
+            ctx.cpu.write_gpr(instr.ra(), res);
+            if instr.rc() {
+                ctx.cpu.update_cr0(res);
+            }
         }
         _ => todo!("Rotate instruction with OP = {OP:#x}"),
     }
