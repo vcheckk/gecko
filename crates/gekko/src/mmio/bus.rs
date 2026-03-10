@@ -64,7 +64,10 @@ impl Gekko {
         let (target, offset) = route(Mmio::virt_to_phys(addr));
         match target {
             BusTarget::Vi       => self.vi.mmio_write_u8(offset, val),
-            BusTarget::Dsp      => self.dsp.mmio_write_u8(offset, val),
+            BusTarget::Dsp      => {
+                self.dsp.mmio_write_u8(offset, val);
+                self.dsp.process_pending_dma(&mut self.mmio);
+            }
             BusTarget::Exi      => { 
                 self.exi.mmio_write_u8(offset, val); 
                 self.exi.process_dma_transfers(&mut self.mmio);
@@ -78,7 +81,10 @@ impl Gekko {
         let (target, offset) = route(Mmio::virt_to_phys(addr));
         match target {
             BusTarget::Vi       => self.vi.mmio_write_u16(offset, val),
-            BusTarget::Dsp      => self.dsp.mmio_write_u16(offset, val),
+            BusTarget::Dsp      => {
+                self.dsp.mmio_write_u16(offset, val);
+                self.dsp.process_pending_dma(&mut self.mmio);
+            }
             BusTarget::Exi      => { 
                 self.exi.mmio_write_u16(offset, val); 
                 self.exi.process_dma_transfers(&mut self.mmio);
@@ -93,7 +99,10 @@ impl Gekko {
         match target {
             BusTarget::Vi       => self.vi.mmio_write_u32(offset, val),
 
-            BusTarget::Dsp      => self.dsp.mmio_write_u32(offset, val),
+            BusTarget::Dsp      => {
+                self.dsp.mmio_write_u32(offset, val);
+                self.dsp.process_pending_dma(&mut self.mmio);
+            }
             BusTarget::Exi      => { 
                 self.exi.mmio_write_u32(offset, val); 
                 self.exi.process_dma_transfers(&mut self.mmio);

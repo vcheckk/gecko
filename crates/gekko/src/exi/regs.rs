@@ -108,9 +108,7 @@ impl MmioAccess<Exi> for Channel0Control {
 // 0xCC006810	4	R/W	EXI0DATA - EXI Channel 0 Immediate Data
 
 crate::mmio_register! {
-    Channel0Data: u32 @ 0xCC006810 => Exi.ch0_data {
-        #[bits(0..=31, alias = "data")] pub value: u32,
-    }
+    Channel0Data: u32 @ 0xCC006810 => Exi.ch0_data {}
 }
 
 // --- Channel 1 ---
@@ -183,9 +181,7 @@ impl MmioAccess<Exi> for Channel1Control {
 // 0xCC006824	4	R/W	EXI1DATA - EXI Channel 1 Immediate Data
 
 crate::mmio_register! {
-    Channel1Data: u32 @ 0xCC006824 => Exi.ch1_data {
-        #[bits(0..=31, alias = "data")] pub value: u32,
-    }
+    Channel1Data: u32 @ 0xCC006824 => Exi.ch1_data {}
 }
 
 // --- Channel 2 ---
@@ -258,7 +254,5 @@ impl MmioAccess<Exi> for Channel2Control {
 // 0xCC006838	4	R/W	EXI2DATA - EXI Channel 2 Immediate Data
 
 crate::mmio_register! {
-    Channel2Data: u32 @ 0xCC006838 => Exi.ch2_data {
-        #[bits(0..=31, alias = "data")] pub value: u32,
-    }
+    Channel2Data: u32 @ 0xCC006838 => Exi.ch2_data {}
 }
