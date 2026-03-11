@@ -101,7 +101,7 @@ impl Dsp {
 
             const UCODE_ADDR: usize = 0x8100_0000;
             const UCODE_SIZE: usize = 1024;
-            let src = mmio.ram[UCODE_ADDR..UCODE_ADDR + UCODE_SIZE].to_vec();
+            let src = mmio.virt_slice(UCODE_ADDR as u32, UCODE_SIZE);
             self.iram[..UCODE_SIZE].copy_from_slice(&src);
 
             tracing::debug!(
