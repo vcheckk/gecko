@@ -123,7 +123,7 @@ impl Vi {
         (self.tfbl.xfb_addr() << 9) | ((self.tfbl.page_offset() as u32) << 24)
     }
 
-    pub fn mmio_read_u8(&self, offset: u32) -> u8 {
+    pub fn mmio_read_u8(&mut self, offset: u32) -> u8 {
         self.read_raw(VI_BASE + offset, 1).unwrap_or_else(|| {
             tracing::error!(offset = format!("{offset:08X}"), "unhandled VI read_u8");
             0
@@ -136,7 +136,7 @@ impl Vi {
         }
     }
 
-    pub fn mmio_read_u16(&self, offset: u32) -> u16 {
+    pub fn mmio_read_u16(&mut self, offset: u32) -> u16 {
         self.read_raw(VI_BASE + offset, 2).unwrap_or_else(|| {
             tracing::error!(offset = format!("{offset:08X}"), "unhandled VI read_u16");
             0
@@ -149,7 +149,7 @@ impl Vi {
         }
     }
 
-    pub fn mmio_read_u32(&self, offset: u32) -> u32 {
+    pub fn mmio_read_u32(&mut self, offset: u32) -> u32 {
         self.read_raw(VI_BASE + offset, 4).unwrap_or_else(|| {
             tracing::error!(offset = format!("{offset:08X}"), "unhandled VI read_u32");
             0

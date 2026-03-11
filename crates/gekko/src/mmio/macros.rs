@@ -5,7 +5,7 @@
 macro_rules! impl_mmio_dispatch {
     ($($reg:ty),* $(,)?) => {
         #[inline]
-        fn read_raw(&self, addr: u32, access_size: u32) -> Option<u32> {
+        fn read_raw(&mut self, addr: u32, access_size: u32) -> Option<u32> {
             $(if <$reg>::fits(addr, access_size) {
                 return Some(<$reg>::read_at(self, addr, access_size));
             })*

@@ -32,13 +32,13 @@ fn u16_write_lower_half_of_u32_register() {
 
 #[test]
 fn u16_read_upper_half_of_u32_register() {
-    let vi = vi_with_top(0xAABBCCDD);
+    let mut vi = vi_with_top(0xAABBCCDD);
     assert_eq!(vi.mmio_read_u16(TOP_OFF), 0xAABB);
 }
 
 #[test]
 fn u16_read_lower_half_of_u32_register() {
-    let vi = vi_with_top(0xAABBCCDD);
+    let mut vi = vi_with_top(0xAABBCCDD);
     assert_eq!(vi.mmio_read_u16(TOP_OFF + 2), 0xCCDD);
 }
 

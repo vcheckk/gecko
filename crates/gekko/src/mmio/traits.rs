@@ -35,7 +35,7 @@ pub trait MmioAccess<C>: MmioRegister {
     fn write(self, component: &mut C);
 
     /// Read `access_size` bytes from this register in `component` at physical address `addr`
-    fn read_at(component: &C, addr: u32, access_size: u32) -> u32 {
+    fn read_at(component: &mut C, addr: u32, access_size: u32) -> u32 {
         Self::read_sub(Self::read(component).to_raw(), addr, access_size)
     }
 

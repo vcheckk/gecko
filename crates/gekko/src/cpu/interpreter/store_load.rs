@@ -3,21 +3,21 @@ use crate::cpu::condition::ConditionField;
 pub fn store_load<const OP: u32>(ctx: &mut crate::gekko::Gekko, instr: crate::cpu::semantics::Instruction) {
     match OP {
         crate::cpu::lut::OP_STW | crate::cpu::lut::OP_STWU => {
-            let addr = ctx.cpu.read_gpr(instr.ra()).wrapping_add_signed(instr.disp());
+            let addr = ctx.cpu.read_gpr_or_zero(instr.ra()).wrapping_add_signed(instr.disp());
             ctx.write_u32(addr, ctx.cpu.read_gpr(instr.rs()));
             if OP == crate::cpu::lut::OP_STWU {
                 ctx.cpu.write_gpr(instr.ra(), addr);
             }
         }
         crate::cpu::lut::OP_STH | crate::cpu::lut::OP_STHU => {
-            let addr = ctx.cpu.read_gpr(instr.ra()).wrapping_add_signed(instr.disp());
+            let addr = ctx.cpu.read_gpr_or_zero(instr.ra()).wrapping_add_signed(instr.disp());
             ctx.write_u16(addr, ctx.cpu.read_gpr(instr.rs()) as u16);
             if OP == crate::cpu::lut::OP_STHU {
                 ctx.cpu.write_gpr(instr.ra(), addr);
             }
         }
         crate::cpu::lut::OP_STB | crate::cpu::lut::OP_STBU => {
-            let addr = ctx.cpu.read_gpr(instr.ra()).wrapping_add_signed(instr.disp());
+            let addr = ctx.cpu.read_gpr_or_zero(instr.ra()).wrapping_add_signed(instr.disp());
             ctx.write_u8(addr, ctx.cpu.read_gpr(instr.rs()) as u8);
             if OP == crate::cpu::lut::OP_STBU {
                 ctx.cpu.write_gpr(instr.ra(), addr);
@@ -64,7 +64,7 @@ pub fn store_load<const OP: u32>(ctx: &mut crate::gekko::Gekko, instr: crate::cp
             }
         }
         crate::cpu::lut::OP_STMW => {
-            let mut addr = ctx.cpu.read_gpr(instr.ra()).wrapping_add_signed(instr.disp());
+            let mut addr = ctx.cpu.read_gpr_or_zero(instr.ra()).wrapping_add_signed(instr.disp());
             for r in instr.rs()..32 {
                 let val = ctx.cpu.read_gpr(r);
                 ctx.write_u32(addr, val);
@@ -186,7 +186,7 @@ pub fn store_load_fp<const OP: u32>(ctx: &mut crate::gekko::Gekko, instr: crate:
             }
         }
         crate::cpu::lut::OP_STFD | crate::cpu::lut::OP_STFDU => {
-            let addr = ctx.cpu.read_gpr(instr.ra()).wrapping_add_signed(instr.disp());
+            let addr = ctx.cpu.read_gpr_or_zero(instr.ra()).wrapping_add_signed(instr.disp());
             ctx.write_f64(addr, ctx.cpu.read_fpr(instr.rs()));
             if OP == crate::cpu::lut::OP_STFDU {
                 ctx.cpu.write_gpr(instr.ra(), addr);
@@ -201,7 +201,7 @@ pub fn store_load_fp<const OP: u32>(ctx: &mut crate::gekko::Gekko, instr: crate:
             }
         }
         crate::cpu::lut::OP_STFS | crate::cpu::lut::OP_STFSU => {
-            let addr = ctx.cpu.read_gpr(instr.ra()).wrapping_add_signed(instr.disp());
+            let addr = ctx.cpu.read_gpr_or_zero(instr.ra()).wrapping_add_signed(instr.disp());
             ctx.write_f32(addr, ctx.cpu.read_fpr(instr.rs()));
             if OP == crate::cpu::lut::OP_STFSU {
                 ctx.cpu.write_gpr(instr.ra(), addr);

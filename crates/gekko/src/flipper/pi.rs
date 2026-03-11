@@ -51,7 +51,7 @@ impl Pi {
 
     crate::impl_mmio_dispatch!(regs::InterruptCause, regs::InterruptMask,);
 
-    pub fn mmio_read_u8(&self, offset: u32) -> u8 {
+    pub fn mmio_read_u8(&mut self, offset: u32) -> u8 {
         self.read_raw(PI_BASE + offset, 1).unwrap_or_else(|| {
             tracing::error!(offset = format!("{offset:08X}"), "unhandled PI read_u8");
             0
@@ -64,7 +64,7 @@ impl Pi {
         }
     }
 
-    pub fn mmio_read_u16(&self, offset: u32) -> u16 {
+    pub fn mmio_read_u16(&mut self, offset: u32) -> u16 {
         self.read_raw(PI_BASE + offset, 2).unwrap_or_else(|| {
             tracing::error!(offset = format!("{offset:08X}"), "unhandled PI read_u16");
             0
@@ -77,7 +77,7 @@ impl Pi {
         }
     }
 
-    pub fn mmio_read_u32(&self, offset: u32) -> u32 {
+    pub fn mmio_read_u32(&mut self, offset: u32) -> u32 {
         self.read_raw(PI_BASE + offset, 4).unwrap_or_else(|| {
             tracing::error!(offset = format!("{offset:08X}"), "unhandled PI read_u32");
             0

@@ -1,23 +1,25 @@
 use super::Pi;
+use crate::mmio::traits::MmioRegister;
 
 // 0xCC003000  4  r    INTSR - Interrupt Cause
+
 crate::mmio_register! {
-    InterruptCause: u32 @ 0xCC003000 => Pi.intsr {
+    InterruptCause: u32 @ 0xCC003000 {
         #[bits(0, alias = "error")]
         pub gp_runtime_error: bool,
-        
+
         #[bits(1, alias = "rsw")]
         pub reset_switch: bool,
-        
+
         #[bits(2, alias = "di")]
         pub dvd: bool,
-        
+
         #[bits(3, alias = "si")]
         pub serial: bool,
-        
+
         #[bits(4)]
         pub exi: bool,
-        
+
         #[bits(5, alias = "ai")]
         pub streaming: bool,
 
@@ -50,24 +52,39 @@ crate::mmio_register! {
     }
 }
 
+impl crate::mmio::traits::MmioAccess<Pi> for InterruptCause {
+    fn read(dev: &Pi) -> Self {
+        dev.intsr
+    }
+    fn write(self, dev: &mut Pi) {
+        dev.intsr = self;
+    }
+
+    fn read_at(dev: &mut Pi, addr: u32, access_size: u32) -> u32 {
+        let val = Self::read_sub(dev.intsr.to_raw(), addr, access_size);
+        dev.intsr = InterruptCause::from_raw(0); // auto-clear
+        val
+    }
+}
+
 // 0xCC003004  4  r/w  INTMR - Interrupt Mask
 crate::mmio_register! {
     InterruptMask: u32 @ 0xCC003004 => Pi.intmr {
         #[bits(0, alias = "error")]
         pub gp_runtime_error: bool,
-        
+
         #[bits(1, alias = "rsw")]
         pub reset_switch: bool,
-        
+
         #[bits(2, alias = "di")]
         pub dvd: bool,
-        
+
         #[bits(3, alias = "si")]
         pub serial: bool,
-        
+
         #[bits(4)]
         pub exi: bool,
-        
+
         #[bits(5, alias = "ai")]
         pub streaming: bool,
 

@@ -47,6 +47,6 @@ impl Gekko {
 
         self.cpu.pc = base | IRQ_EXTERNAL;
 
-        tracing::trace!(addr = format!("{:08X}", self.cpu.pc), "IRQ triggered");
+        tracing::debug!(addr = format!("{:08X}", self.cpu.pc), "IRQ triggered");
     }
-}
+} 
