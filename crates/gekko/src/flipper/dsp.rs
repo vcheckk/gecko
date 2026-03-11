@@ -21,9 +21,9 @@ pub struct Dsp {
     pub csr: regs::ControlStatus,
     pub mailbox_to_cpu_hi: regs::MailboxToCpuHi,
     pub mailbox_to_cpu_lo: regs::MailboxToCpuLo,
-    pub dma_mmio_addr: regs::DmaMmioAddr,
-    pub dma_aram_addr: regs::DmaAramAddr,
-    pub dma_control: regs::DmaControl,
+    pub aram_dma_mmio_addr: regs::AramDmaMmioAddr,
+    pub aram_dma_aram_addr: regs::AramDmaAramAddr,
+    pub aram_dma_control: regs::AramDmaControl,
 
     // Flags set by register write handlers, consumed by process_pending_dma
     pub pending_aram_dma: bool,
@@ -49,9 +49,9 @@ impl Dsp {
             csr: regs::ControlStatus::default(),
             mailbox_to_cpu_hi: regs::MailboxToCpuHi::from_raw(0),
             mailbox_to_cpu_lo: regs::MailboxToCpuLo::from_raw(0),
-            dma_mmio_addr: regs::DmaMmioAddr::from_raw(0),
-            dma_aram_addr: regs::DmaAramAddr::from_raw(0),
-            dma_control: regs::DmaControl::from_raw(0),
+            aram_dma_mmio_addr: regs::AramDmaMmioAddr::from_raw(0),
+            aram_dma_aram_addr: regs::AramDmaAramAddr::from_raw(0),
+            aram_dma_control: regs::AramDmaControl::from_raw(0),
             pending_aram_dma: false,
             pending_ucode_upload: false,
         }
@@ -62,26 +62,18 @@ impl Dsp {
     /// - If an ARAM DMA was triggered (write to DmaControl), execute the transfer and
     ///   assert ARINT in the CSR
     /// - If ucode upload (falling-edge) was detected (CSR bit 11: 1->0), copy from
-    ///   ARAM[0x0000] into IRAM, assert ucode status (CSR bit 10, auto-clears on next CSR
-    ///   read), and write the mailbox values (TODO: HLE)
-    /// 
-    /// TODO: However, this entire thing might be bogus. Dolphin also isn't sure whether
-    /// There is a preliminary transfer to ARAM before transfering to IRAM. It might
-    /// actually just be hardcoded to upload ucode from main RAM directly on bit 11 reset...
-    /// We should be able to verify this on hardware by writing different instruction
-    /// sequences to ARAM and main RAM. These sequences should write a unique message to
-    /// the mailbox, so we can determine which one is actually being executed by the DSP.
+    ///   main RAM at DmaMmioAddr into IRAM (like Dolphin), then HLE the mailbox response.
     #[inline]
     pub fn process_pending_dma(&mut self, mmio: &mut Mmio) {
         // Handle ARAM DMA
         if self.pending_aram_dma {
             self.pending_aram_dma = false;
 
-            let mmio_addr = self.dma_mmio_addr.raw() as usize;
-            let aram_addr = self.dma_aram_addr.raw() as usize;
-            let count = self.dma_control.count() as usize * 4;
+            let mmio_addr = self.aram_dma_mmio_addr.raw() as usize;
+            let aram_addr = self.aram_dma_aram_addr.raw() as usize;
+            let count = self.aram_dma_control.count() as usize * 4;
 
-            if self.dma_control.direction() == regs::DmaDirection::AramToRam {
+            if self.aram_dma_control.direction() == regs::DmaDirection::AramToRam {
                 // ARAM -> main RAM
                 let src = self.aram[aram_addr..aram_addr + count].to_vec();
                 mmio.ram[mmio_addr..mmio_addr + count].copy_from_slice(&src);
@@ -95,7 +87,7 @@ impl Dsp {
                 mmio_addr = format!("{mmio_addr:08X}"),
                 aram_addr = format!("{aram_addr:08X}"),
                 count,
-                direction = ?self.dma_control.direction(),
+                direction = ?self.aram_dma_control.direction(),
                 "ARAM DMA complete"
             );
 
@@ -107,14 +99,16 @@ impl Dsp {
         if self.pending_ucode_upload {
             self.pending_ucode_upload = false;
 
-            let count = self.dma_control.count() as usize * 4;
-            let src = self.aram[..count].to_vec();
-            self.iram[..count].copy_from_slice(&src);
+            const UCODE_ADDR: usize = 0x8100_0000;
+            const UCODE_SIZE: usize = 1024;
+            let src = mmio.ram[UCODE_ADDR..UCODE_ADDR + UCODE_SIZE].to_vec();
+            self.iram[..UCODE_SIZE].copy_from_slice(&src);
 
-            tracing::debug!(count, "uploaded ucode from ARAM[0x0000] to IRAM");
-
-            // Assert ucode upload finished until next read
-            self.csr = self.csr.with_upload_ucode_finished(true);
+            tracing::debug!(
+                mmio_addr = format!("{UCODE_ADDR:08X}"),
+                count = UCODE_SIZE,
+                "uploaded ucode from RAM to IRAM"
+            );
 
             // HLE: Write expected response to mailbox
             self.mailbox_to_cpu_hi = regs::MailboxToCpuHi::from_raw(0x8071);
@@ -126,9 +120,9 @@ impl Dsp {
         regs::ControlStatus,
         regs::MailboxToCpuHi,
         regs::MailboxToCpuLo,
-        regs::DmaMmioAddr,
-        regs::DmaAramAddr,
-        regs::DmaControl,
+        regs::AramDmaMmioAddr,
+        regs::AramDmaAramAddr,
+        regs::AramDmaControl,
     );
 
     pub fn mmio_read_u8(&mut self, offset: u32) -> u8 {
@@ -145,16 +139,10 @@ impl Dsp {
     }
 
     pub fn mmio_read_u16(&mut self, offset: u32) -> u16 {
-        let addr = DSP_BASE + offset;
-        let val = self.read_raw(addr, 2).unwrap_or_else(|| {
+        self.read_raw(DSP_BASE + offset, 2).unwrap_or_else(|| {
             tracing::error!(offset = format!("{offset:08X}"), "unhandled DSP read_u16");
             0
-        }) as u16;
-        // DSPInitCode (bit 10) auto-clears after being read
-        if regs::ControlStatus::contains(addr) {
-            self.csr = self.csr.with_upload_ucode_finished(false);
-        }
-        val
+        }) as u16
     }
 
     pub fn mmio_write_u16(&mut self, offset: u32, val: u16) {

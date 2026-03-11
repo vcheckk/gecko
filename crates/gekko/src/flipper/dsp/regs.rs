@@ -36,11 +36,8 @@ crate::mmio_register! {
         #[bits(9, alias = "dspdma")]
         pub dma_status: bool,
 
-        #[bits(10, alias = "ucode_status")]
-        pub upload_ucode_finished: bool,
-
         #[bits(11, alias = "ucode")]
-        pub upload_ucode: bool,
+        pub upload_ucode: bool, // also reset bit?
     }
 }
 
@@ -75,7 +72,7 @@ impl MmioAccess<super::Dsp> for ControlStatus {
 
         // ucode falling edge (bit 11: 1->0) schedules ucode upload from ARAM[0x0000]
         if dsp.csr.upload_ucode() && !self.upload_ucode() {
-            tracing::debug!("scheduling ucode upload from ARAM @ 0x0000");
+            tracing::debug!("scheduling ucode upload");
             dsp.pending_ucode_upload = true;
         }
 
@@ -110,13 +107,13 @@ crate::mmio_register! {
 // 0xCC005020 4 [R/W] ARAM DMA MMIO Address
 
 crate::mmio_register! {
-    DmaMmioAddr: u32 @ 0xCC005020 => Dsp.dma_mmio_addr {}
+    AramDmaMmioAddr: u32 @ 0xCC005020 => Dsp.aram_dma_mmio_addr {}
 }
 
 // 0xCC005024 4 [R/W] ARAM DMA ARAM Address
 
 crate::mmio_register! {
-    DmaAramAddr: u32 @ 0xCC005024 => Dsp.dma_aram_addr {}
+    AramDmaAramAddr: u32 @ 0xCC005024 => Dsp.aram_dma_aram_addr {}
 }
 
 // 0xCC005028 4 [R/W] ARAM DMA Count/Control
@@ -128,7 +125,7 @@ pub enum DmaDirection {
 }
 
 crate::mmio_register! {
-    DmaControl: u32 @ 0xCC005028 {
+    AramDmaControl: u32 @ 0xCC005028 {
         #[bits(0..=30)]
         pub count: u32,
 
@@ -137,13 +134,13 @@ crate::mmio_register! {
     }
 }
 
-impl MmioAccess<super::Dsp> for DmaControl {
+impl MmioAccess<super::Dsp> for AramDmaControl {
     fn read(dsp: &super::Dsp) -> Self {
-        dsp.dma_control
+        dsp.aram_dma_control
     }
 
     fn write(self, dsp: &mut super::Dsp) {
-        dsp.dma_control = self;
+        dsp.aram_dma_control = self;
 
         // Schedule the ARAM->RAM DMA immediately when this register is written
         dsp.pending_aram_dma = true;
