@@ -26,6 +26,7 @@ pub struct Cpu {
     // can change the flow of execution (e.g. for branches and jumps).
     pub cia: u32, // Current Instruction Address
     pub nia: u32, // Next Instruction Address
+    pub reserve_addr: Option<u32>, // lwarx/stwcx. reservation address
 }
 
 impl Cpu {
@@ -41,6 +42,7 @@ impl Cpu {
             msr: msr::Msr::default(),
             fpscr: 0,
             sr: [sr::Sr::default(); 16],
+            reserve_addr: None,
         }
     }
 

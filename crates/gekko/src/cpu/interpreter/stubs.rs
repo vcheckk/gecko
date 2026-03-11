@@ -23,7 +23,6 @@ stub! {
     ps_div, ps_sub, ps_add, ps_sel, ps_mul,
     ps_msub, ps_madd, ps_nmsub, ps_nmadd,
     sc, tw,
-    lwarx, stwcx_dot,
     mtsrin, mcrxr,
     lwbrx, lswx, lswi, mfsrin,
     stswx, stwbrx, stswi,

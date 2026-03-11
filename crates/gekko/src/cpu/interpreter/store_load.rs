@@ -1,3 +1,5 @@
+use crate::cpu::condition::ConditionField;
+
 pub fn store_load<const OP: u32>(ctx: &mut crate::gekko::Gekko, instr: crate::cpu::semantics::Instruction) {
     match OP {
         crate::cpu::lut::OP_STW | crate::cpu::lut::OP_STWU => {
@@ -144,6 +146,36 @@ pub fn store_load<const OP: u32>(ctx: &mut crate::gekko::Gekko, instr: crate::cp
             }
         }
         _ => todo!("Store/Load instruction with OP = {OP:#x}"),
+    }
+}
+
+pub fn lwarx(ctx: &mut crate::gekko::Gekko, instr: crate::cpu::semantics::Instruction) {
+    let addr = ctx
+        .cpu
+        .read_gpr_or_zero(instr.ra())
+        .wrapping_add(ctx.cpu.read_gpr(instr.rb()));
+    let val = ctx.read_u32(addr);
+    ctx.cpu.write_gpr(instr.rd(), val);
+    ctx.cpu.reserve_addr = Some(addr);
+}
+
+pub fn stwcx_dot(ctx: &mut crate::gekko::Gekko, instr: crate::cpu::semantics::Instruction) {
+    let addr = ctx
+        .cpu
+        .read_gpr_or_zero(instr.ra())
+        .wrapping_add(ctx.cpu.read_gpr(instr.rb()));
+    let so = ctx.cpu.spr.xer.summary_overflow();
+    let store_performed = ctx.cpu.reserve_addr.is_some();
+    ctx.cpu.reserve_addr = None;
+    if store_performed {
+        ctx.write_u32(addr, ctx.cpu.read_gpr(instr.rs()));
+        ctx.cpu
+            .cr
+            .set_cr0(ConditionField::new().with_eq(true).with_so(so));
+    } else {
+        ctx.cpu
+            .cr
+            .set_cr0(ConditionField::new().with_so(so));
     }
 }
 
