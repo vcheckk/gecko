@@ -123,7 +123,11 @@ fn print_instruction(gekko: &gekko::gekko::Gekko, prev_snapshot: &CpuSnapshot, d
         .unwrap_or_else(|| {
             dump::registers(prev_snapshot, prev_snapshot);
             dump::memory(&gekko.mmio, gekko.cpu.read_gpr(1));
-            panic!("Failed to decode instruction at {:08X}", gekko.cpu.pc)
+            panic!(
+                "Failed to decode instruction at {:08X} => {:08X}",
+                gekko.cpu.pc,
+                gekko.mmio.virt_read_u32(gekko.cpu.pc)
+            );
         })
         .0;
 
