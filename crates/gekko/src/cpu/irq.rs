@@ -1,20 +1,20 @@
-use crate::{cpu::spr::Srr0, gekko::Gekko};
+use crate::{cpu::spr::Srr0, gekko::Gekko, mmio::Mmio};
 
 // Exception vectors
-pub const IRQ_SYSTEM_RESET: u32 = 0x8000_0100;
-pub const IRQ_MACHINE_CHECK: u32 = 0x8000_0200;
-pub const IRQ_DSI: u32 = 0x8000_0300;
-pub const IRQ_ISI: u32 = 0x8000_0400;
-pub const IRQ_EXTERNAL: u32 = 0x8000_0500; // traditional IRQ
-pub const IRQ_ALIGNMENT: u32 = 0x8000_0600;
-pub const IRQ_PROGRAM: u32 = 0x8000_0700;
-pub const IRQ_FP_UNAVAILABLE: u32 = 0x8000_0800;
-pub const IRQ_DECREMENTER: u32 = 0x8000_0900;
-pub const IRQ_SYSTEM_CALL: u32 = 0x8000_0C00;
-pub const IRQ_TRACE: u32 = 0x8000_0D00;
-pub const IRQ_PERFORMANCE_MONITOR: u32 = 0x8000_0F00;
-pub const IRQ_IABR: u32 = 0x8000_1300;
-pub const IRQ_THERMAL: u32 = 0x8000_1400;
+#[rustfmt::skip] pub const IRQ_SYSTEM_RESET: u32         = Mmio::virt_to_phys(0x8000_0100);
+#[rustfmt::skip] pub const IRQ_MACHINE_CHECK: u32        = Mmio::virt_to_phys(0x8000_0200);
+#[rustfmt::skip] pub const IRQ_DSI: u32                  = Mmio::virt_to_phys(0x8000_0300);
+#[rustfmt::skip] pub const IRQ_ISI: u32                  = Mmio::virt_to_phys(0x8000_0400);
+#[rustfmt::skip] pub const IRQ_EXTERNAL: u32             = Mmio::virt_to_phys(0x8000_0500); // traditional IRQ
+#[rustfmt::skip] pub const IRQ_ALIGNMENT: u32            = Mmio::virt_to_phys(0x8000_0600);
+#[rustfmt::skip] pub const IRQ_PROGRAM: u32              = Mmio::virt_to_phys(0x8000_0700);
+#[rustfmt::skip] pub const IRQ_FP_UNAVAILABLE: u32       = Mmio::virt_to_phys(0x8000_0800);
+#[rustfmt::skip] pub const IRQ_DECREMENTER: u32          = Mmio::virt_to_phys(0x8000_0900);
+#[rustfmt::skip] pub const IRQ_SYSTEM_CALL: u32          = Mmio::virt_to_phys(0x8000_0C00);
+#[rustfmt::skip] pub const IRQ_TRACE: u32                = Mmio::virt_to_phys(0x8000_0D00);
+#[rustfmt::skip] pub const IRQ_PERFORMANCE_MONITOR: u32  = Mmio::virt_to_phys(0x8000_0F00);
+#[rustfmt::skip] pub const IRQ_IABR: u32                 = Mmio::virt_to_phys(0x8000_1300);
+#[rustfmt::skip] pub const IRQ_THERMAL: u32              = Mmio::virt_to_phys(0x8000_1400);
 
 impl Gekko {
     pub fn cause_external_interrupt(&mut self) {
