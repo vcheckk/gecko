@@ -68,11 +68,8 @@ pub fn fp_ops<const OP: u32>(ctx: &mut crate::gekko::Gekko, instr: crate::cpu::s
             }
         }
         crate::cpu::lut::OP_FRSPX => {
-            ctx.cpu
-                .write_fpr(instr.rd(), ctx.cpu.read_fpr(instr.rb()) as f32 as f64);
-            if instr.rc() {
-                ctx.cpu.update_cr1();
-            }
+            let val = ctx.cpu.read_fpr(instr.rb()) as f32 as f64;
+            fp_write_single(ctx, &instr, val);
         }
         crate::cpu::lut::OP_FCTIWX => {
             let res = ctx.cpu.read_fpr(instr.rb()).round() as i32;
@@ -126,51 +123,51 @@ pub fn fp_ops<const OP: u32>(ctx: &mut crate::gekko::Gekko, instr: crate::cpu::s
             &instr,
             -(ctx.cpu.read_fpr(instr.ra()) * ctx.cpu.read_fpr(instr.fc()) - ctx.cpu.read_fpr(instr.rb())),
         ),
-        crate::cpu::lut::OP_FADDSX => fp_write(
+        crate::cpu::lut::OP_FADDSX => fp_write_single(
             ctx,
             &instr,
             (ctx.cpu.read_fpr(instr.ra()) + ctx.cpu.read_fpr(instr.rb())) as f32 as f64,
         ),
-        crate::cpu::lut::OP_FSUBSX => fp_write(
+        crate::cpu::lut::OP_FSUBSX => fp_write_single(
             ctx,
             &instr,
             (ctx.cpu.read_fpr(instr.ra()) - ctx.cpu.read_fpr(instr.rb())) as f32 as f64,
         ),
-        crate::cpu::lut::OP_FMULSX => fp_write(
+        crate::cpu::lut::OP_FMULSX => fp_write_single(
             ctx,
             &instr,
             (ctx.cpu.read_fpr(instr.ra()) * ctx.cpu.read_fpr(instr.fc())) as f32 as f64,
         ),
-        crate::cpu::lut::OP_FDIVSX => fp_write(
+        crate::cpu::lut::OP_FDIVSX => fp_write_single(
             ctx,
             &instr,
             (ctx.cpu.read_fpr(instr.ra()) / ctx.cpu.read_fpr(instr.rb())) as f32 as f64,
         ),
-        crate::cpu::lut::OP_FMADDSX => fp_write(
+        crate::cpu::lut::OP_FMADDSX => fp_write_single(
             ctx,
             &instr,
             (ctx.cpu.read_fpr(instr.ra()) * ctx.cpu.read_fpr(instr.fc()) + ctx.cpu.read_fpr(instr.rb())) as f32 as f64,
         ),
-        crate::cpu::lut::OP_FMSUBSX => fp_write(
+        crate::cpu::lut::OP_FMSUBSX => fp_write_single(
             ctx,
             &instr,
             (ctx.cpu.read_fpr(instr.ra()) * ctx.cpu.read_fpr(instr.fc()) - ctx.cpu.read_fpr(instr.rb())) as f32 as f64,
         ),
-        crate::cpu::lut::OP_FNMADDSX => fp_write(
+        crate::cpu::lut::OP_FNMADDSX => fp_write_single(
             ctx,
             &instr,
             (-(ctx.cpu.read_fpr(instr.ra()) * ctx.cpu.read_fpr(instr.fc()) + ctx.cpu.read_fpr(instr.rb()))) as f32
                 as f64,
         ),
-        crate::cpu::lut::OP_FNMSUBSX => fp_write(
+        crate::cpu::lut::OP_FNMSUBSX => fp_write_single(
             ctx,
             &instr,
             (-(ctx.cpu.read_fpr(instr.ra()) * ctx.cpu.read_fpr(instr.fc()) - ctx.cpu.read_fpr(instr.rb()))) as f32
                 as f64,
         ),
         crate::cpu::lut::OP_FSQRTX => fp_write(ctx, &instr, ctx.cpu.read_fpr(instr.rb()).sqrt()),
-        crate::cpu::lut::OP_FSQRTSX => fp_write(ctx, &instr, (ctx.cpu.read_fpr(instr.rb()).sqrt()) as f32 as f64),
-        crate::cpu::lut::OP_FRESX => fp_write(ctx, &instr, (1.0f32 / ctx.cpu.read_fpr(instr.rb()) as f32) as f64),
+        crate::cpu::lut::OP_FSQRTSX => fp_write_single(ctx, &instr, (ctx.cpu.read_fpr(instr.rb()).sqrt()) as f32 as f64),
+        crate::cpu::lut::OP_FRESX => fp_write_single(ctx, &instr, (1.0f32 / ctx.cpu.read_fpr(instr.rb()) as f32) as f64),
         crate::cpu::lut::OP_FRSQRTEX => fp_write(ctx, &instr, 1.0 / ctx.cpu.read_fpr(instr.rb()).sqrt()),
         crate::cpu::lut::OP_FSELX => {
             let fa = ctx.cpu.read_fpr(instr.ra());
@@ -187,6 +184,17 @@ pub fn fp_ops<const OP: u32>(ctx: &mut crate::gekko::Gekko, instr: crate::cpu::s
 #[inline(always)]
 fn fp_write(ctx: &mut crate::gekko::Gekko, instr: &crate::cpu::semantics::Instruction, val: f64) {
     ctx.cpu.write_fpr(instr.rd(), val);
+    if instr.rc() {
+        ctx.cpu.update_cr1();
+    }
+}
+
+/// Write single-precision FP result to fD.
+/// On Gekko, single-precision instructions duplicate the result into both ps0 and ps1.
+#[inline(always)]
+fn fp_write_single(ctx: &mut crate::gekko::Gekko, instr: &crate::cpu::semantics::Instruction, val: f64) {
+    ctx.cpu.write_fpr(instr.rd(), val);
+    ctx.cpu.write_ps1(instr.rd(), val);
     if instr.rc() {
         ctx.cpu.update_cr1();
     }

@@ -196,6 +196,7 @@ pub fn store_load_fp<const OP: u32>(ctx: &mut crate::gekko::Gekko, instr: crate:
             let addr = ctx.cpu.read_gpr_or_zero(instr.ra()).wrapping_add_signed(instr.disp());
             let val = ctx.read_f32(addr);
             ctx.cpu.write_fpr(instr.rd(), val);
+            ctx.cpu.write_ps1(instr.rd(), val);
             if OP == crate::cpu::lut::OP_LFSU {
                 ctx.cpu.write_gpr(instr.ra(), addr);
             }
@@ -214,6 +215,7 @@ pub fn store_load_fp<const OP: u32>(ctx: &mut crate::gekko::Gekko, instr: crate:
                 .wrapping_add(ctx.cpu.read_gpr(instr.rb()));
             let val = ctx.read_f32(addr);
             ctx.cpu.write_fpr(instr.rd(), val);
+            ctx.cpu.write_ps1(instr.rd(), val);
             if OP == crate::cpu::lut::OP_LFSUX {
                 ctx.cpu.write_gpr(instr.ra(), addr);
             }
