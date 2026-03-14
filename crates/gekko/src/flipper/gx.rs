@@ -225,12 +225,12 @@ impl Gx {
 
     fn rebuild_modelview(&mut self) {
         let b = XF_MODELVIEW_BASE;
-        self.draw_commands.modelview = [
+        self.draw_commands.modelview = draw::Matrix4([
             [self.xf_f32(b),     self.xf_f32(b + 4), self.xf_f32(b + 8),  0.0],
             [self.xf_f32(b + 1), self.xf_f32(b + 5), self.xf_f32(b + 9),  0.0],
             [self.xf_f32(b + 2), self.xf_f32(b + 6), self.xf_f32(b + 10), 0.0],
             [self.xf_f32(b + 3), self.xf_f32(b + 7), self.xf_f32(b + 11), 1.0],
-        ];
+        ]);
     }
 
     fn rebuild_projection(&mut self) {
@@ -245,20 +245,20 @@ impl Gx {
 
         self.draw_commands.projection = if proj_type == 0 {
             // Perspective
-            [
+            draw::Matrix4([
                 [pm1, 0.0, 0.0, 0.0],
                 [0.0, pm3, 0.0, 0.0],
                 [pm2, pm4, pm5, -1.0],
                 [0.0, 0.0, pm6, 0.0],
-            ]
+            ])
         } else {
             // Orthographic
-            [
+            draw::Matrix4([
                 [pm1, 0.0, 0.0, 0.0],
                 [0.0, pm3, 0.0, 0.0],
                 [0.0, 0.0, pm5, 0.0],
                 [pm2, pm4, pm6, 1.0],
-            ]
+            ])
         };
     }
 

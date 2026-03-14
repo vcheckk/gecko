@@ -28,11 +28,36 @@ pub struct DrawCall {
     pub vertices: Vec<Vertex>,
 }
 
-pub type Matrix4 = [[f32; 4]; 4];
+#[derive(Debug, Clone, Copy)]
+pub struct Matrix4(pub [[f32; 4]; 4]);
+
+impl Default for Matrix4 {
+    fn default() -> Self {
+        Matrix4([[0.0; 4]; 4])
+    }
+}
+
+impl std::ops::Mul for Matrix4 {
+    type Output = Matrix4;
+
+    fn mul(self, rhs: Matrix4) -> Matrix4 {
+        let (a, b) = (&self.0, &rhs.0);
+        let mut out = [[0.0f32; 4]; 4];
+        for col in 0..4 {
+            for row in 0..4 {
+                out[col][row] = a[0][row] * b[col][0]
+                    + a[1][row] * b[col][1]
+                    + a[2][row] * b[col][2]
+                    + a[3][row] * b[col][3];
+            }
+        }
+        Matrix4(out)
+    }
+}
 
 #[derive(Default)]
 pub struct DrawCommands {
-    pub modelview: Matrix4,         // where is this triangle relative to the camera?
-    pub projection: Matrix4,        // how is the 3D scene projected onto the 2D screen?
-    pub commands: Vec<DrawCall>,    // the actual draw calls to execute
+    pub modelview: Matrix4,
+    pub projection: Matrix4,
+    pub commands: Vec<DrawCall>,
 }

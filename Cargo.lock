@@ -175,6 +175,8 @@ checksum = "c08606f8c3cbf4ce6ec8e28fb0014a2c086708fe954eaa885384a6165172e7e8"
 name = "backend-wgpu"
 version = "0.1.0"
 dependencies = [
+ "bytemuck",
+ "gekko",
  "wgpu",
 ]
 
@@ -1904,6 +1906,7 @@ dependencies = [
 name = "tinyapp"
 version = "0.1.0"
 dependencies = [
+ "backend-wgpu",
  "gekko",
  "image",
  "pollster",

@@ -9,38 +9,7 @@ use winit::{
     window::{Window, WindowId},
 };
 
-const SHADER: &str = r#"
-struct VsOut {
-    @builtin(position) pos: vec4<f32>,
-    @location(0)       uv:  vec2<f32>,
-}
-
-@vertex
-fn vs_main(@builtin(vertex_index) i: u32) -> VsOut {
-    var pos = array<vec2<f32>, 3>(
-        vec2<f32>(-1.0,  1.0),
-        vec2<f32>( 3.0,  1.0),
-        vec2<f32>(-1.0, -3.0),
-    );
-    var uv = array<vec2<f32>, 3>(
-        vec2<f32>(0.0, 0.0),
-        vec2<f32>(2.0, 0.0),
-        vec2<f32>(0.0, 2.0),
-    );
-    var out: VsOut;
-    out.pos = vec4<f32>(pos[i], 0.0, 1.0);
-    out.uv = uv[i];
-    return out;
-}
-
-@group(0) @binding(0) var xfb_tex: texture_2d<f32>;
-@group(0) @binding(1) var xfb_sam: sampler;
-
-@fragment
-fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
-    return textureSample(xfb_tex, xfb_sam, in.uv);
-}
-"#;
+const SHADER: &str = include_str!("xfb.wgsl");
 
 struct State {
     surface: wgpu::Surface<'static>,
@@ -53,6 +22,7 @@ struct State {
     bind_group: wgpu::BindGroup,
     tex_width: u32,
     tex_height: u32,
+    gx_renderer: backend_wgpu::GxRenderer,
 }
 
 impl State {
@@ -74,8 +44,7 @@ impl State {
         }))
         .unwrap();
 
-        let (device, queue) =
-            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).unwrap();
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).unwrap();
 
         let size = window.inner_size();
         let surface_caps = surface.get_capabilities(&adapter);
@@ -159,6 +128,7 @@ impl State {
         });
 
         let (texture, bind_group) = create_xfb_texture(&device, &bind_group_layout, w, h);
+        let gx_renderer = backend_wgpu::GxRenderer::new(&device, surface_format, w, h);
 
         State {
             surface,
@@ -171,6 +141,7 @@ impl State {
             bind_group,
             tex_width: w,
             tex_height: h,
+            gx_renderer,
         }
     }
 
@@ -181,10 +152,37 @@ impl State {
         self.surface_config.width = width;
         self.surface_config.height = height;
         self.surface.configure(&self.device, &self.surface_config);
+        self.gx_renderer.resize(&self.device, width, height);
     }
 
     fn render(&mut self, emulator: &mut Gekko) {
         emulator.run_until_vsync();
+
+        let frame = match self.surface.get_current_texture() {
+            Ok(f) => f,
+            Err(e) => {
+                eprintln!("surface error: {e}");
+                return;
+            }
+        };
+        let view = frame.texture.create_view(&Default::default());
+
+        if !emulator.gx.draw_commands.commands.is_empty() {
+            self.render_gx(emulator, &view);
+        } else {
+            self.render_xfb(emulator, &view);
+        }
+
+        frame.present();
+    }
+
+    fn render_gx(&mut self, emulator: &mut Gekko, view: &wgpu::TextureView) {
+        self.gx_renderer
+            .render(&self.device, &self.queue, &emulator.gx.draw_commands, view);
+        emulator.gx.draw_commands.commands.clear();
+    }
+
+    fn render_xfb(&mut self, emulator: &Gekko, view: &wgpu::TextureView) {
         let pixels = emulator.render_xfb();
         let (w, h) = emulator.frame_size();
         let (w, h) = (w as u32, h as u32);
@@ -222,21 +220,12 @@ impl State {
             },
         );
 
-        let frame = match self.surface.get_current_texture() {
-            Ok(f) => f,
-            Err(e) => {
-                eprintln!("surface error: {e}");
-                return;
-            }
-        };
-        let view = frame.texture.create_view(&Default::default());
-
         let mut encoder = self.device.create_command_encoder(&Default::default());
         {
             let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: None,
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
+                    view,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
@@ -255,7 +244,6 @@ impl State {
         }
 
         self.queue.submit([encoder.finish()]);
-        frame.present();
     }
 }
 
