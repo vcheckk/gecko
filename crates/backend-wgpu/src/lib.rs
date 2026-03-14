@@ -1,6 +1,7 @@
 mod texture;
 
 use gekko::flipper::gx::draw::{DrawCall, DrawCommands, Primitive, TextureFormat};
+use gekko::flipper::gx::regs::{BlendFactor, CompareFunc};
 use std::collections::HashMap;
 
 #[repr(C)]
@@ -24,15 +25,76 @@ impl From<&gekko::flipper::gx::draw::Vertex> for GpuVertex {
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct Uniforms {
-    mvp: [[f32; 4]; 4], // 64 bytes
-    has_texture: u32,   // 4 bytes
-    _padding: [u8; 28], // 28 bytes
+    mvp: [[f32; 4]; 4],
+    tev_color_source: u32, // 0 = vertex color, 1 = texture
+    alpha_ref0: f32,
+    alpha_ref1: f32,
+    alpha_comp0: u32, // CompareFunc as u32
+    alpha_comp1: u32,
+    alpha_op: u32, // AlphaOp as u32
+    _padding: [u32; 2],
 }
 
 const SHADER: &str = include_str!("gx.wgsl");
 
+#[derive(Clone, Copy, Hash, PartialEq, Eq)]
+struct PipelineKey {
+    blend_enable: bool,
+    src_factor: BlendFactor,
+    dst_factor: BlendFactor,
+    subtract: bool,
+    z_enable: bool,
+    z_func: CompareFunc,
+    z_write: bool,
+}
+
+impl PipelineKey {
+    fn from_draw_commands(commands: &DrawCommands) -> Self {
+        let blend = commands.bp_blend_mode;
+        let zmode = commands.bp_zmode;
+        PipelineKey {
+            blend_enable: blend.blend_enable(),
+            src_factor: blend.src_factor(),
+            dst_factor: blend.dst_factor(),
+            subtract: blend.subtract(),
+            z_enable: zmode.enable(),
+            z_func: zmode.func(),
+            z_write: zmode.update_enable(),
+        }
+    }
+}
+
+fn map_blend_factor(f: BlendFactor) -> wgpu::BlendFactor {
+    match f {
+        BlendFactor::Zero => wgpu::BlendFactor::Zero,
+        BlendFactor::One => wgpu::BlendFactor::One,
+        BlendFactor::SrcClr => wgpu::BlendFactor::Src,
+        BlendFactor::InvSrcClr => wgpu::BlendFactor::OneMinusSrc,
+        BlendFactor::SrcAlpha => wgpu::BlendFactor::SrcAlpha,
+        BlendFactor::InvSrcAlpha => wgpu::BlendFactor::OneMinusSrcAlpha,
+        BlendFactor::DstAlpha => wgpu::BlendFactor::DstAlpha,
+        BlendFactor::InvDstAlpha => wgpu::BlendFactor::OneMinusDstAlpha,
+    }
+}
+
+fn map_compare_func(f: CompareFunc) -> wgpu::CompareFunction {
+    match f {
+        CompareFunc::Never => wgpu::CompareFunction::Never,
+        CompareFunc::Less => wgpu::CompareFunction::Less,
+        CompareFunc::Equal => wgpu::CompareFunction::Equal,
+        CompareFunc::LessEqual => wgpu::CompareFunction::LessEqual,
+        CompareFunc::Greater => wgpu::CompareFunction::Greater,
+        CompareFunc::NotEqual => wgpu::CompareFunction::NotEqual,
+        CompareFunc::GreaterEqual => wgpu::CompareFunction::GreaterEqual,
+        CompareFunc::Always => wgpu::CompareFunction::Always,
+    }
+}
+
 pub struct GxRenderer {
-    pipeline: wgpu::RenderPipeline,
+    pipeline_cache: HashMap<PipelineKey, wgpu::RenderPipeline>,
+    shader: wgpu::ShaderModule,
+    pipeline_layout: wgpu::PipelineLayout,
+    surface_format: wgpu::TextureFormat,
     bind_group_layout: wgpu::BindGroupLayout,
     bind_group: wgpu::BindGroup,
     uniform_buffer: wgpu::Buffer,
@@ -98,65 +160,6 @@ impl GxRenderer {
             label: None,
             bind_group_layouts: &[&bind_group_layout],
             immediate_size: 0,
-        });
-
-        let vertex_layout = wgpu::VertexBufferLayout {
-            array_stride: std::mem::size_of::<GpuVertex>() as u64,
-            step_mode: wgpu::VertexStepMode::Vertex,
-            attributes: &[
-                wgpu::VertexAttribute {
-                    format: wgpu::VertexFormat::Float32x3,
-                    offset: 0,
-                    shader_location: 0,
-                },
-                wgpu::VertexAttribute {
-                    format: wgpu::VertexFormat::Float32x4,
-                    offset: 12,
-                    shader_location: 1,
-                },
-                wgpu::VertexAttribute {
-                    format: wgpu::VertexFormat::Float32x2,
-                    offset: 28,
-                    shader_location: 2,
-                },
-            ],
-        };
-
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("gx_pipeline"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                buffers: &[vertex_layout],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: surface_format,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                front_face: wgpu::FrontFace::Cw,
-                cull_mode: None,
-                ..Default::default()
-            },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: wgpu::TextureFormat::Depth24Plus,
-                depth_write_enabled: true,
-                depth_compare: wgpu::CompareFunction::LessEqual,
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
-            }),
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
         });
 
         let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -238,7 +241,10 @@ impl GxRenderer {
         let (depth_texture, depth_view) = create_depth_texture(device, depth_width, depth_height);
 
         GxRenderer {
-            pipeline,
+            pipeline_cache: HashMap::new(),
+            shader,
+            pipeline_layout,
+            surface_format,
             bind_group_layout,
             bind_group,
             uniform_buffer,
@@ -271,6 +277,101 @@ impl GxRenderer {
         self.depth_height = height;
     }
 
+    fn create_pipeline(&self, device: &wgpu::Device, key: &PipelineKey) -> wgpu::RenderPipeline {
+        let vertex_layout = wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<GpuVertex>() as u64,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &[
+                wgpu::VertexAttribute {
+                    format: wgpu::VertexFormat::Float32x3,
+                    offset: 0,
+                    shader_location: 0,
+                },
+                wgpu::VertexAttribute {
+                    format: wgpu::VertexFormat::Float32x4,
+                    offset: 12,
+                    shader_location: 1,
+                },
+                wgpu::VertexAttribute {
+                    format: wgpu::VertexFormat::Float32x2,
+                    offset: 28,
+                    shader_location: 2,
+                },
+            ],
+        };
+
+        let blend = if key.blend_enable {
+            let operation = if key.subtract {
+                wgpu::BlendOperation::ReverseSubtract
+            } else {
+                wgpu::BlendOperation::Add
+            };
+            Some(wgpu::BlendState {
+                color: wgpu::BlendComponent {
+                    src_factor: map_blend_factor(key.src_factor),
+                    dst_factor: map_blend_factor(key.dst_factor),
+                    operation,
+                },
+                alpha: wgpu::BlendComponent {
+                    src_factor: map_blend_factor(key.src_factor),
+                    dst_factor: map_blend_factor(key.dst_factor),
+                    operation,
+                },
+            })
+        } else {
+            None
+        };
+
+        let depth_stencil = if key.z_enable {
+            Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth24Plus,
+                depth_write_enabled: key.z_write,
+                depth_compare: map_compare_func(key.z_func),
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            })
+        } else {
+            Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth24Plus,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::Always,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            })
+        };
+
+        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("gx_pipeline"),
+            layout: Some(&self.pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &self.shader,
+                entry_point: Some("vs_main"),
+                buffers: &[vertex_layout],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &self.shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: self.surface_format,
+                    blend,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                front_face: wgpu::FrontFace::Cw,
+                cull_mode: None,
+                ..Default::default()
+            },
+            depth_stencil,
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        })
+    }
+
     pub fn render(
         &mut self,
         device: &wgpu::Device,
@@ -284,16 +385,32 @@ impl GxRenderer {
         self.ensure_depth_texture(device, target_width, target_height);
 
         let mvp = commands.projection * commands.modelview;
-        let has_texture = commands.textures[0].is_some() as u32;
+        let tev_color_source = commands.textures[0].is_some() as u32;
+
+        let alpha_cmp = commands.bp_alpha_compare;
+
         queue.write_buffer(
             &self.uniform_buffer,
             0,
             bytemuck::bytes_of(&Uniforms {
                 mvp: mvp.0,
-                has_texture,
-                _padding: [0; 28],
+                tev_color_source,
+                alpha_ref0: alpha_cmp.ref0() as f32 / 255.0,
+                alpha_ref1: alpha_cmp.ref1() as f32 / 255.0,
+                alpha_comp0: alpha_cmp.comp0() as u32,
+                alpha_comp1: alpha_cmp.comp1() as u32,
+                alpha_op: alpha_cmp.op() as u32,
+                _padding: [0; 2],
             }),
         );
+
+        // Get or create the pipeline for current blend/z state
+        let pipeline_key = PipelineKey::from_draw_commands(commands);
+        if !self.pipeline_cache.contains_key(&pipeline_key) {
+            let pipeline = self.create_pipeline(device, &pipeline_key);
+            self.pipeline_cache.insert(pipeline_key, pipeline);
+        }
+        let pipeline = &self.pipeline_cache[&pipeline_key];
 
         // Upload texture slot 0 if present, using cache to avoid redundant uploads
         let tex_view = if let Some(desc) = &commands.textures[0] {
@@ -368,7 +485,7 @@ impl GxRenderer {
                 timestamp_writes: None,
                 multiview_mask: None,
             });
-            rpass.set_pipeline(&self.pipeline);
+            rpass.set_pipeline(pipeline);
             rpass.set_bind_group(0, &self.bind_group, &[]);
             rpass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
             rpass.draw(0..vertices.len() as u32, 0..1);

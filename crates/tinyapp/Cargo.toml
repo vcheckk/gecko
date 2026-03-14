@@ -10,3 +10,8 @@ backend-wgpu = { path = "../backend-wgpu" }
 wgpu = "28.0.0"
 winit = "0.30"
 pollster = "0.4"
+egui = "0.33"
+egui-wgpu = "0.33"
+egui-winit = { version = "0.33", features = ["wayland", "x11"] }
+egui_plot = "0.34"
+bytemuck = { version = "1", features = ["derive"] }

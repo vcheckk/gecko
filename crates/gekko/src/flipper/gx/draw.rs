@@ -1,4 +1,5 @@
 use chapa::BitEnum;
+use super::regs::{AlphaCompare, BlendMode, ZMode};
 
 #[derive(Debug)]
 pub enum Primitive {
@@ -97,4 +98,7 @@ pub struct DrawCommands {
     pub projection: Matrix4,
     pub commands: Vec<DrawCall>,
     pub textures: [Option<TextureDescriptor>; 8],
+    pub bp_zmode: ZMode,
+    pub bp_blend_mode: BlendMode,
+    pub bp_alpha_compare: AlphaCompare,
 }

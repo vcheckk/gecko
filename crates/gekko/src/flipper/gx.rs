@@ -7,13 +7,13 @@ use super::pi::InterruptFlag;
 use crate::{
     flipper::gx::{
         constants::{
-            ARRAY_BASE_REG, ARRAY_CLR0, ARRAY_POS, ARRAY_STRIDE_REG, BP_PE_DONE, BP_PE_DONE_FINISH_BIT, BP_REG_SIZE,
-            BP_TX_SETIMAGE0_I0, BP_TX_SETIMAGE0_I4, BP_TX_SETIMAGE3_I0, BP_TX_SETIMAGE3_I4, CP_REG_SIZE, VATA_REG,
-            VCD_HI_REG, VCD_LO_REG, XF_MEM_SIZE, XF_MODELVIEW_BASE, XF_MODELVIEW_END, XF_PROJECTION_BASE,
-            XF_PROJECTION_END,
+            ARRAY_BASE_REG, ARRAY_CLR0, ARRAY_POS, ARRAY_STRIDE_REG, BP_PE_ALPHA_COMPARE, BP_PE_CMODE0, BP_PE_DONE,
+            BP_PE_DONE_FINISH_BIT, BP_PE_ZMODE, BP_REG_SIZE, BP_TX_SETIMAGE0_I0, BP_TX_SETIMAGE0_I4,
+            BP_TX_SETIMAGE3_I0, BP_TX_SETIMAGE3_I4, CP_REG_SIZE, VATA_REG, VCD_HI_REG, VCD_LO_REG, XF_MEM_SIZE,
+            XF_MODELVIEW_BASE, XF_MODELVIEW_END, XF_PROJECTION_BASE, XF_PROJECTION_END,
         },
         draw::DrawCommands,
-        regs::{TxSetImage0, TxSetImage3, VatA, VcdHi, VcdLo},
+        regs::{AlphaCompare, BlendMode, TxSetImage0, TxSetImage3, VatA, VcdHi, VcdLo, ZMode},
     },
     gekko::Gekko,
     mmio::Mmio,
@@ -363,6 +363,14 @@ impl Gx {
         // PE finish
         if idx == BP_PE_DONE && (val & BP_PE_DONE_FINISH_BIT) != 0 {
             self.raise_interrupt = true;
+        }
+
+        // Forward PE render state to draw commands
+        match idx {
+            BP_PE_ZMODE => self.draw_commands.bp_zmode = ZMode::from_raw(val),
+            BP_PE_CMODE0 => self.draw_commands.bp_blend_mode = BlendMode::from_raw(val),
+            BP_PE_ALPHA_COMPARE => self.draw_commands.bp_alpha_compare = AlphaCompare::from_raw(val),
+            _ => {}
         }
     }
 

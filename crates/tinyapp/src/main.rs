@@ -1,7 +1,12 @@
+use egui::ViewportId;
+use egui_plot::{Line, Plot, PlotPoints};
+use gekko::flipper::vi::regs::RefreshRate;
 use gekko::gekko::Gekko;
 use image::Dol;
+use std::collections::VecDeque;
 use std::env;
 use std::sync::Arc;
+use std::time::Instant;
 use winit::{
     application::ApplicationHandler,
     event::WindowEvent,
@@ -23,6 +28,13 @@ struct State {
     tex_width: u32,
     tex_height: u32,
     gx_renderer: backend_wgpu::GxRenderer,
+    // egui overlay
+    egui_ctx: egui::Context,
+    egui_renderer: egui_wgpu::Renderer,
+    egui_winit: egui_winit::State,
+    fps_history: VecDeque<[f64; 2]>,
+    start_time: Instant,
+    last_frame: Instant,
 }
 
 impl State {
@@ -136,6 +148,10 @@ impl State {
             surface_config.height,
         );
 
+        let egui_ctx = egui::Context::default();
+        let egui_renderer = egui_wgpu::Renderer::new(&device, surface_format, egui_wgpu::RendererOptions::default());
+        let egui_winit = egui_winit::State::new(egui_ctx.clone(), ViewportId::ROOT, window.as_ref(), None, None, None);
+
         State {
             surface,
             surface_config,
@@ -148,6 +164,12 @@ impl State {
             tex_width: w,
             tex_height: h,
             gx_renderer,
+            egui_ctx,
+            egui_renderer,
+            egui_winit,
+            fps_history: VecDeque::new(),
+            start_time: Instant::now(),
+            last_frame: Instant::now(),
         }
     }
 
@@ -161,7 +183,22 @@ impl State {
         self.gx_renderer.resize(&self.device, width, height);
     }
 
-    fn render(&mut self, emulator: &mut Gekko) {
+    fn render(&mut self, emulator: &mut Gekko, window: &Window) {
+        // update FPS history
+        let delta = self.last_frame.elapsed().as_secs_f64();
+        self.last_frame = Instant::now();
+        let fps = if delta > 0.0 { 1.0 / delta } else { 0.0 };
+        let elapsed = self.start_time.elapsed().as_secs_f64();
+        self.fps_history.push_back([elapsed, fps]);
+        while self.fps_history.front().is_some_and(|e| elapsed - e[0] > 5.0) {
+            self.fps_history.pop_front();
+        }
+        let native_hz = match emulator.vi.dcr.video_format().refresh_rate() {
+            RefreshRate::Hz60 => 60.0_f64,
+            RefreshRate::Hz50 => 50.0_f64,
+        };
+        let native_pct = (fps / native_hz) * 100.0;
+
         emulator.run_until_vsync();
 
         let frame = match self.surface.get_current_texture() {
@@ -177,6 +214,84 @@ impl State {
             self.render_gx(emulator, &view);
         } else {
             self.render_xfb(emulator, &view);
+        }
+
+        // egui overlay
+        let raw_input = self.egui_winit.take_egui_input(window);
+        let fps_points: Vec<[f64; 2]> = self.fps_history.iter().copied().collect();
+        let full_output = self.egui_ctx.run_ui(raw_input, |ui| {
+            let ctx = ui.ctx().clone();
+            let frame =
+                egui::Frame::window(&ctx.global_style()).fill(egui::Color32::from_rgba_unmultiplied(20, 20, 20, 180));
+            egui::Window::new("perf_hud")
+                .title_bar(false)
+                .resizable(false)
+                .movable(false)
+                .anchor(egui::Align2::RIGHT_TOP, [-8.0, 8.0])
+                .frame(frame)
+                .show(&ctx, |ui| {
+                    ui.label(egui::RichText::new(format!("{fps:.1} FPS  {native_pct:.1}% native")).monospace());
+                    Plot::new("fps_plot")
+                        .height(60.0)
+                        .width(180.0)
+                        .show_axes(false)
+                        .show_grid(false)
+                        .allow_zoom(false)
+                        .allow_drag(false)
+                        .allow_scroll(false)
+                        .show(ui, |plot_ui| {
+                            plot_ui.line(
+                                Line::new("fps", PlotPoints::from(fps_points.clone()))
+                                    .color(egui::Color32::from_rgb(100, 200, 100)),
+                            );
+                        });
+                });
+        });
+
+        self.egui_winit
+            .handle_platform_output(window, full_output.platform_output);
+
+        let screen_desc = egui_wgpu::ScreenDescriptor {
+            size_in_pixels: [self.surface_config.width, self.surface_config.height],
+            pixels_per_point: window.scale_factor() as f32,
+        };
+        let tris = self
+            .egui_ctx
+            .tessellate(full_output.shapes, screen_desc.pixels_per_point);
+
+        for (id, delta) in full_output.textures_delta.set {
+            self.egui_renderer.update_texture(&self.device, &self.queue, id, &delta);
+        }
+
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        self.egui_renderer
+            .update_buffers(&self.device, &self.queue, &mut encoder, &tris, &screen_desc);
+        {
+            let rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("egui"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                    depth_slice: None,
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            self.egui_renderer
+                .render(&mut rpass.forget_lifetime(), &tris, &screen_desc);
+        }
+        self.queue.submit([encoder.finish()]);
+
+        for id in full_output.textures_delta.free {
+            self.egui_renderer.free_texture(&id);
         }
 
         frame.present();
@@ -326,6 +441,11 @@ impl ApplicationHandler for App {
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
+        // Forward events to egui first
+        if let (Some(state), Some(window)) = (&mut self.state, &self.window) {
+            let _ = state.egui_winit.on_window_event(window, &event);
+        }
+
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => {
@@ -335,7 +455,7 @@ impl ApplicationHandler for App {
             }
             WindowEvent::RedrawRequested => {
                 if let (Some(state), Some(window)) = (&mut self.state, &self.window) {
-                    state.render(&mut self.emulator);
+                    state.render(&mut self.emulator, window);
                     window.request_redraw();
                 }
             }

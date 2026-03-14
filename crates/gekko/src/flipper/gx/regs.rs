@@ -2,6 +2,127 @@ use chapa::BitEnum;
 
 use crate::flipper::gx::draw::TextureFormat;
 
+// GX compare function (shared by Z-mode and alpha compare)
+#[derive(Debug, PartialEq, BitEnum, Hash, Eq)]
+pub enum CompareFunc {
+    Never = 0,
+    Less = 1,
+    Equal = 2,
+    LessEqual = 3,
+    Greater = 4,
+    NotEqual = 5,
+    GreaterEqual = 6,
+    Always = 7,
+}
+
+// GX blend factor
+#[derive(Debug, PartialEq, BitEnum, Hash, Eq)]
+pub enum BlendFactor {
+    Zero = 0,
+    One = 1,
+    SrcClr = 2,
+    InvSrcClr = 3,
+    SrcAlpha = 4,
+    InvSrcAlpha = 5,
+    DstAlpha = 6,
+    InvDstAlpha = 7,
+}
+
+// GX alpha combine op
+#[derive(Debug, PartialEq, BitEnum, Hash, Eq)]
+pub enum AlphaOp {
+    And = 0,
+    Or = 1,
+    Xor = 2,
+    Xnor = 3,
+}
+
+// BP 0x40 Z-mode
+#[chapa::bitfield(u32, order = lsb0)]
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, Default)]
+pub struct ZMode {
+    #[bits(0)]
+    pub enable: bool,
+
+    #[bits(1..=3)]
+    pub func: CompareFunc,
+
+    #[bits(4)]
+    pub update_enable: bool,
+}
+
+#[derive(Debug, BitEnum)]
+pub enum LogicOp {
+    Clear = 0,
+    And = 1,
+    ReverseAnd = 2,
+    Copy = 3,
+    InvertedAnd = 4,
+    Noop = 5,
+    Xor = 6,
+    Or = 7,
+    Nor = 8,
+    Equivalent = 9,
+    Invert = 10,
+    ReverseOr = 11,
+    InvertedCopy = 12,
+    InvertedOr = 13,
+    Nand = 14,
+    Set = 15,
+}
+
+// BP 0x41 Blend mode (PE_CMODE0)
+#[chapa::bitfield(u32, order = lsb0)]
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, Default)]
+pub struct BlendMode {
+    #[bits(0)]
+    pub blend_enable: bool,
+
+    #[bits(1)]
+    pub logic_op_enable: bool,
+
+    #[bits(2)]
+    pub dither_enable: bool,
+
+    #[bits(3)]
+    pub color_update: bool,
+
+    #[bits(4)]
+    pub alpha_update: bool,
+
+    #[bits(5..=7)]
+    pub dst_factor: BlendFactor,
+
+    #[bits(8..=10)]
+    pub src_factor: BlendFactor,
+
+    #[bits(11)]
+    pub subtract: bool,
+
+    #[bits(12..=15)] // TODO: double check
+    pub logic_op: LogicOp,
+}
+
+// BP 0xF3 Alpha compare
+#[chapa::bitfield(u32, order = lsb0)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct AlphaCompare {
+    #[bits(0..=7)]
+    pub ref0: u8,
+
+    #[bits(8..=15)]
+    pub ref1: u8,
+
+    #[bits(16..=18)]
+    pub comp0: CompareFunc,
+
+    #[bits(19..=21)]
+    pub comp1: CompareFunc,
+
+    #[bits(22..=23)]
+    pub op: AlphaOp,
+}
+
 #[derive(Debug, PartialEq, BitEnum)]
 pub enum TexCount {
     S,  // 1D coordinate

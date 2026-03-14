@@ -1,6 +1,22 @@
 [workspace]
 resolver = "3"
-members = ["crates/gctool", "crates/disasm", "crates/gekko", "crates/tinyemu", "crates/image", "crates/tinyapp", "crates/backend-wgpu"]
+members = [
+    "crates/gctool",
+    "crates/disasm",
+    "crates/gekko",
+    "crates/tinyemu",
+    "crates/image",
+    "crates/tinyapp",
+    "crates/backend-wgpu",
+]
+
+[patch.crates-io]
+egui = { git = "https://github.com/ioncodes/egui.git" }
+epaint = { git = "https://github.com/ioncodes/egui.git" }
+emath = { git = "https://github.com/ioncodes/egui.git" }
+ecolor = { git = "https://github.com/ioncodes/egui.git" }
+egui-wgpu = { git = "https://github.com/ioncodes/egui.git" }
+egui-winit = { git = "https://github.com/ioncodes/egui.git" }
 
 [profile.release]
 lto = "fat"
