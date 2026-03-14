@@ -88,24 +88,52 @@ impl Gx {
                 regs::AttributeType::None => 0,
             };
 
-            let vertex_stride = vcd_lo.position().size() + vcd_lo.color0().size() + tex0_size;
+            let pos_attr = vcd_lo.position();
+            let clr0_attr = vcd_lo.color0();
+            let pos_data_size = vat_a.pos_data_size();
+            let clr0_data_size = vat_a.clr0_data_size();
+
+            let pos_stream_size = match pos_attr {
+                regs::AttributeType::Direct => pos_data_size,
+                regs::AttributeType::Index8 => 1,
+                regs::AttributeType::Index16 => 2,
+                regs::AttributeType::None => 0,
+            };
+            let clr0_stream_size = match clr0_attr {
+                regs::AttributeType::Direct => clr0_data_size,
+                regs::AttributeType::Index8 => 1,
+                regs::AttributeType::Index16 => 2,
+                regs::AttributeType::None => 0,
+            };
+
+            let vertex_stride = pos_stream_size + clr0_stream_size + tex0_size;
             let vertex_count = data.len() / vertex_stride;
 
             let mut vertices: Vec<draw::Vertex> = Vec::with_capacity(vertex_count);
             let mut cur = Cursor::new(&data);
 
             for i in 0..vertex_count {
-                // Read position index
-                let pos_index = read_index(&mut cur, vcd_lo.position());
-                let pos_addr = pos_base + pos_index * pos_stride;
-                let pos_size = vat_a.pos_data_size();
-                let pos_data = &mmio.ram[pos_addr..pos_addr + pos_size];
+                // Read position
+                let pos_slice = if pos_attr == regs::AttributeType::Direct {
+                    let start = cur.position() as usize;
+                    cur.set_position(cur.position() + pos_data_size as u64);
+                    &data[start..start + pos_data_size]
+                } else {
+                    let pos_index = read_index(&mut cur, pos_attr);
+                    let pos_addr = pos_base + pos_index * pos_stride;
+                    &mmio.ram[pos_addr..pos_addr + pos_data_size]
+                };
 
-                // Read color0 index
-                let clr0_index = read_index(&mut cur, vcd_lo.color0());
-                let clr0_addr = clr0_base + clr0_index * clr0_stride;
-                let clr0_size = vat_a.clr0_data_size();
-                let clr0_data = &mmio.ram[clr0_addr..clr0_addr + clr0_size];
+                // Read color0
+                let clr0_slice = if clr0_attr == regs::AttributeType::Direct {
+                    let start = cur.position() as usize;
+                    cur.set_position(cur.position() + clr0_data_size as u64);
+                    &data[start..start + clr0_data_size]
+                } else {
+                    let clr0_index = read_index(&mut cur, clr0_attr);
+                    let clr0_addr = clr0_base + clr0_index * clr0_stride;
+                    &mmio.ram[clr0_addr..clr0_addr + clr0_data_size]
+                };
 
                 // Read tex0
                 let tex0 = if tex0_attr == regs::AttributeType::Direct && vat_a.tex0_cnt() == regs::TexCount::St {
@@ -121,15 +149,13 @@ impl Gx {
 
                 tracing::debug!(
                     vertex = i,
-                    pos_index,
-                    pos_data = format!("{:02X?}", pos_data),
-                    clr0_index,
-                    clr0_data = format!("{:02X?}", clr0_data),
+                    pos_data = format!("{:02X?}", pos_slice),
+                    clr0_data = format!("{:02X?}", clr0_slice),
                     "Vertex"
                 );
 
-                let position = Self::decode_position(pos_data, &vat_a);
-                let color0 = Self::decode_color(clr0_data, &vat_a);
+                let position = Self::decode_position(pos_slice, &vat_a);
+                let color0 = Self::decode_color(clr0_slice, &vat_a);
 
                 vertices.push(draw::Vertex { position, color0, tex0 });
             }

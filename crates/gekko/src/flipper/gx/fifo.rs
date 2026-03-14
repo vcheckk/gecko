@@ -122,7 +122,21 @@ impl Gx {
             AttributeType::None => 0,
         };
 
-        vcd_lo.position().size() + vcd_lo.color0().size() + tex0_size
+        let pos_size = match vcd_lo.position() {
+            AttributeType::Direct => vat_a.pos_data_size(),
+            AttributeType::Index8 => 1,
+            AttributeType::Index16 => 2,
+            AttributeType::None => 0,
+        };
+
+        let clr0_size = match vcd_lo.color0() {
+            AttributeType::Direct => vat_a.clr0_data_size(),
+            AttributeType::Index8 => 1,
+            AttributeType::Index16 => 2,
+            AttributeType::None => 0,
+        };
+
+        pos_size + clr0_size + tex0_size
     }
 }
 
