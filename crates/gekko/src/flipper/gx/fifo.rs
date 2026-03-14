@@ -4,6 +4,7 @@ use crate::flipper::gx::{
     constants::{DRAW_COMMANDS_END, DRAW_COMMANDS_START, VATA_REG, VCD_HI_REG, VCD_LO_REG},
     regs::{AttributeType, VatA, VcdHi, VcdLo},
 };
+use std::io::{Cursor, Read};
 
 impl Gx {
     pub fn push_u8(&mut self, val: u8) {
@@ -21,77 +22,89 @@ impl Gx {
     /// Drain complete commands from the FIFO, returning each as a `FifoCmd`.
     pub fn drain(&mut self) -> Vec<FifoCmd> {
         let mut cmds = Vec::new();
-        let mut pos = 0;
+        let mut cur = Cursor::new(&self.fifo);
 
         loop {
+            let pos = cur.position() as usize;
             let remaining = self.fifo.len() - pos;
             if remaining == 0 {
                 break;
             }
 
-            let cmd = self.fifo[pos];
+            let mut cmd_buf = [0u8; 1];
+            cur.read_exact(&mut cmd_buf).unwrap();
+            let cmd = cmd_buf[0];
+
             match cmd {
                 CP_CMD => {
-                    // 1 cmd + 1 addr + 4 data = 6 bytes
+                    // 1 addr + 4 data = 5 bytes
                     if remaining < 6 {
+                        cur.set_position(pos as u64);
                         break;
                     }
-                    let data: [u8; 5] = self.fifo[pos + 1..pos + 6].try_into().unwrap();
+                    let mut data = [0u8; 5];
+                    cur.read_exact(&mut data).unwrap();
                     cmds.push(FifoCmd::Cp(data));
-                    pos += 6;
                 }
                 XF_CMD => {
-                    // 1 cmd + 2 length + 2 addr = 5 byte header minimum
+                    // 2 length + 2 addr = 4 byte header
                     if remaining < 5 {
+                        cur.set_position(pos as u64);
                         break;
                     }
-                    let length = u16::from_be_bytes([self.fifo[pos + 1], self.fifo[pos + 2]]) as usize;
+                    let mut header = [0u8; 4];
+                    cur.read_exact(&mut header).unwrap();
+                    let length = u16::from_be_bytes([header[0], header[1]]) as usize;
                     let n = length + 1;
                     let total = 5 + n * 4;
                     if remaining < total {
+                        cur.set_position(pos as u64);
                         break;
                     }
-                    let data = self.fifo[pos + 1..pos + total].to_vec();
+                    let mut rest = vec![0u8; n * 4];
+                    cur.read_exact(&mut rest).unwrap();
+                    let data = [header.as_slice(), rest.as_slice()].concat();
                     cmds.push(FifoCmd::Xf(data));
-                    pos += total;
                 }
                 BP_CMD => {
-                    // 1 cmd + 4 data = 5 bytes
+                    // 4 data bytes
                     if remaining < 5 {
+                        cur.set_position(pos as u64);
                         break;
                     }
-                    let data: [u8; 4] = self.fifo[pos + 1..pos + 5].try_into().unwrap();
+                    let mut data = [0u8; 4];
+                    cur.read_exact(&mut data).unwrap();
                     cmds.push(FifoCmd::Bp(data));
-                    pos += 5;
                 }
                 DRAW_COMMANDS_START..=DRAW_COMMANDS_END => {
-                    // 1 command + minimum 2 vertex count
-                    // [cmd_byte] [count_hi] [count_lo] [vertex_0_data...] [vertex_1_data...] ...
+                    // [count_hi] [count_lo] [vertex_0_data...] ...
                     if remaining < 3 {
+                        cur.set_position(pos as u64);
                         break;
                     }
-
-                    let count = u16::from_be_bytes([self.fifo[pos + 1], self.fifo[pos + 2]]) as usize;
+                    let mut count_buf = [0u8; 2];
+                    cur.read_exact(&mut count_buf).unwrap();
+                    let count = u16::from_be_bytes(count_buf) as usize;
                     let vertex_format_index = (cmd & 0b111) as usize;
-                    let total = 3 + count * self.vertex_stride(vertex_format_index);
+                    let vertex_data_len = count * self.vertex_stride(vertex_format_index);
+                    let total = 3 + vertex_data_len;
                     if remaining < total {
+                        cur.set_position(pos as u64);
                         break;
                     }
-
-                    let vertex_data = self.fifo[pos + 3..pos + total].to_vec();
+                    let mut vertex_data = vec![0u8; vertex_data_len];
+                    cur.read_exact(&mut vertex_data).unwrap();
                     cmds.push(FifoCmd::DrawCall(cmd, vertex_data));
-
-                    pos += total;
                 }
                 _ => {
                     tracing::error!(cmd = format!("{cmd:02X}"), "unknown FIFO command");
-                    pos += 1;
                 }
             }
         }
 
-        if pos > 0 {
-            self.fifo.drain(..pos);
+        let consumed = cur.position() as usize;
+        if consumed > 0 {
+            self.fifo.drain(..consumed);
         }
 
         cmds

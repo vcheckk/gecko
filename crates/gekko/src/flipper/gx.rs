@@ -17,6 +17,7 @@ use crate::{
     mmio::Mmio,
 };
 use fifo::FifoCmd;
+use std::io::{Cursor, Read};
 
 pub struct Gx {
     pub raise_interrupt: bool,
@@ -88,23 +89,23 @@ impl Gx {
             let vertex_count = data.len() / vertex_stride;
 
             let mut vertices: Vec<draw::Vertex> = Vec::with_capacity(vertex_count);
-            let mut cursor = 0;
+            let mut cur = Cursor::new(&data);
 
             for i in 0..vertex_count {
                 // Read position index
-                let pos_index = read_index(&data, &mut cursor, vcd_lo.position());
+                let pos_index = read_index(&mut cur, vcd_lo.position());
                 let pos_addr = pos_base + pos_index * pos_stride;
                 let pos_size = vat_a.pos_data_size();
                 let pos_data = &mmio.ram[pos_addr..pos_addr + pos_size];
 
                 // Read color0 index
-                let clr0_index = read_index(&data, &mut cursor, vcd_lo.color0());
+                let clr0_index = read_index(&mut cur, vcd_lo.color0());
                 let clr0_addr = clr0_base + clr0_index * clr0_stride;
                 let clr0_size = vat_a.clr0_data_size();
                 let clr0_data = &mmio.ram[clr0_addr..clr0_addr + clr0_size];
 
                 // Skip tex0 bytes
-                cursor += tex0_size;
+                cur.set_position(cur.position() + tex0_size as u64);
 
                 tracing::debug!(
                     vertex = i,
@@ -329,17 +330,17 @@ impl Gx {
     }
 }
 
-fn read_index(data: &[u8], cursor: &mut usize, attr: regs::AttributeType) -> usize {
+fn read_index(cur: &mut Cursor<&Vec<u8>>, attr: regs::AttributeType) -> usize {
     match attr {
         regs::AttributeType::Index8 => {
-            let idx = data[*cursor] as usize;
-            *cursor += 1;
-            idx
+            let mut buf = [0u8; 1];
+            cur.read_exact(&mut buf).unwrap();
+            buf[0] as usize
         }
         regs::AttributeType::Index16 => {
-            let idx = u16::from_be_bytes([data[*cursor], data[*cursor + 1]]) as usize;
-            *cursor += 2;
-            idx
+            let mut buf = [0u8; 2];
+            cur.read_exact(&mut buf).unwrap();
+            u16::from_be_bytes(buf) as usize
         }
         _ => 0,
     }
