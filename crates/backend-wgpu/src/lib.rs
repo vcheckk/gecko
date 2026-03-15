@@ -77,6 +77,8 @@ pub struct GxRenderer {
     bind_group_layout: wgpu::BindGroupLayout,
     bind_group: wgpu::BindGroup,
     uniform_buffer: wgpu::Buffer,
+    uniform_stride: u64,
+    uniform_capacity: usize,
     vertex_buffer: wgpu::Buffer,
     vertex_capacity: usize,
     depth_texture: wgpu::Texture,
@@ -89,6 +91,10 @@ pub struct GxRenderer {
     texture_cache: HashMap<(usize, u32, u32, TextureFormat), (wgpu::Texture, wgpu::TextureView)>,
     /// Fallback 1x1 white texture view used when no texture is bound
     fallback_view: wgpu::TextureView,
+    // Scratch buffers reused across frames to avoid per-frame allocations
+    scratch_vertices: Vec<GpuVertex>,
+    scratch_draws: Vec<(u32, u32)>,
+    scratch_uniform_bytes: Vec<u8>,
 }
 
 impl GxRenderer {
@@ -99,6 +105,12 @@ impl GxRenderer {
         width: u32,
         height: u32,
     ) -> Self {
+        let uniform_size = std::mem::size_of::<Uniforms>() as u64;
+        let uniform_stride = align_up(
+            uniform_size,
+            device.limits().min_uniform_buffer_offset_alignment as u64,
+        );
+
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("gx_shader"),
             source: wgpu::ShaderSource::Wgsl(SHADER.into()),
@@ -112,8 +124,8 @@ impl GxRenderer {
                     visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+                        has_dynamic_offset: true,
+                        min_binding_size: wgpu::BufferSize::new(uniform_size),
                     },
                     count: None,
                 },
@@ -144,7 +156,7 @@ impl GxRenderer {
 
         let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("gx_uniforms"),
-            size: std::mem::size_of::<Uniforms>() as u64,
+            size: uniform_stride,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -195,7 +207,11 @@ impl GxRenderer {
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: uniform_buffer.as_entire_binding(),
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: &uniform_buffer,
+                        offset: 0,
+                        size: wgpu::BufferSize::new(uniform_size),
+                    }),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
@@ -228,6 +244,8 @@ impl GxRenderer {
             bind_group_layout,
             bind_group,
             uniform_buffer,
+            uniform_stride,
+            uniform_capacity: 1,
             vertex_buffer,
             vertex_capacity: initial_capacity,
             depth_texture,
@@ -240,6 +258,9 @@ impl GxRenderer {
             )]),
             texture_cache: HashMap::new(),
             fallback_view,
+            scratch_vertices: Vec::new(),
+            scratch_draws: Vec::new(),
+            scratch_uniform_bytes: Vec::new(),
         }
     }
 
@@ -409,8 +430,60 @@ impl GxRenderer {
             });
             self.sampler_cache.insert(sampler_key, s);
         }
-        let sampler = &self.sampler_cache[&sampler_key];
+        self.scratch_vertices.clear();
+        self.scratch_draws.clear();
+        self.scratch_uniform_bytes.clear();
 
+        let stride = self.uniform_stride as usize;
+        let uniform_size = std::mem::size_of::<Uniforms>();
+
+        for dc in &commands.commands {
+            let prev_len = self.scratch_vertices.len();
+            triangulate_into(dc, &mut self.scratch_vertices);
+            let added = self.scratch_vertices.len() - prev_len;
+            if added == 0 {
+                continue;
+            }
+
+            let mvp = commands.projection * dc.modelview;
+            let uniform = Uniforms {
+                mvp: mvp.0,
+                tev_color_regs,
+                tev_color_env,
+                tev_alpha_env,
+                tev_stage_orders,
+                num_tev_stages,
+                alpha_ref0: alpha_cmp.ref0() as f32 / 255.0,
+                alpha_ref1: alpha_cmp.ref1() as f32 / 255.0,
+                alpha_comp0: alpha_cmp.comp0() as u32,
+                alpha_comp1: alpha_cmp.comp1() as u32,
+                alpha_op: alpha_cmp.op() as u32,
+                _padding: [0; 2],
+            };
+            let start = self.scratch_draws.len() * stride;
+            self.scratch_uniform_bytes.resize(start + stride, 0);
+            self.scratch_uniform_bytes[start..start + uniform_size]
+                .copy_from_slice(bytemuck::bytes_of(&uniform));
+            self.scratch_draws.push((prev_len as u32, added as u32));
+        }
+
+        if self.scratch_draws.is_empty() {
+            return;
+        }
+
+        self.ensure_uniform_capacity(device, self.scratch_draws.len());
+
+        if self.scratch_vertices.len() > self.vertex_capacity {
+            self.vertex_capacity = self.scratch_vertices.len().next_power_of_two();
+            self.vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("gx_vertices"),
+                size: (self.vertex_capacity * std::mem::size_of::<GpuVertex>()) as u64,
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+        }
+
+        let sampler = &self.sampler_cache[&sampler_key];
         let tex_view = if commands.textures[0].is_some() {
             let desc = commands.textures[0].as_ref().unwrap();
             let key = (desc.ram_addr, desc.width, desc.height, desc.format);
@@ -419,13 +492,20 @@ impl GxRenderer {
             &self.fallback_view
         };
 
+        queue.write_buffer(&self.uniform_buffer, 0, &self.scratch_uniform_bytes);
+        queue.write_buffer(&self.vertex_buffer, 0, bytemuck::cast_slice(&self.scratch_vertices));
+
         self.bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: None,
             layout: &self.bind_group_layout,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: self.uniform_buffer.as_entire_binding(),
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: &self.uniform_buffer,
+                        offset: 0,
+                        size: wgpu::BufferSize::new(std::mem::size_of::<Uniforms>() as u64),
+                    }),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
@@ -440,88 +520,56 @@ impl GxRenderer {
 
         let pipeline = &self.pipeline_cache[&pipeline_key];
 
-        for (i, dc) in commands.commands.iter().enumerate() {
-            let vertices = triangulate(dc);
-            if vertices.is_empty() {
-                continue;
-            }
-
-            let mvp = commands.projection * dc.modelview;
-
-            queue.write_buffer(
-                &self.uniform_buffer,
-                0,
-                bytemuck::bytes_of(&Uniforms {
-                    mvp: mvp.0,
-                    tev_color_regs,
-                    tev_color_env,
-                    tev_alpha_env,
-                    tev_stage_orders,
-                    num_tev_stages,
-                    alpha_ref0: alpha_cmp.ref0() as f32 / 255.0,
-                    alpha_ref1: alpha_cmp.ref1() as f32 / 255.0,
-                    alpha_comp0: alpha_cmp.comp0() as u32,
-                    alpha_comp1: alpha_cmp.comp1() as u32,
-                    alpha_op: alpha_cmp.op() as u32,
-                    _padding: [0; 2],
-                }),
-            );
-
-            if vertices.len() > self.vertex_capacity {
-                self.vertex_capacity = vertices.len().next_power_of_two();
-                self.vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-                    label: Some("gx_vertices"),
-                    size: (self.vertex_capacity * std::mem::size_of::<GpuVertex>()) as u64,
-                    usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-                    mapped_at_creation: false,
-                });
-            }
-
-            queue.write_buffer(&self.vertex_buffer, 0, bytemuck::cast_slice(&vertices));
-
-            let color_load = if i == 0 {
-                wgpu::LoadOp::Clear(wgpu::Color::BLACK)
-            } else {
-                wgpu::LoadOp::Load
-            };
-            let depth_load = if i == 0 {
-                wgpu::LoadOp::Clear(1.0)
-            } else {
-                wgpu::LoadOp::Load
-            };
-
-            let mut encoder = device.create_command_encoder(&Default::default());
-            {
-                let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("gx_render_pass"),
-                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: target,
-                        resolve_target: None,
-                        ops: wgpu::Operations {
-                            load: color_load,
-                            store: wgpu::StoreOp::Store,
-                        },
-                        depth_slice: None,
-                    })],
-                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                        view: &self.depth_view,
-                        depth_ops: Some(wgpu::Operations {
-                            load: depth_load,
-                            store: wgpu::StoreOp::Store,
-                        }),
-                        stencil_ops: None,
+        let mut encoder = device.create_command_encoder(&Default::default());
+        {
+            let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("gx_render_pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: target,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                    depth_slice: None,
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.depth_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
                     }),
-                    occlusion_query_set: None,
-                    timestamp_writes: None,
-                    multiview_mask: None,
-                });
-                rpass.set_pipeline(pipeline);
-                rpass.set_bind_group(0, &self.bind_group, &[]);
-                rpass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-                rpass.draw(0..vertices.len() as u32, 0..1);
+                    stencil_ops: None,
+                }),
+                occlusion_query_set: None,
+                timestamp_writes: None,
+                multiview_mask: None,
+            });
+            rpass.set_pipeline(pipeline);
+            rpass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+
+            for (index, (first_vertex, vertex_count)) in self.scratch_draws.iter().copied().enumerate() {
+                let uniform_offset = (index as u64 * self.uniform_stride) as u32;
+                rpass.set_bind_group(0, &self.bind_group, &[uniform_offset]);
+                rpass.draw(first_vertex..first_vertex + vertex_count, 0..1);
             }
-            queue.submit([encoder.finish()]);
         }
+
+        queue.submit([encoder.finish()]);
+    }
+
+    fn ensure_uniform_capacity(&mut self, device: &wgpu::Device, count: usize) {
+        if count <= self.uniform_capacity {
+            return;
+        }
+
+        self.uniform_capacity = count.next_power_of_two();
+        self.uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("gx_uniforms"),
+            size: self.uniform_stride * self.uniform_capacity as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
     }
 }
 
@@ -544,13 +592,10 @@ fn create_depth_texture(device: &wgpu::Device, w: u32, h: u32) -> (wgpu::Texture
     (tex, view)
 }
 
-fn triangulate(dc: &DrawCall) -> Vec<GpuVertex> {
-    let mut out = Vec::new();
+fn triangulate_into(dc: &DrawCall, out: &mut Vec<GpuVertex>) {
     match dc.primitive {
         Primitive::Triangles => {
-            for v in &dc.vertices {
-                out.push(v.into());
-            }
+            out.extend(dc.vertices.iter().map(GpuVertex::from));
         }
         Primitive::Quads => {
             for quad in dc.vertices.chunks(4) {
@@ -567,5 +612,8 @@ fn triangulate(dc: &DrawCall) -> Vec<GpuVertex> {
         }
         _ => unimplemented!("triangulation for {:?}", dc.primitive),
     }
-    out
+}
+
+fn align_up(value: u64, alignment: u64) -> u64 {
+    (value + alignment - 1) & !(alignment - 1)
 }
