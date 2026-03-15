@@ -1,17 +1,11 @@
-struct Uniforms {
-    mvp: mat4x4<f32>,
-    // TEV color registers: TEVPREV, TEVREG0-2 as float RGBA
+struct FrameUniforms {
     tev_color_reg0: vec4<f32>,
     tev_color_reg1: vec4<f32>,
     tev_color_reg2: vec4<f32>,
     tev_color_reg3: vec4<f32>,
-    // Raw bitfields packed as vec4<u32> (16 u32s = 4 vec4s)
     tev_color_env: array<vec4<u32>, 4>,
     tev_alpha_env: array<vec4<u32>, 4>,
-    tev_stage_orders: array<vec4<u32>, 4>,
-    // Number of active TEV stages (0-16)
     num_tev_stages: u32,
-    // Alpha compare parameters
     alpha_ref0: f32,
     alpha_ref1: f32,
     alpha_comp0: u32,
@@ -19,13 +13,20 @@ struct Uniforms {
     alpha_op: u32,
 };
 
+struct DrawUniforms {
+    mvp: mat4x4<f32>,
+};
+
 @group(0) @binding(0)
-var<uniform> uniforms: Uniforms;
+var<uniform> frame: FrameUniforms;
 
 @group(0) @binding(1)
-var tex: texture_2d<f32>;
+var<uniform> draw: DrawUniforms;
 
 @group(0) @binding(2)
+var tex: texture_2d<f32>;
+
+@group(0) @binding(3)
 var tex_sampler: sampler;
 
 struct VsIn {
@@ -43,7 +44,7 @@ struct VsOut {
 @vertex
 fn vs_main(in: VsIn) -> VsOut {
     var out: VsOut;
-    out.clip_pos = uniforms.mvp * vec4<f32>(in.position, 1.0);
+    out.clip_pos = draw.mvp * vec4<f32>(in.position, 1.0);
     // Remap depth: GameCube/OpenGL uses [-1,1], wgpu uses [0,1]
     out.clip_pos.z = out.clip_pos.z * 0.5 + out.clip_pos.w * 0.5;
     out.color = in.color;
@@ -194,16 +195,16 @@ fn alpha_combine(a: bool, b: bool, op: u32) -> bool {
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // Initialize TEV registers from uniforms
     var regs: array<vec4<f32>, 4>;
-    regs[0] = uniforms.tev_color_reg0;
-    regs[1] = uniforms.tev_color_reg1;
-    regs[2] = uniforms.tev_color_reg2;
-    regs[3] = uniforms.tev_color_reg3;
+    regs[0] = frame.tev_color_reg0;
+    regs[1] = frame.tev_color_reg1;
+    regs[2] = frame.tev_color_reg2;
+    regs[3] = frame.tev_color_reg3;
 
     // Inputs available to TEV stages
     let ras_color = in.color;
     let tex_color = textureSample(tex, tex_sampler, in.tex0);
 
-    let num_stages = uniforms.num_tev_stages;
+    let num_stages = frame.num_tev_stages;
 
     for (var stage = 0u; stage < 16u; stage++) {
         if stage >= num_stages {
@@ -211,7 +212,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         }
 
         // Combine colors
-        let cenv = read_packed(uniforms.tev_color_env, stage);
+        let cenv = read_packed(frame.tev_color_env, stage);
 
         // TevColorEnv bit layout (LSB0):
         //   [3:0]=d  [7:4]=c  [11:8]=b  [15:12]=a
@@ -236,7 +237,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         regs[c_dest] = vec4(color_result, regs[c_dest].a);
 
         // Combine alpha
-        let aenv = read_packed(uniforms.tev_alpha_env, stage);
+        let aenv = read_packed(frame.tev_alpha_env, stage);
 
         // TevAlphaEnv bit layout (LSB0):
         //   [6:4]=d  [9:7]=c  [12:10]=b  [15:13]=a
@@ -265,9 +266,9 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     // Output is always TEVPREV (regs[0])
     let color = regs[0];
 
-    let c0 = alpha_compare(color.a, uniforms.alpha_ref0, uniforms.alpha_comp0);
-    let c1 = alpha_compare(color.a, uniforms.alpha_ref1, uniforms.alpha_comp1);
-    if !alpha_combine(c0, c1, uniforms.alpha_op) {
+    let c0 = alpha_compare(color.a, frame.alpha_ref0, frame.alpha_comp0);
+    let c1 = alpha_compare(color.a, frame.alpha_ref1, frame.alpha_comp1);
+    if !alpha_combine(c0, c1, frame.alpha_op) {
         discard;
     }
 

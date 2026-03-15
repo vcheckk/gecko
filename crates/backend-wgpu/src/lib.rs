@@ -25,19 +25,23 @@ impl From<&gekko::flipper::gx::draw::Vertex> for GpuVertex {
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-struct Uniforms {
-    mvp: [[f32; 4]; 4],            // 64B
-    tev_color_regs: [[f32; 4]; 4], // 64B — TEVPREV, TEVREG0-2 as float RGBA
-    tev_color_env: [u32; 16],      // 64B — raw bitfields per stage
-    tev_alpha_env: [u32; 16],      // 64B — raw bitfields per stage
-    tev_stage_orders: [u32; 16],   // 64B — pre-unpacked per-stage order
-    num_tev_stages: u32,           // 4B
-    alpha_ref0: f32,               // 4B
-    alpha_ref1: f32,               // 4B
-    alpha_comp0: u32,              // 4B
-    alpha_comp1: u32,              // 4B
-    alpha_op: u32,                 // 4B
-    _padding: [u32; 2],            // 8B — pad to 16-byte alignment
+struct FrameUniforms {
+    tev_color_regs: [[f32; 4]; 4],
+    tev_color_env: [u32; 16],
+    tev_alpha_env: [u32; 16],
+    num_tev_stages: u32,
+    alpha_ref0: f32,
+    alpha_ref1: f32,
+    alpha_comp0: u32,
+    alpha_comp1: u32,
+    alpha_op: u32,
+    _padding: [u32; 2],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+struct DrawUniforms {
+    mvp: [[f32; 4]; 4],
 }
 
 const SHADER: &str = include_str!("gx.wgsl");
@@ -76,9 +80,10 @@ pub struct GxRenderer {
     surface_format: wgpu::TextureFormat,
     bind_group_layout: wgpu::BindGroupLayout,
     bind_group: wgpu::BindGroup,
-    uniform_buffer: wgpu::Buffer,
-    uniform_stride: u64,
-    uniform_capacity: usize,
+    frame_uniform_buffer: wgpu::Buffer,
+    draw_uniform_buffer: wgpu::Buffer,
+    draw_uniform_stride: u64,
+    draw_uniform_capacity: usize,
     vertex_buffer: wgpu::Buffer,
     vertex_capacity: usize,
     depth_texture: wgpu::Texture,
@@ -105,8 +110,9 @@ impl GxRenderer {
         width: u32,
         height: u32,
     ) -> Self {
-        let uniform_size = std::mem::size_of::<Uniforms>() as u64;
-        let uniform_stride = align_up(uniform_size, device.limits().min_uniform_buffer_offset_alignment as u64);
+        let frame_uniform_size = std::mem::size_of::<FrameUniforms>() as u64;
+        let draw_uniform_size = std::mem::size_of::<DrawUniforms>() as u64;
+        let draw_uniform_stride = align_up(draw_uniform_size, device.limits().min_uniform_buffer_offset_alignment as u64);
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("gx_shader"),
@@ -121,13 +127,23 @@ impl GxRenderer {
                     visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: true,
-                        min_binding_size: wgpu::BufferSize::new(uniform_size),
+                        has_dynamic_offset: false,
+                        min_binding_size: wgpu::BufferSize::new(frame_uniform_size),
                     },
                     count: None,
                 },
                 wgpu::BindGroupLayoutEntry {
                     binding: 1,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: true,
+                        min_binding_size: wgpu::BufferSize::new(draw_uniform_size),
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Texture {
                         sample_type: wgpu::TextureSampleType::Float { filterable: true },
@@ -137,7 +153,7 @@ impl GxRenderer {
                     count: None,
                 },
                 wgpu::BindGroupLayoutEntry {
-                    binding: 2,
+                    binding: 3,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
@@ -151,9 +167,16 @@ impl GxRenderer {
             immediate_size: 0,
         });
 
-        let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("gx_uniforms"),
-            size: uniform_stride,
+        let frame_uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("gx_frame_uniforms"),
+            size: frame_uniform_size,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let draw_uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("gx_draw_uniforms"),
+            size: draw_uniform_stride,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -205,17 +228,25 @@ impl GxRenderer {
                 wgpu::BindGroupEntry {
                     binding: 0,
                     resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                        buffer: &uniform_buffer,
+                        buffer: &frame_uniform_buffer,
                         offset: 0,
-                        size: wgpu::BufferSize::new(uniform_size),
+                        size: wgpu::BufferSize::new(frame_uniform_size),
                     }),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&fallback_view),
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: &draw_uniform_buffer,
+                        offset: 0,
+                        size: wgpu::BufferSize::new(draw_uniform_size),
+                    }),
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&fallback_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
                     resource: wgpu::BindingResource::Sampler(&sampler),
                 },
             ],
@@ -240,9 +271,10 @@ impl GxRenderer {
             surface_format,
             bind_group_layout,
             bind_group,
-            uniform_buffer,
-            uniform_stride,
-            uniform_capacity: 1,
+            frame_uniform_buffer,
+            draw_uniform_buffer,
+            draw_uniform_stride,
+            draw_uniform_capacity: 1,
             vertex_buffer,
             vertex_capacity: initial_capacity,
             depth_texture,
@@ -390,11 +422,18 @@ impl GxRenderer {
         }
 
         let alpha_cmp = commands.bp_alpha_compare;
-        let tev_color_regs = helpers::decode_tev_color_regs(&commands.tev_color_regs_lo, &commands.tev_color_regs_hi);
-        let tev_color_env = commands.tev_color_env.map(|e| e.raw());
-        let tev_alpha_env = commands.tev_alpha_env.map(|e| e.raw());
-        let tev_stage_orders = helpers::unpack_tev_orders(&commands.tev_orders);
-        let num_tev_stages = commands.num_tev_stages as u32;
+        let frame_uniform = FrameUniforms {
+            tev_color_regs: helpers::decode_tev_color_regs(&commands.tev_color_regs_lo, &commands.tev_color_regs_hi),
+            tev_color_env: commands.tev_color_env.map(|e| e.raw()),
+            tev_alpha_env: commands.tev_alpha_env.map(|e| e.raw()),
+            num_tev_stages: commands.num_tev_stages as u32,
+            alpha_ref0: alpha_cmp.ref0() as f32 / 255.0,
+            alpha_ref1: alpha_cmp.ref1() as f32 / 255.0,
+            alpha_comp0: alpha_cmp.comp0() as u32,
+            alpha_comp1: alpha_cmp.comp1() as u32,
+            alpha_op: alpha_cmp.op() as u32,
+            _padding: [0; 2],
+        };
 
         // Get or create the pipeline for current blend/z state
         let pipeline_key = PipelineKey::from_draw_commands(commands);
@@ -431,8 +470,8 @@ impl GxRenderer {
         self.scratch_draws.clear();
         self.scratch_uniform_bytes.clear();
 
-        let stride = self.uniform_stride as usize;
-        let uniform_size = std::mem::size_of::<Uniforms>();
+        let stride = self.draw_uniform_stride as usize;
+        let draw_size = std::mem::size_of::<DrawUniforms>();
 
         for dc in &commands.commands {
             let prev_len = self.scratch_vertices.len();
@@ -443,23 +482,10 @@ impl GxRenderer {
             }
 
             let mvp = commands.projection * dc.modelview;
-            let uniform = Uniforms {
-                mvp: mvp.0,
-                tev_color_regs,
-                tev_color_env,
-                tev_alpha_env,
-                tev_stage_orders,
-                num_tev_stages,
-                alpha_ref0: alpha_cmp.ref0() as f32 / 255.0,
-                alpha_ref1: alpha_cmp.ref1() as f32 / 255.0,
-                alpha_comp0: alpha_cmp.comp0() as u32,
-                alpha_comp1: alpha_cmp.comp1() as u32,
-                alpha_op: alpha_cmp.op() as u32,
-                _padding: [0; 2],
-            };
+            let draw_uniform = DrawUniforms { mvp: mvp.0 };
             let start = self.scratch_draws.len() * stride;
             self.scratch_uniform_bytes.resize(start + stride, 0);
-            self.scratch_uniform_bytes[start..start + uniform_size].copy_from_slice(bytemuck::bytes_of(&uniform));
+            self.scratch_uniform_bytes[start..start + draw_size].copy_from_slice(bytemuck::bytes_of(&draw_uniform));
             self.scratch_draws.push((prev_len as u32, added as u32));
         }
 
@@ -467,7 +493,7 @@ impl GxRenderer {
             return;
         }
 
-        self.ensure_uniform_capacity(device, self.scratch_draws.len());
+        self.ensure_draw_capacity(device, self.scratch_draws.len());
 
         if self.scratch_vertices.len() > self.vertex_capacity {
             self.vertex_capacity = self.scratch_vertices.len().next_power_of_two();
@@ -488,7 +514,8 @@ impl GxRenderer {
             &self.fallback_view
         };
 
-        queue.write_buffer(&self.uniform_buffer, 0, &self.scratch_uniform_bytes);
+        queue.write_buffer(&self.frame_uniform_buffer, 0, bytemuck::bytes_of(&frame_uniform));
+        queue.write_buffer(&self.draw_uniform_buffer, 0, &self.scratch_uniform_bytes);
         queue.write_buffer(&self.vertex_buffer, 0, bytemuck::cast_slice(&self.scratch_vertices));
 
         self.bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -498,17 +525,25 @@ impl GxRenderer {
                 wgpu::BindGroupEntry {
                     binding: 0,
                     resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                        buffer: &self.uniform_buffer,
+                        buffer: &self.frame_uniform_buffer,
                         offset: 0,
-                        size: wgpu::BufferSize::new(std::mem::size_of::<Uniforms>() as u64),
+                        size: wgpu::BufferSize::new(std::mem::size_of::<FrameUniforms>() as u64),
                     }),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: wgpu::BindingResource::TextureView(tex_view),
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: &self.draw_uniform_buffer,
+                        offset: 0,
+                        size: wgpu::BufferSize::new(std::mem::size_of::<DrawUniforms>() as u64),
+                    }),
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
+                    resource: wgpu::BindingResource::TextureView(tex_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
                     resource: wgpu::BindingResource::Sampler(sampler),
                 },
             ],
@@ -545,8 +580,8 @@ impl GxRenderer {
             rpass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
 
             for (index, (first_vertex, vertex_count)) in self.scratch_draws.iter().copied().enumerate() {
-                let uniform_offset = (index as u64 * self.uniform_stride) as u32;
-                rpass.set_bind_group(0, &self.bind_group, &[uniform_offset]);
+                let draw_offset = (index as u64 * self.draw_uniform_stride) as u32;
+                rpass.set_bind_group(0, &self.bind_group, &[draw_offset]);
                 rpass.draw(first_vertex..first_vertex + vertex_count, 0..1);
             }
         }
@@ -554,15 +589,15 @@ impl GxRenderer {
         queue.submit([encoder.finish()]);
     }
 
-    fn ensure_uniform_capacity(&mut self, device: &wgpu::Device, count: usize) {
-        if count <= self.uniform_capacity {
+    fn ensure_draw_capacity(&mut self, device: &wgpu::Device, count: usize) {
+        if count <= self.draw_uniform_capacity {
             return;
         }
 
-        self.uniform_capacity = count.next_power_of_two();
-        self.uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("gx_uniforms"),
-            size: self.uniform_stride * self.uniform_capacity as u64,
+        self.draw_uniform_capacity = count.next_power_of_two();
+        self.draw_uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("gx_draw_uniforms"),
+            size: self.draw_uniform_stride * self.draw_uniform_capacity as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });

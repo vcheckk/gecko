@@ -71,22 +71,3 @@ pub fn decode_tev_color_regs(lo: &[TevRegisterL; 4], hi: &[TevRegisterH; 4]) -> 
     }
     out
 }
-
-pub fn unpack_tev_orders(orders: &[u32; 8]) -> [u32; 16] {
-    let mut out = [0u32; 16];
-    for stage in 0..16u32 {
-        let reg_idx = (stage / 2) as usize;
-        if reg_idx < 8 {
-            let raw = orders[reg_idx];
-            if stage % 2 == 0 {
-                out[stage as usize] = raw & 0x3FF; // low 10 bits
-            } else {
-                out[stage as usize] = ((raw >> 12) & 0x7)
-                    | (((raw >> 15) & 0x7) << 3)
-                    | (((raw >> 18) & 0x1) << 6)
-                    | (((raw >> 19) & 0x7) << 7);
-            }
-        }
-    }
-    out
-}
