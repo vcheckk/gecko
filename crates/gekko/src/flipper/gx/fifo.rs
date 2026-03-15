@@ -129,6 +129,13 @@ impl Gx {
             AttributeType::None => 0,
         };
 
+        let nrm_size = match vcd_lo.normal() {
+            AttributeType::Direct => vat_a.nrm_data_size(),
+            AttributeType::Index8 => 1,
+            AttributeType::Index16 => 2,
+            AttributeType::None => 0,
+        };
+
         let clr0_size = match vcd_lo.color0() {
             AttributeType::Direct => vat_a.clr0_data_size(),
             AttributeType::Index8 => 1,
@@ -136,7 +143,7 @@ impl Gx {
             AttributeType::None => 0,
         };
 
-        pos_size + clr0_size + tex0_size
+        pos_size + nrm_size + clr0_size + tex0_size
     }
 }
 

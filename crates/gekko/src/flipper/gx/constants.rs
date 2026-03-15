@@ -36,6 +36,31 @@ pub const XF_PROJECTION_END: usize = 0x1026;
 pub const XF_MATRIX_INDEX_A: usize = 0x1018;
 pub const XF_POS_MTX_STRIDE: usize = 4;
 
+// XF normal matrix (3x3)
+pub const XF_NRM_MTX_BASE: usize = 0x0400;
+
+// XF light objects
+pub const XF_LIGHT_BASE: usize = 0x0600;
+pub const XF_LIGHT_STRIDE: usize = 0x10;
+pub const XF_LIGHT_COLOR: usize = 3;
+pub const XF_LIGHT_A0: usize = 4;
+pub const XF_LIGHT_A1: usize = 5;
+pub const XF_LIGHT_A2: usize = 6;
+pub const XF_LIGHT_K0: usize = 7;
+pub const XF_LIGHT_K1: usize = 8;
+pub const XF_LIGHT_K2: usize = 9;
+pub const XF_LIGHT_PX: usize = 10;
+pub const XF_LIGHT_PY: usize = 11;
+pub const XF_LIGHT_PZ: usize = 12;
+pub const XF_LIGHT_NX: usize = 13;
+pub const XF_LIGHT_NY: usize = 14;
+pub const XF_LIGHT_NZ: usize = 15;
+
+// XF channel configuration
+pub const XF_AMBIENT_COLOR0: usize = 0x100A;
+pub const XF_MATERIAL_COLOR0: usize = 0x100C;
+pub const XF_CHAN_CTRL0: usize = 0x100E;
+
 // BP texture register base addresses (maps 0-3: base, maps 4-7: base + 0x20)
 pub const BP_TX_SETMODE0_I0: usize = 0x80; // TX_SETMODE0 maps 0-3
 pub const BP_TX_SETMODE1_I0: usize = 0x84; // TX_SETMODE1 maps 0-3

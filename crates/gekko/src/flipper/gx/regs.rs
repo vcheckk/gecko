@@ -139,6 +139,21 @@ impl TexCount {
 }
 
 #[derive(Debug, PartialEq, BitEnum)]
+pub enum NrmCount {
+    Xyz, // 3 components (normal only)
+    Nbt, // 9 components (normal + binormal + tangent)
+}
+
+impl NrmCount {
+    pub fn components(&self) -> usize {
+        match self {
+            NrmCount::Xyz => 3,
+            NrmCount::Nbt => 9,
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, BitEnum)]
 pub enum PosCount {
     Xy,
     Xyz,
@@ -234,6 +249,12 @@ pub struct VatA {
     #[bits(4..=8)]
     pub pos_shift: u8,
 
+    #[bits(9)]
+    pub nrm_cnt: NrmCount,
+
+    #[bits(10..=12)]
+    pub nrm_fmt: ComponentFormat,
+
     #[bits(13)]
     pub clr0_cnt: ColorCount,
 
@@ -253,6 +274,10 @@ pub struct VatA {
 impl VatA {
     pub fn pos_data_size(&self) -> usize {
         self.pos_cnt().components() * self.pos_fmt().size()
+    }
+
+    pub fn nrm_data_size(&self) -> usize {
+        self.nrm_cnt().components() * self.nrm_fmt().size()
     }
 
     pub fn clr0_data_size(&self) -> usize {
@@ -278,6 +303,9 @@ pub struct VcdHi {
 pub struct VcdLo {
     #[bits(9..=10)]
     pub position: AttributeType,
+
+    #[bits(11..=12)]
+    pub normal: AttributeType,
 
     #[bits(13..=14)]
     pub color0: AttributeType,
@@ -481,4 +509,68 @@ pub struct GenMode {
 pub struct MatrixIndex0 {
     #[bits(0..=5)]
     pub pos_mtx_idx: u8,
+
+    #[bits(6..=11)]
+    pub nrm_mtx_idx: u8,
+}
+
+// Diffuse lighting function
+#[derive(Debug, PartialEq, BitEnum)]
+pub enum DiffuseFn {
+    None = 0,
+    Signed = 1,
+    Clamp = 2,
+}
+
+// Attenuation function
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub enum AttnFn {
+    None,
+    Spot,
+    Spec,
+}
+
+// XF 0x100E-0x1011 Channel Control
+#[chapa::bitfield(u32, order = lsb0)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ChanCtrl {
+    #[bits(0)]
+    pub mat_src: bool,
+
+    #[bits(1)]
+    pub enable: bool,
+
+    #[bits(2..=5)]
+    pub lit_mask_lo: u8,
+
+    #[bits(6)]
+    pub amb_src: bool,
+
+    #[bits(7..=8)]
+    pub diff_fn: DiffuseFn,
+
+    #[bits(9)]
+    pub attn_enable: bool,
+
+    #[bits(10)]
+    pub attn_select: bool,
+
+    #[bits(11..=14)]
+    pub lit_mask_hi: u8,
+}
+
+impl ChanCtrl {
+    pub fn light_mask(&self) -> u8 {
+        self.lit_mask_lo() | (self.lit_mask_hi() << 4)
+    }
+
+    pub fn attn_fn(&self) -> AttnFn {
+        if !self.attn_enable() {
+            AttnFn::None
+        } else if self.attn_select() {
+            AttnFn::Spot
+        } else {
+            AttnFn::Spec
+        }
+    }
 }

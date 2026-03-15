@@ -1,28 +1,32 @@
 pub mod constants;
 pub mod draw;
 pub mod fifo;
+pub mod math;
 pub mod regs;
 
 use super::pi::InterruptFlag;
 use crate::{
     flipper::gx::{
         constants::{
-            ARRAY_BASE_REG, ARRAY_CLR0, ARRAY_POS, ARRAY_STRIDE_REG, BP_GEN_MODE, BP_PE_ALPHA_COMPARE, BP_PE_CMODE0,
-            BP_PE_DONE, BP_PE_DONE_FINISH_BIT, BP_PE_ZMODE, BP_RAS1_TREF_COUNT, BP_RAS1_TREF0, BP_REG_SIZE,
-            BP_TEV_COLOR_ENV_0, BP_TEV_REGISTERL_0, BP_TX_SETIMAGE0_I0, BP_TX_SETIMAGE0_I4, BP_TX_SETIMAGE3_I0,
-            BP_TX_SETIMAGE3_I4, CP_REG_SIZE, VATA_REG, VCD_HI_REG, VCD_LO_REG, XF_MATRIX_INDEX_A, XF_MEM_SIZE,
-            XF_POS_MTX_STRIDE, XF_PROJECTION_BASE, XF_PROJECTION_END,
+            ARRAY_BASE_REG, ARRAY_CLR0, ARRAY_NRM, ARRAY_POS, ARRAY_STRIDE_REG, BP_GEN_MODE, BP_PE_ALPHA_COMPARE,
+            BP_PE_CMODE0, BP_PE_DONE, BP_PE_DONE_FINISH_BIT, BP_PE_ZMODE, BP_RAS1_TREF_COUNT, BP_RAS1_TREF0,
+            BP_REG_SIZE, BP_TEV_COLOR_ENV_0, BP_TEV_REGISTERL_0, BP_TX_SETIMAGE0_I0, BP_TX_SETIMAGE0_I4,
+            BP_TX_SETIMAGE3_I0, BP_TX_SETIMAGE3_I4, CP_REG_SIZE, VATA_REG, VCD_HI_REG, VCD_LO_REG, XF_AMBIENT_COLOR0,
+            XF_CHAN_CTRL0, XF_LIGHT_A0, XF_LIGHT_BASE, XF_LIGHT_COLOR, XF_LIGHT_K0, XF_LIGHT_NX, XF_LIGHT_PX,
+            XF_LIGHT_STRIDE, XF_MATERIAL_COLOR0, XF_MATRIX_INDEX_A, XF_MEM_SIZE, XF_NRM_MTX_BASE, XF_POS_MTX_STRIDE,
+            XF_PROJECTION_BASE, XF_PROJECTION_END,
         },
         draw::DrawCommands,
         regs::{
-            AlphaCompare, BlendMode, GenMode, MatrixIndex0, TevAlphaEnv, TevColorEnv, TevRegType, TevRegisterH,
-            TevRegisterL, TxSetImage0, TxSetImage3, VatA, VcdHi, VcdLo, ZMode,
+            AlphaCompare, AttnFn, BlendMode, ChanCtrl, GenMode, MatrixIndex0, TevAlphaEnv, TevColorEnv, TevRegType,
+            TevRegisterH, TevRegisterL, TxSetImage0, TxSetImage3, VatA, VcdHi, VcdLo, ZMode,
         },
     },
     gekko::Gekko,
     mmio::Mmio,
 };
 use fifo::FifoCmd;
+use math::{Vec3, saturating_div, unpack_rgba};
 use std::io::{Cursor, Read};
 
 pub struct Gx {
@@ -97,12 +101,20 @@ impl Gx {
         };
 
         let pos_attr = vcd_lo.position();
+        let nrm_attr = vcd_lo.normal();
         let clr0_attr = vcd_lo.color0();
         let pos_data_size = vat_a.pos_data_size();
+        let nrm_data_size = vat_a.nrm_data_size();
         let clr0_data_size = vat_a.clr0_data_size();
 
         let pos_stream_size = match pos_attr {
             regs::AttributeType::Direct => pos_data_size,
+            regs::AttributeType::Index8 => 1,
+            regs::AttributeType::Index16 => 2,
+            regs::AttributeType::None => 0,
+        };
+        let nrm_stream_size = match nrm_attr {
+            regs::AttributeType::Direct => nrm_data_size,
             regs::AttributeType::Index8 => 1,
             regs::AttributeType::Index16 => 2,
             regs::AttributeType::None => 0,
@@ -114,8 +126,25 @@ impl Gx {
             regs::AttributeType::None => 0,
         };
 
-        let vertex_stride = pos_stream_size + clr0_stream_size + tex0_size;
+        let nrm_base_addr = self.cp_regs[ARRAY_BASE_REG + ARRAY_NRM] as usize;
+        let nrm_stride = self.cp_regs[ARRAY_STRIDE_REG + ARRAY_NRM] as usize;
+
+        let vertex_stride = pos_stream_size + nrm_stream_size + clr0_stream_size + tex0_size;
         let vertex_count = data.len() / vertex_stride;
+
+        // Read matrix indices and lighting state before the vertex loop
+        let mtx_index_a = MatrixIndex0::from_raw(self.xf_mem[XF_MATRIX_INDEX_A]);
+        let pos_mtx_base = mtx_index_a.pos_mtx_idx() as usize * XF_POS_MTX_STRIDE;
+
+        // Channel 0 lighting state
+        let chan_ctrl = ChanCtrl::from_raw(self.xf_mem[XF_CHAN_CTRL0]);
+        let ambient_reg = unpack_rgba(self.xf_mem[XF_AMBIENT_COLOR0]);
+        let material_reg = unpack_rgba(self.xf_mem[XF_MATERIAL_COLOR0]);
+
+        // Normal matrix: hardware derives index from pos_mtx_idx (SDK Eq 5-6)
+        let nrm_mtx_idx = (mtx_index_a.pos_mtx_idx() as usize) % 32;
+        let nrm_mtx_base = XF_NRM_MTX_BASE + nrm_mtx_idx * 3;
+        let nrm_mtx: [f32; 9] = std::array::from_fn(|i| self.xf_f32(nrm_mtx_base + i));
 
         let mut vertices: Vec<draw::Vertex> = Vec::with_capacity(vertex_count);
         let mut cur = Cursor::new(&data);
@@ -132,9 +161,21 @@ impl Gx {
                 Self::decode_position(&mmio.ram[pos_addr..pos_addr + pos_data_size], &vat_a)
             };
 
+            // Read normal
+            let normal = if nrm_attr == regs::AttributeType::Direct {
+                let start = cur.position() as usize;
+                cur.set_position(cur.position() + nrm_data_size as u64);
+                Self::decode_normal(&data[start..start + nrm_data_size], &vat_a)
+            } else if nrm_attr != regs::AttributeType::None {
+                let nrm_index = read_index(&mut cur, nrm_attr);
+                let nrm_addr = nrm_base_addr + nrm_index * nrm_stride;
+                Self::decode_normal(&mmio.ram[nrm_addr..nrm_addr + nrm_data_size], &vat_a)
+            } else {
+                [0.0, 0.0, 1.0]
+            };
+
             // Read color0
-            let color0 = if regs::AttributeType::None == clr0_attr {
-                tracing::warn!("color0 attribute is None, using default white");
+            let color0 = if clr0_attr == regs::AttributeType::None {
                 [1.0, 1.0, 1.0, 1.0]
             } else if clr0_attr == regs::AttributeType::Direct {
                 let start = cur.position() as usize;
@@ -158,20 +199,26 @@ impl Gx {
                 None
             };
 
+            // Compute per-vertex lighting
+            let normal_view = Vec3::from(normal).transform(&nrm_mtx).normalize();
+            let pos_view = self.xf_transform_3x4(pos_mtx_base, position);
+            let final_color =
+                self.compute_channel_lighting(&chan_ctrl, ambient_reg, material_reg, color0, normal_view, pos_view);
+
             tracing::debug!(
                 vertex = i,
                 position = format!("{:02X?}", position),
-                color0 = format!("{:?}", color0),
+                color0 = format!("{:?}", final_color),
                 "Vertex"
             );
 
-            vertices.push(draw::Vertex { position, color0, tex0 });
+            vertices.push(draw::Vertex {
+                position,
+                color0: final_color,
+                tex0,
+            });
         }
 
-        // Read the current position matrix index from MatrixIndex0[0:5]
-        // and compute the modelview from the correct XF memory slot
-        let mtx_index_a = MatrixIndex0::from_raw(self.xf_mem[XF_MATRIX_INDEX_A]);
-        let pos_mtx_base = mtx_index_a.pos_mtx_idx() as usize * XF_POS_MTX_STRIDE;
         let modelview = draw::Matrix4([
             [
                 self.xf_f32(pos_mtx_base),
@@ -306,18 +353,155 @@ impl Gx {
         }
     }
 
+    fn decode_normal(data: &[u8], vat: &VatA) -> [f32; 3] {
+        let cnt = vat.nrm_cnt().components().min(3);
+        let fmt = vat.nrm_fmt();
+        let mut result = [0.0f32; 3];
+        let mut off = 0;
+
+        for i in 0..cnt {
+            result[i] = match fmt {
+                regs::ComponentFormat::U8 => {
+                    let v = data[off] as f32 / 255.0;
+                    off += 1;
+                    v
+                }
+                regs::ComponentFormat::S8 => {
+                    let v = data[off] as i8 as f32 / 127.0;
+                    off += 1;
+                    v
+                }
+                regs::ComponentFormat::U16 => {
+                    let v = u16::from_be_bytes([data[off], data[off + 1]]) as f32 / 65535.0;
+                    off += 2;
+                    v
+                }
+                regs::ComponentFormat::S16 => {
+                    let v = i16::from_be_bytes([data[off], data[off + 1]]) as f32 / 32767.0;
+                    off += 2;
+                    v
+                }
+                regs::ComponentFormat::F32 => {
+                    let v = f32::from_bits(u32::from_be_bytes([
+                        data[off],
+                        data[off + 1],
+                        data[off + 2],
+                        data[off + 3],
+                    ]));
+                    off += 4;
+                    v
+                }
+            };
+        }
+
+        result
+    }
+
+    fn compute_channel_lighting(
+        &self,
+        chan_ctrl: &ChanCtrl,
+        ambient_reg: [f32; 4],
+        material_reg: [f32; 4],
+        vertex_color: [f32; 4],
+        normal: Vec3,
+        pos: Vec3,
+    ) -> [f32; 4] {
+        let mat_color = if chan_ctrl.mat_src() {
+            vertex_color
+        } else {
+            material_reg
+        };
+        let amb_color = if chan_ctrl.amb_src() { vertex_color } else { ambient_reg };
+
+        if !chan_ctrl.enable() {
+            return mat_color;
+        }
+
+        let light_mask = chan_ctrl.light_mask();
+        let mut acc = amb_color;
+
+        for light_id in 0..8u32 {
+            if (light_mask >> light_id) & 1 == 0 {
+                continue;
+            }
+
+            let base = XF_LIGHT_BASE + (light_id as usize) * XF_LIGHT_STRIDE;
+            let light_color = unpack_rgba(self.xf_mem[base + XF_LIGHT_COLOR]);
+            let cosatt = self.xf_vec3(base + XF_LIGHT_A0);
+            let distatt = self.xf_vec3(base + XF_LIGHT_K0);
+            let light_pos = self.xf_vec3(base + XF_LIGHT_PX);
+            let light_dir = self.xf_vec3(base + XF_LIGHT_NX);
+
+            let to_light = light_pos - pos;
+            let to_light_dir = to_light.normalize();
+            let dot = normal.dot(to_light_dir);
+
+            let diffuse = match chan_ctrl.diff_fn() {
+                regs::DiffuseFn::None => 1.0,
+                regs::DiffuseFn::Signed => dot,
+                regs::DiffuseFn::Clamp => dot.max(0.0),
+            };
+
+            let attn = match chan_ctrl.attn_fn() {
+                AttnFn::None => 1.0,
+                AttnFn::Spot => {
+                    let cos_angle = light_dir.dot(to_light_dir);
+                    let angle_attn = (cosatt.0 + cosatt.1 * cos_angle + cosatt.2 * cos_angle * cos_angle).max(0.0);
+                    let dist = to_light.length();
+                    saturating_div(angle_attn, distatt.0 + distatt.1 * dist + distatt.2 * dist * dist)
+                }
+                AttnFn::Spec => {
+                    let cos_angle = normal.dot(to_light_dir);
+                    let angle_attn = (cosatt.0 + cosatt.1 * cos_angle + cosatt.2 * cos_angle * cos_angle).max(0.0);
+                    let cos_ha = normal.dot(light_dir.normalize()).max(0.0);
+                    saturating_div(angle_attn, distatt.0 + distatt.1 * cos_ha + distatt.2 * cos_ha * cos_ha)
+                }
+            };
+
+            let factor = attn * diffuse;
+            acc[0] += light_color[0] * factor;
+            acc[1] += light_color[1] * factor;
+            acc[2] += light_color[2] * factor;
+            acc[3] += light_color[3] * factor;
+        }
+
+        // Clamp illumination before material multiply
+        // Material multiplies clamped illumination
+        std::array::from_fn(|i| mat_color[i] * acc[i].clamp(0.0, 1.0))
+    }
+
     fn xf_f32(&self, reg: usize) -> f32 {
         f32::from_bits(self.xf_mem[reg])
     }
 
+    fn xf_vec3(&self, reg: usize) -> Vec3 {
+        Vec3(self.xf_f32(reg), self.xf_f32(reg + 1), self.xf_f32(reg + 2))
+    }
+
+    fn xf_transform_3x4(&self, base: usize, v: [f32; 3]) -> Vec3 {
+        Vec3(
+            self.xf_f32(base) * v[0]
+                + self.xf_f32(base + 1) * v[1]
+                + self.xf_f32(base + 2) * v[2]
+                + self.xf_f32(base + 3),
+            self.xf_f32(base + 4) * v[0]
+                + self.xf_f32(base + 5) * v[1]
+                + self.xf_f32(base + 6) * v[2]
+                + self.xf_f32(base + 7),
+            self.xf_f32(base + 8) * v[0]
+                + self.xf_f32(base + 9) * v[1]
+                + self.xf_f32(base + 10) * v[2]
+                + self.xf_f32(base + 11),
+        )
+    }
+
     fn rebuild_projection(&mut self) {
-        let b = XF_PROJECTION_BASE;
-        let pm1 = self.xf_f32(b);
-        let pm2 = self.xf_f32(b + 1);
-        let pm3 = self.xf_f32(b + 2);
-        let pm4 = self.xf_f32(b + 3);
-        let pm5 = self.xf_f32(b + 4);
-        let pm6 = self.xf_f32(b + 5);
+        let pm1 = self.xf_f32(XF_PROJECTION_BASE);
+        let pm2 = self.xf_f32(XF_PROJECTION_BASE + 1);
+        let pm3 = self.xf_f32(XF_PROJECTION_BASE + 2);
+        let pm4 = self.xf_f32(XF_PROJECTION_BASE + 3);
+        let pm5 = self.xf_f32(XF_PROJECTION_BASE + 4);
+        let pm6 = self.xf_f32(XF_PROJECTION_BASE + 5);
         let proj_type = self.xf_mem[XF_PROJECTION_END];
 
         self.draw_commands.projection = if proj_type == 0 {
