@@ -33,6 +33,8 @@ pub const XF_MODELVIEW_BASE: usize = 0x0000;
 pub const XF_MODELVIEW_END: usize = 0x000B;
 pub const XF_PROJECTION_BASE: usize = 0x1020;
 pub const XF_PROJECTION_END: usize = 0x1026;
+pub const XF_MATRIX_INDEX_A: usize = 0x1018;
+pub const XF_POS_MTX_STRIDE: usize = 4;
 
 // BP texture register base addresses (maps 0-3: base, maps 4-7: base + 0x20)
 pub const BP_TX_SETMODE0_I0: usize = 0x80; // TX_SETMODE0 maps 0-3

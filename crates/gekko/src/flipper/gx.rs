@@ -10,13 +10,13 @@ use crate::{
             ARRAY_BASE_REG, ARRAY_CLR0, ARRAY_POS, ARRAY_STRIDE_REG, BP_GEN_MODE, BP_PE_ALPHA_COMPARE, BP_PE_CMODE0,
             BP_PE_DONE, BP_PE_DONE_FINISH_BIT, BP_PE_ZMODE, BP_RAS1_TREF_COUNT, BP_RAS1_TREF0, BP_REG_SIZE,
             BP_TEV_COLOR_ENV_0, BP_TEV_REGISTERL_0, BP_TX_SETIMAGE0_I0, BP_TX_SETIMAGE0_I4, BP_TX_SETIMAGE3_I0,
-            BP_TX_SETIMAGE3_I4, CP_REG_SIZE, VATA_REG, VCD_HI_REG, VCD_LO_REG, XF_MEM_SIZE, XF_MODELVIEW_BASE,
-            XF_MODELVIEW_END, XF_PROJECTION_BASE, XF_PROJECTION_END,
+            BP_TX_SETIMAGE3_I4, CP_REG_SIZE, VATA_REG, VCD_HI_REG, VCD_LO_REG, XF_MATRIX_INDEX_A, XF_MEM_SIZE,
+            XF_POS_MTX_STRIDE, XF_PROJECTION_BASE, XF_PROJECTION_END,
         },
         draw::DrawCommands,
         regs::{
-            AlphaCompare, BlendMode, GenMode, TevAlphaEnv, TevColorEnv, TevRegType, TevRegisterH, TevRegisterL,
-            TxSetImage0, TxSetImage3, VatA, VcdHi, VcdLo, ZMode,
+            AlphaCompare, BlendMode, GenMode, MatrixIndex0, TevAlphaEnv, TevColorEnv, TevRegType, TevRegisterH,
+            TevRegisterL, TxSetImage0, TxSetImage3, VatA, VcdHi, VcdLo, ZMode,
         },
     },
     gekko::Gekko,
@@ -165,17 +165,49 @@ impl Gx {
             }
 
             if let Some(primitive) = draw::Primitive::from_cmd(cmd) {
+                // Read the current position matrix index from MatrixIndex0[0:5]
+                // and compute the modelview from the correct XF memory slot
+                let mtx_index_a = MatrixIndex0::from_raw(self.xf_mem[XF_MATRIX_INDEX_A]);
+                let pos_mtx_base = mtx_index_a.pos_mtx_idx() as usize * XF_POS_MTX_STRIDE;
+                let modelview = draw::Matrix4([
+                    [
+                        self.xf_f32(pos_mtx_base),
+                        self.xf_f32(pos_mtx_base + 4),
+                        self.xf_f32(pos_mtx_base + 8),
+                        0.0,
+                    ],
+                    [
+                        self.xf_f32(pos_mtx_base + 1),
+                        self.xf_f32(pos_mtx_base + 5),
+                        self.xf_f32(pos_mtx_base + 9),
+                        0.0,
+                    ],
+                    [
+                        self.xf_f32(pos_mtx_base + 2),
+                        self.xf_f32(pos_mtx_base + 6),
+                        self.xf_f32(pos_mtx_base + 10),
+                        0.0,
+                    ],
+                    [
+                        self.xf_f32(pos_mtx_base + 3),
+                        self.xf_f32(pos_mtx_base + 7),
+                        self.xf_f32(pos_mtx_base + 11),
+                        1.0,
+                    ],
+                ]);
+
                 tracing::debug!(
                     primitive = format!("{:?}", primitive),
                     vertices = format!("{:?}", vertices),
-                    modelview = format!("{:?}", self.draw_commands.modelview),
+                    pos_mtx_idx = mtx_index_a.pos_mtx_idx(),
+                    modelview = format!("{:?}", modelview),
                     projection = format!("{:?}", self.draw_commands.projection),
                     "draw call created"
                 );
                 self.draw_commands.commands.push(draw::DrawCall {
                     primitive,
                     vertices,
-                    modelview: self.draw_commands.modelview,
+                    modelview,
                 });
             }
         }
@@ -275,16 +307,6 @@ impl Gx {
 
     fn xf_f32(&self, reg: usize) -> f32 {
         f32::from_bits(self.xf_mem[reg])
-    }
-
-    fn rebuild_modelview(&mut self) {
-        let b = XF_MODELVIEW_BASE;
-        self.draw_commands.modelview = draw::Matrix4([
-            [self.xf_f32(b), self.xf_f32(b + 4), self.xf_f32(b + 8), 0.0],
-            [self.xf_f32(b + 1), self.xf_f32(b + 5), self.xf_f32(b + 9), 0.0],
-            [self.xf_f32(b + 2), self.xf_f32(b + 6), self.xf_f32(b + 10), 0.0],
-            [self.xf_f32(b + 3), self.xf_f32(b + 7), self.xf_f32(b + 11), 1.0],
-        ]);
     }
 
     fn rebuild_projection(&mut self) {
@@ -497,10 +519,8 @@ impl Gx {
             );
         }
 
-        // Rebuild matrices if the write touched their address ranges
-        if addr <= XF_MODELVIEW_END && end > XF_MODELVIEW_BASE {
-            self.rebuild_modelview();
-        }
+        // Rebuild projection if the write touched its address range
+        // (modelview is resolved lazily at draw call time from the current position matrix slot)
         if addr <= XF_PROJECTION_END && end > XF_PROJECTION_BASE {
             self.rebuild_projection();
         }

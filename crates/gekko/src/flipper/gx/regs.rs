@@ -310,7 +310,6 @@ impl TxSetImage3 {
     }
 }
 
-
 // TEV color combiner input select (SELA-SELD)
 #[derive(Debug, PartialEq, BitEnum)]
 pub enum TevColorIn {
@@ -474,4 +473,12 @@ pub struct TevRegisterH {
 pub struct GenMode {
     #[bits(10..=13)]
     pub num_tev_stages: u8, // num stages - 1
+}
+
+// XF 0x1018 Matrix Index A (position/tex0-3 matrix indices)
+#[chapa::bitfield(u32, order = lsb0)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct MatrixIndex0 {
+    #[bits(0..=5)]
+    pub pos_mtx_idx: u8,
 }

@@ -477,8 +477,7 @@ fn main() {
         .any(|arg| arg == "--immediate")
         .then(|| wgpu::PresentMode::Immediate)
         .unwrap_or(wgpu::PresentMode::Fifo);
-    let idle_skip = std::env::args()
-        .any(|arg| arg == "--idle-skip");
+    let idle_skip = std::env::args().any(|arg| arg == "--idle-skip");
 
     let rom_data = std::fs::read(&args[1]).expect("failed to read ROM");
     let dol = Dol::parse(rom_data);

@@ -95,7 +95,6 @@ impl std::ops::Mul for Matrix4 {
 
 #[derive(Default)]
 pub struct DrawCommands {
-    pub modelview: Matrix4,
     pub projection: Matrix4,
     pub commands: Vec<DrawCall>,
     pub textures: [Option<TextureDescriptor>; 8],
