@@ -67,150 +67,151 @@ impl Gx {
                 FifoCmd::Cp(data) => self.load_cp(&data),
                 FifoCmd::Xf(data) => self.load_xf(&data),
                 FifoCmd::Bp(data) => self.load_bp(&data),
-                _ => self.create_draw_call(mmio, cmd),
+                FifoCmd::DrawCall(cmd, data) => self.create_draw_call(mmio, cmd, data),
             }
         }
     }
 
-    fn create_draw_call(&mut self, mmio: &mut Mmio, cmd: FifoCmd) {
-        if let FifoCmd::DrawCall(cmd, data) = cmd {
-            let fmt = (cmd & 0b111) as usize;
-            let vcd_lo = VcdLo::from_raw(self.cp_regs[VCD_LO_REG + fmt]);
-            let vcd_hi = VcdHi::from_raw(self.cp_regs[VCD_HI_REG + fmt]);
-            let vat_a = VatA::from_raw(self.cp_regs[VATA_REG + fmt]);
+    fn create_draw_call(&mut self, mmio: &mut Mmio, cmd: u8, data: Vec<u8>) {
+        let Some(primitive) = draw::Primitive::from_cmd(cmd) else {
+            tracing::error!(cmd, "goofy draw command");
+            return;
+        };
 
-            let pos_base = self.cp_regs[ARRAY_BASE_REG + ARRAY_POS] as usize;
-            let pos_stride = self.cp_regs[ARRAY_STRIDE_REG + ARRAY_POS] as usize;
-            let clr0_base = self.cp_regs[ARRAY_BASE_REG + ARRAY_CLR0] as usize;
-            let clr0_stride = self.cp_regs[ARRAY_STRIDE_REG + ARRAY_CLR0] as usize;
+        let fmt = (cmd & 0b111) as usize;
+        let vcd_lo = VcdLo::from_raw(self.cp_regs[VCD_LO_REG + fmt]);
+        let vcd_hi = VcdHi::from_raw(self.cp_regs[VCD_HI_REG + fmt]);
+        let vat_a = VatA::from_raw(self.cp_regs[VATA_REG + fmt]);
 
-            let tex0_attr = vcd_hi.tex0();
-            let tex0_size = match tex0_attr {
-                regs::AttributeType::Direct => vat_a.tex0_data_size(),
-                regs::AttributeType::Index8 => 1,
-                regs::AttributeType::Index16 => 2,
-                regs::AttributeType::None => 0,
+        let pos_base = self.cp_regs[ARRAY_BASE_REG + ARRAY_POS] as usize;
+        let pos_stride = self.cp_regs[ARRAY_STRIDE_REG + ARRAY_POS] as usize;
+        let clr0_base = self.cp_regs[ARRAY_BASE_REG + ARRAY_CLR0] as usize;
+        let clr0_stride = self.cp_regs[ARRAY_STRIDE_REG + ARRAY_CLR0] as usize;
+
+        let tex0_attr = vcd_hi.tex0();
+        let tex0_size = match tex0_attr {
+            regs::AttributeType::Direct => vat_a.tex0_data_size(),
+            regs::AttributeType::Index8 => 1,
+            regs::AttributeType::Index16 => 2,
+            regs::AttributeType::None => 0,
+        };
+
+        let pos_attr = vcd_lo.position();
+        let clr0_attr = vcd_lo.color0();
+        let pos_data_size = vat_a.pos_data_size();
+        let clr0_data_size = vat_a.clr0_data_size();
+
+        let pos_stream_size = match pos_attr {
+            regs::AttributeType::Direct => pos_data_size,
+            regs::AttributeType::Index8 => 1,
+            regs::AttributeType::Index16 => 2,
+            regs::AttributeType::None => 0,
+        };
+        let clr0_stream_size = match clr0_attr {
+            regs::AttributeType::Direct => clr0_data_size,
+            regs::AttributeType::Index8 => 1,
+            regs::AttributeType::Index16 => 2,
+            regs::AttributeType::None => 0,
+        };
+
+        let vertex_stride = pos_stream_size + clr0_stream_size + tex0_size;
+        let vertex_count = data.len() / vertex_stride;
+
+        let mut vertices: Vec<draw::Vertex> = Vec::with_capacity(vertex_count);
+        let mut cur = Cursor::new(&data);
+
+        for i in 0..vertex_count {
+            // Read position
+            let position = if pos_attr == regs::AttributeType::Direct {
+                let start = cur.position() as usize;
+                cur.set_position(cur.position() + pos_data_size as u64);
+                Self::decode_position(&data[start..start + pos_data_size], &vat_a)
+            } else {
+                let pos_index = read_index(&mut cur, pos_attr);
+                let pos_addr = pos_base + pos_index * pos_stride;
+                Self::decode_position(&mmio.ram[pos_addr..pos_addr + pos_data_size], &vat_a)
             };
 
-            let pos_attr = vcd_lo.position();
-            let clr0_attr = vcd_lo.color0();
-            let pos_data_size = vat_a.pos_data_size();
-            let clr0_data_size = vat_a.clr0_data_size();
-
-            let pos_stream_size = match pos_attr {
-                regs::AttributeType::Direct => pos_data_size,
-                regs::AttributeType::Index8 => 1,
-                regs::AttributeType::Index16 => 2,
-                regs::AttributeType::None => 0,
-            };
-            let clr0_stream_size = match clr0_attr {
-                regs::AttributeType::Direct => clr0_data_size,
-                regs::AttributeType::Index8 => 1,
-                regs::AttributeType::Index16 => 2,
-                regs::AttributeType::None => 0,
+            // Read color0
+            let color0 = if regs::AttributeType::None == clr0_attr {
+                tracing::warn!("color0 attribute is None, using default white");
+                [1.0, 1.0, 1.0, 1.0]
+            } else if clr0_attr == regs::AttributeType::Direct {
+                let start = cur.position() as usize;
+                cur.set_position(cur.position() + clr0_data_size as u64);
+                Self::decode_color(&data[start..start + clr0_data_size], &vat_a)
+            } else {
+                let clr0_index = read_index(&mut cur, clr0_attr);
+                let clr0_addr = clr0_base + clr0_index * clr0_stride;
+                Self::decode_color(&mmio.ram[clr0_addr..clr0_addr + clr0_data_size], &vat_a)
             };
 
-            let vertex_stride = pos_stream_size + clr0_stream_size + tex0_size;
-            let vertex_count = data.len() / vertex_stride;
+            // Read tex0
+            let tex0 = if tex0_attr == regs::AttributeType::Direct && vat_a.tex0_cnt() == regs::TexCount::St {
+                let mut s_buf = [0u8; 4];
+                let mut t_buf = [0u8; 4];
+                cur.read_exact(&mut s_buf).unwrap();
+                cur.read_exact(&mut t_buf).unwrap();
+                Some([f32::from_be_bytes(s_buf), f32::from_be_bytes(t_buf)])
+            } else {
+                cur.set_position(cur.position() + tex0_size as u64);
+                None
+            };
 
-            let mut vertices: Vec<draw::Vertex> = Vec::with_capacity(vertex_count);
-            let mut cur = Cursor::new(&data);
+            tracing::debug!(
+                vertex = i,
+                position = format!("{:02X?}", position),
+                color0 = format!("{:?}", color0),
+                "Vertex"
+            );
 
-            for i in 0..vertex_count {
-                // Read position
-                let position = if pos_attr == regs::AttributeType::Direct {
-                    let start = cur.position() as usize;
-                    cur.set_position(cur.position() + pos_data_size as u64);
-                    Self::decode_position(&data[start..start + pos_data_size], &vat_a)
-                } else {
-                    let pos_index = read_index(&mut cur, pos_attr);
-                    let pos_addr = pos_base + pos_index * pos_stride;
-                    Self::decode_position(&mmio.ram[pos_addr..pos_addr + pos_data_size], &vat_a)
-                };
-
-                // Read color0
-                let color0 = if regs::AttributeType::None == clr0_attr {
-                    tracing::warn!("color0 attribute is None, using default white");
-                    [1.0, 1.0, 1.0, 1.0]
-                } else if clr0_attr == regs::AttributeType::Direct {
-                    let start = cur.position() as usize;
-                    cur.set_position(cur.position() + clr0_data_size as u64);
-                    Self::decode_color(&data[start..start + clr0_data_size], &vat_a)
-                } else {
-                    let clr0_index = read_index(&mut cur, clr0_attr);
-                    let clr0_addr = clr0_base + clr0_index * clr0_stride;
-                    Self::decode_color(&mmio.ram[clr0_addr..clr0_addr + clr0_data_size], &vat_a)
-                };
-
-                // Read tex0
-                let tex0 = if tex0_attr == regs::AttributeType::Direct && vat_a.tex0_cnt() == regs::TexCount::St {
-                    let mut s_buf = [0u8; 4];
-                    let mut t_buf = [0u8; 4];
-                    cur.read_exact(&mut s_buf).unwrap();
-                    cur.read_exact(&mut t_buf).unwrap();
-                    Some([f32::from_be_bytes(s_buf), f32::from_be_bytes(t_buf)])
-                } else {
-                    cur.set_position(cur.position() + tex0_size as u64);
-                    None
-                };
-
-                tracing::debug!(
-                    vertex = i,
-                    position = format!("{:02X?}", position),
-                    color0 = format!("{:?}", color0),
-                    "Vertex"
-                );
-
-                vertices.push(draw::Vertex { position, color0, tex0 });
-            }
-
-            if let Some(primitive) = draw::Primitive::from_cmd(cmd) {
-                // Read the current position matrix index from MatrixIndex0[0:5]
-                // and compute the modelview from the correct XF memory slot
-                let mtx_index_a = MatrixIndex0::from_raw(self.xf_mem[XF_MATRIX_INDEX_A]);
-                let pos_mtx_base = mtx_index_a.pos_mtx_idx() as usize * XF_POS_MTX_STRIDE;
-                let modelview = draw::Matrix4([
-                    [
-                        self.xf_f32(pos_mtx_base),
-                        self.xf_f32(pos_mtx_base + 4),
-                        self.xf_f32(pos_mtx_base + 8),
-                        0.0,
-                    ],
-                    [
-                        self.xf_f32(pos_mtx_base + 1),
-                        self.xf_f32(pos_mtx_base + 5),
-                        self.xf_f32(pos_mtx_base + 9),
-                        0.0,
-                    ],
-                    [
-                        self.xf_f32(pos_mtx_base + 2),
-                        self.xf_f32(pos_mtx_base + 6),
-                        self.xf_f32(pos_mtx_base + 10),
-                        0.0,
-                    ],
-                    [
-                        self.xf_f32(pos_mtx_base + 3),
-                        self.xf_f32(pos_mtx_base + 7),
-                        self.xf_f32(pos_mtx_base + 11),
-                        1.0,
-                    ],
-                ]);
-
-                tracing::debug!(
-                    primitive = format!("{:?}", primitive),
-                    vertices = format!("{:?}", vertices),
-                    pos_mtx_idx = mtx_index_a.pos_mtx_idx(),
-                    modelview = format!("{:?}", modelview),
-                    projection = format!("{:?}", self.draw_commands.projection),
-                    "draw call created"
-                );
-                self.draw_commands.commands.push(draw::DrawCall {
-                    primitive,
-                    vertices,
-                    modelview,
-                });
-            }
+            vertices.push(draw::Vertex { position, color0, tex0 });
         }
+
+        // Read the current position matrix index from MatrixIndex0[0:5]
+        // and compute the modelview from the correct XF memory slot
+        let mtx_index_a = MatrixIndex0::from_raw(self.xf_mem[XF_MATRIX_INDEX_A]);
+        let pos_mtx_base = mtx_index_a.pos_mtx_idx() as usize * XF_POS_MTX_STRIDE;
+        let modelview = draw::Matrix4([
+            [
+                self.xf_f32(pos_mtx_base),
+                self.xf_f32(pos_mtx_base + 4),
+                self.xf_f32(pos_mtx_base + 8),
+                0.0,
+            ],
+            [
+                self.xf_f32(pos_mtx_base + 1),
+                self.xf_f32(pos_mtx_base + 5),
+                self.xf_f32(pos_mtx_base + 9),
+                0.0,
+            ],
+            [
+                self.xf_f32(pos_mtx_base + 2),
+                self.xf_f32(pos_mtx_base + 6),
+                self.xf_f32(pos_mtx_base + 10),
+                0.0,
+            ],
+            [
+                self.xf_f32(pos_mtx_base + 3),
+                self.xf_f32(pos_mtx_base + 7),
+                self.xf_f32(pos_mtx_base + 11),
+                1.0,
+            ],
+        ]);
+
+        tracing::debug!(
+            primitive = format!("{:?}", primitive),
+            vertices = format!("{:?}", vertices),
+            pos_mtx_idx = mtx_index_a.pos_mtx_idx(),
+            modelview = format!("{:?}", modelview),
+            projection = format!("{:?}", self.draw_commands.projection),
+            "draw call created"
+        );
+        self.draw_commands.commands.push(draw::DrawCall {
+            primitive,
+            vertices,
+            modelview,
+        });
     }
 
     fn decode_position(data: &[u8], vat: &VatA) -> [f32; 3] {
