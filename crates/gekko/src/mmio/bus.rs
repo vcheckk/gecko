@@ -3,7 +3,8 @@ use crate::{
     mmio::{
         Mmio,
         constants::{
-            DSP_BASE, DSP_END, EXI_BASE, EXI_END, GX_FIFO_BASE, GX_FIFO_END, IPL_BASE, IPL_END, PI_BASE, PI_END, VI_BASE, VI_END
+            DSP_BASE, DSP_END, EXI_BASE, EXI_END, GX_FIFO_BASE, GX_FIFO_END, IPL_BASE, IPL_END, PI_BASE, PI_END,
+            VI_BASE, VI_END,
         },
     },
 };
@@ -36,7 +37,15 @@ impl Gekko {
     pub fn read_u8(&mut self, addr: u32) -> u8 {
         let (target, offset) = route(Mmio::virt_to_phys(addr));
         match target {
-            BusTarget::Vi       => self.vi.mmio_read_u8(offset),
+            BusTarget::Vi       => {
+                if offset == 0x2E {
+                    return (self.vi.dph_value(self.scheduler.cycles) >> 8) as u8;
+                }
+                if offset == 0x2F {
+                    return self.vi.dph_value(self.scheduler.cycles) as u8;
+                }
+                self.vi.mmio_read_u8(offset)
+            }
             BusTarget::Pi       => self.pi.mmio_read_u8(offset),
             BusTarget::Dsp      => self.dsp.mmio_read_u8(offset),
             BusTarget::Exi      => self.exi.mmio_read_u8(offset),
@@ -53,7 +62,12 @@ impl Gekko {
     pub fn read_u16(&mut self, addr: u32) -> u16 {
         let (target, offset) = route(Mmio::virt_to_phys(addr));
         match target {
-            BusTarget::Vi       => self.vi.mmio_read_u16(offset),
+            BusTarget::Vi       => {
+                if offset == 0x2E {
+                    return self.vi.dph_value(self.scheduler.cycles);
+                }
+                self.vi.mmio_read_u16(offset)
+            }
             BusTarget::Pi       => self.pi.mmio_read_u16(offset),
             BusTarget::Dsp      => self.dsp.mmio_read_u16(offset),
             BusTarget::Exi      => self.exi.mmio_read_u16(offset),
@@ -70,7 +84,14 @@ impl Gekko {
     pub fn read_u32(&mut self, addr: u32) -> u32 {
         let (target, offset) = route(Mmio::virt_to_phys(addr));
         match target {
-            BusTarget::Vi       => self.vi.mmio_read_u32(offset),
+            BusTarget::Vi       => {
+                if offset == 0x2C {
+                    let dpv = self.vi.mmio_read_u16(0x2C) as u32;
+                    let dph = self.vi.dph_value(self.scheduler.cycles) as u32;
+                    return (dpv << 16) | dph;
+                }
+                self.vi.mmio_read_u32(offset)
+            }
             BusTarget::Pi       => self.pi.mmio_read_u32(offset),
             BusTarget::Dsp      => self.dsp.mmio_read_u32(offset),
             BusTarget::Exi      => self.exi.mmio_read_u32(offset),
@@ -87,7 +108,13 @@ impl Gekko {
     pub fn write_u8(&mut self, addr: u32, val: u8) {
         let (target, offset) = route(Mmio::virt_to_phys(addr));
         match target {
-            BusTarget::Vi       => self.vi.mmio_write_u8(offset, val),
+            BusTarget::Vi       => {
+                self.vi.mmio_write_u8(offset, val);
+                self.maybe_schedule_vi_half_line();
+                if (0x30..=0x3F).contains(&offset) {
+                    self.check_vi_interrupts();
+                }
+            }
             BusTarget::Pi       => self.pi.mmio_write_u8(offset, val),
             BusTarget::Dsp      => {
                 self.dsp.mmio_write_u8(offset, val);
@@ -116,7 +143,13 @@ impl Gekko {
     pub fn write_u16(&mut self, addr: u32, val: u16) {
         let (target, offset) = route(Mmio::virt_to_phys(addr));
         match target {
-            BusTarget::Vi       => self.vi.mmio_write_u16(offset, val),
+            BusTarget::Vi       => {
+                self.vi.mmio_write_u16(offset, val);
+                self.maybe_schedule_vi_half_line();
+                if (0x30..=0x3F).contains(&offset) {
+                    self.check_vi_interrupts();
+                }
+            }
             BusTarget::Pi       => self.pi.mmio_write_u16(offset, val),
             BusTarget::Dsp      => {
                 self.dsp.mmio_write_u16(offset, val);
@@ -146,7 +179,13 @@ impl Gekko {
     pub fn write_u32(&mut self, addr: u32, val: u32) {
         let (target, offset) = route(Mmio::virt_to_phys(addr));
         match target {
-            BusTarget::Vi       => self.vi.mmio_write_u32(offset, val),
+            BusTarget::Vi       => {
+                self.vi.mmio_write_u32(offset, val);
+                self.maybe_schedule_vi_half_line();
+                if (0x30..=0x3F).contains(&offset) {
+                    self.check_vi_interrupts();
+                }
+            }
             BusTarget::Pi       => self.pi.mmio_write_u32(offset, val),
             BusTarget::Dsp      => {
                 self.dsp.mmio_write_u32(offset, val);

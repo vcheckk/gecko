@@ -3,10 +3,17 @@ pub mod regs;
 mod tests;
 
 use crate::{
+    flipper::pi::InterruptFlag,
     gekko::Gekko,
-    mmio::constants::VI_BASE,
-    mmio::traits::{MmioAccess, MmioRegister},
+    mmio::{
+        constants::VI_BASE,
+        traits::{MmioAccess, MmioRegister},
+    },
+    scheduler::EventKind,
 };
+
+const CPU_CORE_CLOCK: u64 = 486_000_000;
+const CLOCK_FREQUENCIES: [u64; 2] = [27_000_000, 54_000_000];
 
 pub struct Vi {
     pub vtr: regs::VerticalTiming,
@@ -42,6 +49,11 @@ pub struct Vi {
     pub visel: regs::ViDtvStatus,
     pub border_hbe: regs::BorderHbe,
     pub border_hbs: regs::BorderHbs,
+
+    // VI timing state
+    pub half_line_count: u32,
+    pub ticks_last_line_start: u64,
+    pub half_line_scheduled: bool,
 }
 
 impl Vi {
@@ -80,6 +92,9 @@ impl Vi {
             visel: regs::ViDtvStatus::from_raw(0),
             border_hbe: regs::BorderHbe::from_raw(0),
             border_hbs: regs::BorderHbs::from_raw(0),
+            half_line_count: 0,
+            ticks_last_line_start: 0,
+            half_line_scheduled: false,
         }
     }
 
@@ -118,6 +133,100 @@ impl Vi {
         regs::BorderHbe,
         regs::BorderHbs,
     );
+
+    pub fn ticks_per_sample(&self) -> u64 {
+        let clock_idx = self.viclk.clock_select() as usize & 1;
+        2 * CPU_CORE_CLOCK / CLOCK_FREQUENCIES[clock_idx]
+    }
+
+    pub fn ticks_per_half_line(&self) -> u64 {
+        self.ticks_per_sample() * self.htr0.halfline_width() as u64
+    }
+
+    fn half_lines_per_even_field(&self) -> u32 {
+        let equ = self.vtr.equalization_pulse() as u32;
+        let acv = self.vtr.active_video() as u32;
+        let pre_blank = self.vte.pre_blanking_in_half_lines() as u32;
+        let post_blank = self.vte.post_blanking_in_half_lines() as u32;
+        3 * equ + pre_blank + 2 * acv + post_blank
+    }
+
+    fn half_lines_per_odd_field(&self) -> u32 {
+        let equ = self.vtr.equalization_pulse() as u32;
+        let acv = self.vtr.active_video() as u32;
+        let pre_blank = self.vto.pre_blanking_in_half_lines() as u32;
+        let post_blank = self.vto.post_blanking_in_half_lines() as u32;
+        3 * equ + pre_blank + 2 * acv + post_blank
+    }
+
+    fn total_half_lines(&self) -> u32 {
+        self.half_lines_per_even_field() + self.half_lines_per_odd_field()
+    }
+
+    /// Returns true if any DI register has both IR_INT and IR_MASK set.
+    pub fn vi_interrupt_active(&self) -> bool {
+        (self.di0.interrupt() && self.di0.enable())
+            || (self.di1.interrupt() && self.di1.enable())
+            || (self.di2.interrupt() && self.di2.enable())
+            || (self.di3.interrupt() && self.di3.enable())
+    }
+
+    /// Compute the current DPH value from the cycle count.
+    pub fn dph_value(&self, cycles: u64) -> u16 {
+        let hl_width = self.htr0.halfline_width() as u64;
+        let ticks_per_hl = self.ticks_per_half_line();
+        if ticks_per_hl == 0 || hl_width == 0 {
+            return 1;
+        }
+
+        let elapsed = cycles.saturating_sub(self.ticks_last_line_start);
+        let raw = 1 + hl_width * elapsed / ticks_per_hl;
+        raw.clamp(1, hl_width * 2) as u16
+    }
+
+    /// Called once per half-line from the scheduler event.
+    /// Advances the half-line counter, updates DPV, and checks DI interrupts.
+    pub fn on_half_line(&mut self, cycles: u64) {
+        let total_hl = self.total_half_lines();
+        if total_hl == 0 {
+            return;
+        }
+
+        self.half_line_count += 1;
+        if self.half_line_count >= total_hl {
+            self.half_line_count = 0;
+        }
+
+        if (self.half_line_count & 1) == 0 {
+            self.ticks_last_line_start = cycles;
+        }
+
+        self.dpv.set_vertical_count((1 + self.half_line_count / 2) as u16);
+
+        let hl_width = self.htr0.halfline_width() as u32;
+        let current_vct = 1 + self.half_line_count / 2;
+        let current_parity = self.half_line_count & 1;
+
+        macro_rules! check_di {
+            ($di:expr) => {
+                if $di.enable() {
+                    let target_parity = if $di.horizontal_count() as u32 > hl_width {
+                        1
+                    } else {
+                        0
+                    };
+                    if current_vct == $di.vertical_count() as u32 && current_parity == target_parity {
+                        $di.set_interrupt(true);
+                    }
+                }
+            };
+        }
+
+        check_di!(self.di0);
+        check_di!(self.di1);
+        check_di!(self.di2);
+        check_di!(self.di3);
+    }
 
     pub fn xfb_addr(&self) -> u32 {
         if self.tfbl.page_offset() {
@@ -168,6 +277,25 @@ impl Vi {
 }
 
 impl Gekko {
+    pub fn maybe_schedule_vi_half_line(&mut self) {
+        if !self.vi.half_line_scheduled {
+            let ticks_per_hl = self.vi.ticks_per_half_line();
+            if ticks_per_hl > 0 {
+                self.vi.half_line_scheduled = true;
+                let next = self.scheduler.cycles + ticks_per_hl;
+                self.scheduler.schedule_at(next, EventKind::ViHalfLine);
+            }
+        }
+    }
+
+    pub fn check_vi_interrupts(&mut self) {
+        if self.vi.vi_interrupt_active() {
+            self.pi.assert_interrupt(InterruptFlag::Vi);
+        } else {
+            self.pi.clear_interrupt(InterruptFlag::Vi);
+        }
+    }
+
     #[rustfmt::skip]
     pub fn render_xfb(&self) -> Vec<u32> {
         let video_format = self.vi.dcr.video_format();

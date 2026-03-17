@@ -7,9 +7,9 @@ use crate::{
         pi::{InterruptFlag, Pi},
         vi::Vi,
     },
+    idle::{IDLE_LOOP_MAX_INSTRS, IdleCheck, IdleDetector},
     mmio::Mmio,
     scheduler::{CYCLES_PER_VSYNC, EventKind, Scheduler},
-    idle::IdleDetector,
 };
 use image::Executable;
 
@@ -117,6 +117,12 @@ impl Gekko {
                     let next = self.scheduler.cycles + CYCLES_PER_VSYNC;
                     self.scheduler.schedule_at(next, EventKind::VSync);
                 }
+                EventKind::ViHalfLine => {
+                    self.vi.on_half_line(self.scheduler.cycles);
+                    self.vi.half_line_scheduled = false;
+                    self.maybe_schedule_vi_half_line();
+                    self.check_vi_interrupts();
+                }
             }
         }
 
@@ -134,10 +140,22 @@ impl Gekko {
         cpu::lut::dispatch(self, instr);
         self.scheduler.cycles += 1;
 
-        if self.idle.check(self.cpu.cia, self.cpu.nia) {
-            if let Some(deadline) = self.scheduler.next_event_deadline() {
-                self.scheduler.cycles = deadline;
+        match self.idle.check(self.cpu.cia, self.cpu.nia) {
+            IdleCheck::Skip => {
+                if let Some(deadline) = self.scheduler.next_event_deadline() {
+                    self.scheduler.cycles = deadline;
+                }
             }
+            IdleCheck::Validate { start, end } => {
+                let safe = self.is_polling_loop(start, end);
+                self.idle.set_validated(safe);
+                if safe {
+                    if let Some(deadline) = self.scheduler.next_event_deadline() {
+                        self.scheduler.cycles = deadline;
+                    }
+                }
+            }
+            IdleCheck::Continue => {}
         }
 
         self.cpu.pc = self.cpu.nia;
@@ -148,6 +166,17 @@ impl Gekko {
         while !self.vsync_pending {
             self.step();
         }
+    }
+
+    /// Read the instructions in `[start, end]` and check whether the loop is a
+    /// side effect free MMIO polling loop that can safely be skipped.
+    fn is_polling_loop(&self, start: u32, end: u32) -> bool {
+        let count = ((end - start) / 4 + 1) as usize;
+        let mut buf = [0u32; IDLE_LOOP_MAX_INSTRS];
+        for i in 0..count.min(buf.len()) {
+            buf[i] = self.mmio.virt_read_u32(start + (i as u32) * 4);
+        }
+        crate::idle::validate_polling_loop(&buf[..count.min(buf.len())], &self.cpu.gprs)
     }
 
     pub fn frame_size(&self) -> (usize, usize) {

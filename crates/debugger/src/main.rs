@@ -73,7 +73,10 @@ fn main() {
     let idle_skip = args.iter().any(|a| a == "--idle-skip");
 
     let ipl_path = args.iter().position(|a| a == "--ipl").map(|i| &args[i + 1]);
-    let rom_path = args.iter().position(|a| a == "--rom").map(|i| &args[i + 1])
+    let rom_path = args
+        .iter()
+        .position(|a| a == "--rom")
+        .map(|i| &args[i + 1])
         .or_else(|| args.get(1).filter(|a| !a.starts_with("--")));
 
     let emulator = if let Some(ipl) = ipl_path {
@@ -84,7 +87,10 @@ fn main() {
         let dol = Dol::parse(rom_data);
         Gekko::with_image(&dol, idle_skip)
     } else {
-        eprintln!("usage: {} <path/to/game.dol> | --ipl <path> | --rom <path> [--immediate] [--idle-skip]", args[0]);
+        eprintln!(
+            "usage: {} <path/to/game.dol> | --ipl <path> | --rom <path> [--immediate] [--idle-skip]",
+            args[0]
+        );
         std::process::exit(1);
     };
 

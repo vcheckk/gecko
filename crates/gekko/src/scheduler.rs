@@ -6,6 +6,7 @@ pub const CYCLES_PER_VSYNC: u64 = 486_000_000 / 60; // TODO: fix
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum EventKind {
     VSync,
+    ViHalfLine,
 }
 
 pub struct Scheduler {
