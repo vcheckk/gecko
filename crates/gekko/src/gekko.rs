@@ -118,12 +118,6 @@ impl Gekko {
                     self.vi.half_line_scheduled = false;
                     self.maybe_schedule_vi_half_line();
                     self.check_vi_interrupts();
-                    // TODO: clear DI INT bits after propagation so they
-                    // dont reassert INTSR.Vi on every subsequent halfline?
-                    self.vi.di0.set_interrupt(false);
-                    self.vi.di1.set_interrupt(false);
-                    self.vi.di2.set_interrupt(false);
-                    self.vi.di3.set_interrupt(false);
                 }
             }
         }

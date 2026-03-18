@@ -200,92 +200,47 @@ crate::mmio_register! {
     }
 }
 
-// clears on writing 1 for DI register INT bit
-fn write_di<T: MmioRegister + Copy>(current: T, new: T) -> T {
-    const INT_BIT: u32 = 1 << 31;
-    let cur_raw = current.to_raw();
-    let new_raw = new.to_raw();
-    let int_bit = if new_raw & INT_BIT != 0 { 0 } else { cur_raw & INT_BIT };
-    T::from_raw((new_raw & !INT_BIT) | int_bit)
-}
-
 // 0xCC002030	4	R/W	DI0 - Display Interrupt 0
 
 crate::mmio_register! {
-    DisplayInterrupt0: u32 @ 0xCC002030 {
+    DisplayInterrupt0: u32 @ 0xCC002030 => Vi.di0 {
         #[bits(0..=9, alias = "hct")] pub horizontal_count: u16,
         #[bits(16..=25, alias = "vct")] pub vertical_count: u16,
         #[bits(28, alias = "enb")] pub enable: bool,
         #[bits(31, alias = "int")] pub interrupt: bool,
-    }
-}
-
-impl MmioAccess<Vi> for DisplayInterrupt0 {
-    fn read(dev: &Vi) -> Self {
-        dev.di0
-    }
-    fn write(self, dev: &mut Vi) {
-        dev.di0 = write_di(dev.di0, self);
     }
 }
 
 // 0xCC002034	4	R/W	DI1 - Display Interrupt 1
 
 crate::mmio_register! {
-    DisplayInterrupt1: u32 @ 0xCC002034 {
+    DisplayInterrupt1: u32 @ 0xCC002034 => Vi.di1 {
         #[bits(0..=9, alias = "hct")] pub horizontal_count: u16,
         #[bits(16..=25, alias = "vct")] pub vertical_count: u16,
         #[bits(28, alias = "enb")] pub enable: bool,
         #[bits(31, alias = "int")] pub interrupt: bool,
-    }
-}
-
-impl MmioAccess<Vi> for DisplayInterrupt1 {
-    fn read(dev: &Vi) -> Self {
-        dev.di1
-    }
-    fn write(self, dev: &mut Vi) {
-        dev.di1 = write_di(dev.di1, self);
     }
 }
 
 // 0xCC002038	4	R/W	DI2 - Display Interrupt 2
 
 crate::mmio_register! {
-    DisplayInterrupt2: u32 @ 0xCC002038 {
+    DisplayInterrupt2: u32 @ 0xCC002038 => Vi.di2 {
         #[bits(0..=9, alias = "hct")] pub horizontal_count: u16,
         #[bits(16..=25, alias = "vct")] pub vertical_count: u16,
         #[bits(28, alias = "enb")] pub enable: bool,
         #[bits(31, alias = "int")] pub interrupt: bool,
-    }
-}
-
-impl MmioAccess<Vi> for DisplayInterrupt2 {
-    fn read(dev: &Vi) -> Self {
-        dev.di2
-    }
-    fn write(self, dev: &mut Vi) {
-        dev.di2 = write_di(dev.di2, self);
     }
 }
 
 // 0xCC00203C	4	R/W	DI3 - Display Interrupt 3
 
 crate::mmio_register! {
-    DisplayInterrupt3: u32 @ 0xCC00203C {
+    DisplayInterrupt3: u32 @ 0xCC00203C => Vi.di3 {
         #[bits(0..=9, alias = "hct")] pub horizontal_count: u16,
         #[bits(16..=25, alias = "vct")] pub vertical_count: u16,
         #[bits(28, alias = "enb")] pub enable: bool,
         #[bits(31, alias = "int")] pub interrupt: bool,
-    }
-}
-
-impl MmioAccess<Vi> for DisplayInterrupt3 {
-    fn read(dev: &Vi) -> Self {
-        dev.di3
-    }
-    fn write(self, dev: &mut Vi) {
-        dev.di3 = write_di(dev.di3, self);
     }
 }
 
