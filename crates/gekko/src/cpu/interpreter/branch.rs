@@ -1,6 +1,9 @@
 use crate::cpu::condition::BranchControl;
 
 pub fn branch<const OP: u32>(ctx: &mut crate::gekko::Gekko, instr: crate::cpu::semantics::Instruction) {
+    // Read LR before potentially overwriting LR with CIA+4 (matters for blrl/bctrl)
+    let old_lr = ctx.cpu.spr.lr;
+
     if instr.lk() {
         ctx.cpu.spr.lr = ctx.cpu.cia.wrapping_add(4);
     }
@@ -34,7 +37,7 @@ pub fn branch<const OP: u32>(ctx: &mut crate::gekko::Gekko, instr: crate::cpu::s
             }
 
             match OP {
-                crate::cpu::lut::OP_BCLRX => ctx.cpu.nia = ctx.cpu.spr.lr,
+                crate::cpu::lut::OP_BCLRX => ctx.cpu.nia = old_lr,
                 crate::cpu::lut::OP_BCX => {
                     ctx.cpu.nia = if instr.aa() {
                         instr.bd() as u32
