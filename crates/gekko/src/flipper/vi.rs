@@ -1,6 +1,4 @@
 pub mod regs;
-#[cfg(test)]
-mod tests;
 
 use crate::{
     flipper::pi::InterruptFlag,

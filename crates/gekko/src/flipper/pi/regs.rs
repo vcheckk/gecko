@@ -1,5 +1,4 @@
 use super::Pi;
-use crate::mmio::traits::MmioRegister;
 
 // 0xCC003000  4  r    INTSR - Interrupt Cause
 
@@ -56,15 +55,13 @@ impl crate::mmio::traits::MmioAccess<Pi> for InterruptCause {
     fn read(dev: &Pi) -> Self {
         dev.intsr
     }
-    fn write(self, dev: &mut Pi) {
-        dev.intsr = self;
-    }
 
-    fn read_at(dev: &mut Pi, addr: u32, access_size: u32) -> u32 {
-        let val = Self::read_sub(dev.intsr.to_raw(), addr, access_size);
-        // TODO: What should we reset??
-        dev.intsr = InterruptCause::default();
-        val
+    fn write(self, dev: &mut Pi) {
+        // yagcd seems to be wrong, we should not
+        // clear everything on read, but just usual w1c instead
+        const RSWST_MASK: u32 = 1 << 16;
+        let cleared = dev.intsr.raw() & !self.raw();
+        dev.intsr = InterruptCause::from_raw(cleared | (dev.intsr.raw() & RSWST_MASK));
     }
 }
 

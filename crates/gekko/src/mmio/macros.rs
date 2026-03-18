@@ -15,6 +15,13 @@ macro_rules! impl_mmio_dispatch {
         #[inline]
         fn write_raw(&mut self, addr: u32, access_size: u32, val: u32) -> bool {
             $(if <$reg>::fits(addr, access_size) {
+                tracing::debug!(
+                    reg = stringify!($reg),
+                    addr = format!("{addr:08X}"),
+                    val = format!("{val:08X}"),
+                    size = access_size,
+                    "MMIO write"
+                );
                 <$reg>::write_at(self, addr, access_size, val);
                 return true;
             })*

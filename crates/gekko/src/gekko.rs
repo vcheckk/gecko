@@ -1,12 +1,7 @@
 use crate::{
     cpu::{self, Cpu, IPL_RESET_VECTOR, semantics::Instruction},
     exi::Exi,
-    flipper::{
-        dsp::Dsp,
-        gx::Gx,
-        pi::{InterruptFlag, Pi},
-        vi::Vi,
-    },
+    flipper::{dsp::Dsp, gx::Gx, pe::Pe, pi::Pi, vi::Vi},
     idle::{IDLE_LOOP_MAX_INSTRS, IdleCheck, IdleDetector},
     mmio::Mmio,
     scheduler::{CYCLES_PER_VSYNC, EventKind, Scheduler},
@@ -19,6 +14,7 @@ pub struct Gekko {
     pub scheduler: Scheduler,
     pub mmio: Mmio,
     pub vi: Vi,
+    pub pe: Pe,
     pub pi: Pi,
     pub dsp: Dsp,
     pub exi: Exi,
@@ -34,6 +30,7 @@ impl Gekko {
             scheduler: Scheduler::new(),
             mmio: Mmio::new(),
             vi: Vi::new(),
+            pe: Pe::new(),
             pi: Pi::new(),
             dsp: Dsp::new(),
             exi: Exi::dummy(),
@@ -113,7 +110,6 @@ impl Gekko {
             match event {
                 EventKind::VSync => {
                     self.vsync_pending = true;
-                    self.pi.assert_interrupt(InterruptFlag::Vi);
                     let next = self.scheduler.cycles + CYCLES_PER_VSYNC;
                     self.scheduler.schedule_at(next, EventKind::VSync);
                 }
@@ -122,6 +118,12 @@ impl Gekko {
                     self.vi.half_line_scheduled = false;
                     self.maybe_schedule_vi_half_line();
                     self.check_vi_interrupts();
+                    // TODO: clear DI INT bits after propagation so they
+                    // dont reassert INTSR.Vi on every subsequent halfline?
+                    self.vi.di0.set_interrupt(false);
+                    self.vi.di1.set_interrupt(false);
+                    self.vi.di2.set_interrupt(false);
+                    self.vi.di3.set_interrupt(false);
                 }
             }
         }

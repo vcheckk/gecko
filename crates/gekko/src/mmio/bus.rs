@@ -3,14 +3,15 @@ use crate::{
     mmio::{
         Mmio,
         constants::{
-            DSP_BASE, DSP_END, EXI_BASE, EXI_END, GX_FIFO_BASE, GX_FIFO_END, IPL_BASE, IPL_END, PI_BASE, PI_END,
-            VI_BASE, VI_END,
+            DSP_BASE, DSP_END, EXI_BASE, EXI_END, GX_FIFO_BASE, GX_FIFO_END, IPL_BASE, IPL_END, PE_BASE, PE_END,
+            PI_BASE, PI_END, VI_BASE, VI_END,
         },
     },
 };
 
 enum BusTarget {
     Vi,
+    Pe,
     Pi,
     Dsp,
     Exi,
@@ -23,6 +24,7 @@ enum BusTarget {
 fn route(phys: u32) -> (BusTarget, u32) {
     match phys {
         VI_BASE..=VI_END            => (BusTarget::Vi,  phys - VI_BASE),
+        PE_BASE..=PE_END            => (BusTarget::Pe,  phys - PE_BASE),
         PI_BASE..=PI_END            => (BusTarget::Pi,  phys - PI_BASE),
         DSP_BASE..=DSP_END          => (BusTarget::Dsp, phys - DSP_BASE),
         EXI_BASE..=EXI_END          => (BusTarget::Exi, phys - EXI_BASE),
@@ -46,6 +48,7 @@ impl Gekko {
                 }
                 self.vi.mmio_read_u8(offset)
             }
+            BusTarget::Pe       => self.pe.mmio_read_u8(offset),
             BusTarget::Pi       => self.pi.mmio_read_u8(offset),
             BusTarget::Dsp      => self.dsp.mmio_read_u8(offset),
             BusTarget::Exi      => self.exi.mmio_read_u8(offset),
@@ -68,6 +71,7 @@ impl Gekko {
                 }
                 self.vi.mmio_read_u16(offset)
             }
+            BusTarget::Pe       => self.pe.mmio_read_u16(offset),
             BusTarget::Pi       => self.pi.mmio_read_u16(offset),
             BusTarget::Dsp      => self.dsp.mmio_read_u16(offset),
             BusTarget::Exi      => self.exi.mmio_read_u16(offset),
@@ -92,6 +96,7 @@ impl Gekko {
                 }
                 self.vi.mmio_read_u32(offset)
             }
+            BusTarget::Pe       => self.pe.mmio_read_u32(offset),
             BusTarget::Pi       => self.pi.mmio_read_u32(offset),
             BusTarget::Dsp      => self.dsp.mmio_read_u32(offset),
             BusTarget::Exi      => self.exi.mmio_read_u32(offset),
@@ -114,6 +119,10 @@ impl Gekko {
                 if (0x30..=0x3F).contains(&offset) {
                     self.check_vi_interrupts();
                 }
+            }
+            BusTarget::Pe       => {
+                self.pe.mmio_write_u8(offset, val);
+                self.check_pe_interrupts();
             }
             BusTarget::Pi       => self.pi.mmio_write_u8(offset, val),
             BusTarget::Dsp      => {
@@ -150,6 +159,10 @@ impl Gekko {
                     self.check_vi_interrupts();
                 }
             }
+            BusTarget::Pe       => {
+                self.pe.mmio_write_u16(offset, val);
+                self.check_pe_interrupts();
+            }
             BusTarget::Pi       => self.pi.mmio_write_u16(offset, val),
             BusTarget::Dsp      => {
                 self.dsp.mmio_write_u16(offset, val);
@@ -185,6 +198,10 @@ impl Gekko {
                 if (0x30..=0x3F).contains(&offset) {
                     self.check_vi_interrupts();
                 }
+            }
+            BusTarget::Pe       => {
+                self.pe.mmio_write_u32(offset, val);
+                self.check_pe_interrupts();
             }
             BusTarget::Pi       => self.pi.mmio_write_u32(offset, val),
             BusTarget::Dsp      => {

@@ -4,7 +4,6 @@ pub mod fifo;
 pub mod math;
 pub mod regs;
 
-use super::pi::InterruptFlag;
 use crate::{
     flipper::gx::{
         constants::{
@@ -754,11 +753,12 @@ fn read_index(cur: &mut Cursor<&Vec<u8>>, attr: regs::AttributeType) -> usize {
 }
 
 impl Gekko {
-    /// Check if the GX stub detected a finish command and assert the PI interrupt
+    /// Check if the GX stub detected a finish command and signal PE
     pub fn check_gx_pe_finish(&mut self) {
         if self.gx.raise_interrupt {
             self.gx.raise_interrupt = false;
-            self.pi.assert_interrupt(InterruptFlag::PeFinish);
+            self.pe.signal_finish();
         }
+        self.check_pe_interrupts();
     }
 }
