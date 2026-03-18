@@ -94,11 +94,6 @@ impl Gekko {
             }
         }
 
-        let (bss_start, bss_size) = dol.bss();
-        for i in 0..bss_size {
-            gekko.mmio.virt_write_u8(bss_start + i, 0);
-        }
-
         gekko.mmio.ipl = ipl.to_vec();
         gekko
     }
