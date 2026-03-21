@@ -475,14 +475,6 @@ impl ApplicationHandler for App {
 }
 
 fn main() {
-    tracing_subscriber::fmt()
-        .without_time()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn")),
-        )
-        .init();
-
     let args: Vec<String> = env::args().collect();
 
     let present_mode = std::env::args()
@@ -497,6 +489,17 @@ fn main() {
         .position(|a| a == "--rom")
         .map(|i| &args[i + 1])
         .or_else(|| args.get(1).filter(|a| !a.starts_with("--")));
+
+    let no_ansi = std::env::args().any(|arg| arg == "--no-ansi");
+
+    tracing_subscriber::fmt()
+        .without_time()
+        .with_ansi(!no_ansi)
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn")),
+        )
+        .init();
 
     let mut emulator = if let Some(ipl) = ipl_path {
         let ipl_data = std::fs::read(ipl).expect("failed to read IPL");

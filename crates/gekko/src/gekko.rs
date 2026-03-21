@@ -112,6 +112,9 @@ impl Gekko {
             ExiMacronix::DEVICE,
             Box::new(ExiMacronix::new(ipl.to_vec())),
         );
+        // TODO: this makes 0x8130107C (NTSC BS2) exit the DVD state machine
+        // as it forces it to enter "state 19"
+        gekko.open_cover();
         gekko
     }
 
@@ -142,9 +145,13 @@ impl Gekko {
         }
 
         // TODO: hack IPL state machine
-        if self.cpu.pc == 0x81301284 {
-            self.cpu.pc += 4;
-        }
+        // if self.cpu.pc == 0x81301284 {
+        //     self.cpu.pc += 4;
+        // }
+
+        // if self.cpu.pc == 0x81300BD8 {
+        //     self.cpu.pc += 4;
+        // }
 
         // Fetch and execute next instruction
         self.cpu.cia = self.cpu.pc;

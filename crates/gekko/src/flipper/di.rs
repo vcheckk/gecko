@@ -73,4 +73,10 @@ impl crate::gekko::Gekko {
             self.pi.clear_interrupt(crate::flipper::pi::InterruptFlag::Di);
         }
     }
+
+    pub fn open_cover(&mut self) {
+        tracing::debug!("DVD drive cover opened");
+        self.di.cover = self.di.cover.with_cover_interrupt(true).with_cover_status(true);
+        self.check_di_interrupts();
+    }
 }

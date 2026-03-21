@@ -38,6 +38,10 @@ struct Args {
     /// Skip idle loops to speed up emulation
     #[arg(long)]
     idle_skip: bool,
+
+    /// Disable ANSI escape codes
+    #[arg(long)]
+    no_ansi: bool,
 }
 
 fn parse_hex_addr(s: &str) -> Result<u32, String> {
@@ -49,6 +53,7 @@ fn main() {
 
     tracing_subscriber::fmt()
         .without_time()
+        .with_ansi(!args.no_ansi)
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn")),
