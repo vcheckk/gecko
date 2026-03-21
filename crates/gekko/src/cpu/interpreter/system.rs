@@ -21,10 +21,22 @@ pub fn msr<const OP: u32>(ctx: &mut crate::gekko::Gekko, instr: crate::cpu::sema
 pub fn spr<const OP: u32>(ctx: &mut crate::gekko::Gekko, instr: crate::cpu::semantics::Instruction) {
     match OP {
         crate::cpu::lut::OP_MTSPR => {
-            ctx.cpu.spr.write(instr.spr_swapped(), ctx.cpu.read_gpr(instr.rs()));
+            let spr_num = instr.spr_swapped();
+            let val = ctx.cpu.read_gpr(instr.rs());
+            match spr_num {
+                284 => ctx.scheduler.set_timebase_lower(val),
+                285 => ctx.scheduler.set_timebase_upper(val),
+                _ => ctx.cpu.spr.write(spr_num, val),
+            }
         }
         crate::cpu::lut::OP_MFSPR => {
-            ctx.cpu.write_gpr(instr.rd(), ctx.cpu.spr.read(instr.spr_swapped()));
+            let spr_num = instr.spr_swapped();
+            let val = match spr_num {
+                268 => ctx.scheduler.timebase_lower(),
+                269 => ctx.scheduler.timebase_upper(),
+                _ => ctx.cpu.spr.read(spr_num),
+            };
+            ctx.cpu.write_gpr(instr.rd(), val);
         }
         _ => todo!("SPR instruction with OP = {OP:#x}"),
     }
@@ -45,8 +57,8 @@ pub fn segment<const OP: u32>(ctx: &mut crate::gekko::Gekko, instr: crate::cpu::
 pub fn mftb(ctx: &mut crate::gekko::Gekko, instr: crate::cpu::semantics::Instruction) {
     let tbr = instr.spr_swapped();
     let val = match tbr {
-        268 => ctx.scheduler.cycles as u32,         // TBL
-        269 => (ctx.scheduler.cycles >> 32) as u32, // TBU
+        268 => ctx.scheduler.timebase_lower(),
+        269 => ctx.scheduler.timebase_upper(),
         _ => panic!("unknown TBR {tbr}"),
     };
     ctx.cpu.write_gpr(instr.rd(), val);
