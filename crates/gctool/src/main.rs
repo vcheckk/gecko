@@ -2,11 +2,10 @@ mod cli;
 mod disassembly;
 mod dol;
 mod ipl;
+mod iso;
 
 use crate::cli::{Args, Command, DisasmArch};
 use crate::disassembly::{disassemble_dsp, disassemble_ppc};
-use crate::dol::info;
-use crate::ipl::process_ipl;
 
 use clap::Parser;
 use std::fs;
@@ -24,7 +23,7 @@ fn main() {
 
     match &args.command {
         Command::Info { file } => {
-            info(read_file_or_exit(file));
+            dol::info(read_file_or_exit(file));
         }
         Command::Disasm { arch, offset, file } => {
             let data = read_file_or_exit(file);
@@ -45,7 +44,10 @@ fn main() {
             }
         }
         Command::Ipl { action, file, output } => {
-            process_ipl(file, output.as_deref(), *action);
+            ipl::process(file, output.as_deref(), *action);
+        }
+        Command::Iso { file } => {
+            iso::info(read_file_or_exit(file));
         }
     }
 }

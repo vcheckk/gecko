@@ -70,7 +70,7 @@ fn is_encoded(data: &[u8]) -> bool {
     w != 0x3C800011
 }
 
-pub fn process_ipl(file: &str, output: Option<&str>, action: IplAction) {
+pub fn process(file: &str, output: Option<&str>, action: IplAction) {
     let mut data = fs::read(file).unwrap_or_else(|e| {
         eprintln!("failed to read {}: {}", file, e);
         process::exit(1);

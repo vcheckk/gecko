@@ -1,3 +1,4 @@
+pub mod dvd;
 pub mod elf;
 pub mod symbols;
 

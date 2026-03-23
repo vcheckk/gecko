@@ -48,6 +48,11 @@ pub enum Command {
         /// Output file path (defaults to <name>.encoded.bin or <name>.decoded.bin)
         output: Option<String>,
     },
+    /// Dump ISO file information
+    Iso {
+        /// Input ISO file
+        file: String,
+    },
 }
 
 #[derive(Parser)]
