@@ -2,7 +2,7 @@
 use crate::scripting::{HookFlags, ScriptHookFilters, ScriptHookState, ScriptHost};
 use crate::{
     cpu::{self, Cpu, IPL_RESET_VECTOR, semantics::Instruction},
-    di::DvdInterface,
+    dvd::DvdInterface,
     flipper::{
         ai::AudioInterface,
         cp::CommandProcessor,

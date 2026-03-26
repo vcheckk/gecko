@@ -1,5 +1,5 @@
 pub mod cpu;
-pub mod di;
+pub mod dvd;
 pub mod flipper;
 pub mod gamecube;
 pub mod idle;
