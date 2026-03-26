@@ -1,4 +1,4 @@
-use gekko::cpu::condition::ConditionRegister;
+use gecko::cpu::condition::ConditionRegister;
 
 #[derive(Clone, Copy)]
 pub struct CpuSnapshot {
@@ -10,7 +10,7 @@ pub struct CpuSnapshot {
 }
 
 impl CpuSnapshot {
-    pub fn from_cpu(cpu: &gekko::cpu::Cpu) -> Self {
+    pub fn from_cpu(cpu: &gecko::cpu::Cpu) -> Self {
         Self {
             gprs: cpu.gprs,
             fprs: cpu.fprs,

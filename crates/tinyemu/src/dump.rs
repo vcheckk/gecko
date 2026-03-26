@@ -1,5 +1,5 @@
 use colored::Colorize;
-use gekko::flipper::exi::regs::TransferType;
+use gecko::flipper::exi::regs::TransferType;
 
 use crate::snaptshot::CpuSnapshot;
 
@@ -45,7 +45,7 @@ pub fn registers(curr: &CpuSnapshot, prev: &CpuSnapshot) {
     ];
 
     let fmt_cr_field =
-        |label: &str, val: gekko::cpu::condition::ConditionField, prev_val: gekko::cpu::condition::ConditionField| {
+        |label: &str, val: gecko::cpu::condition::ConditionField, prev_val: gecko::cpu::condition::ConditionField| {
             let flags = format!(
                 "{}{}{}{}",
                 if val.lt() { "L" } else { "·" },
@@ -70,7 +70,7 @@ pub fn registers(curr: &CpuSnapshot, prev: &CpuSnapshot) {
     println!();
 }
 
-pub fn memory(mmio: &gekko::mmio::Mmio, addr: u32) {
+pub fn memory(mmio: &gecko::mmio::Mmio, addr: u32) {
     let aligned_addr = addr & !0xF;
     let start = aligned_addr.wrapping_sub(0x40);
     let data = mmio.virt_slice(start, 0x80);
@@ -90,7 +90,7 @@ pub fn memory(mmio: &gekko::mmio::Mmio, addr: u32) {
     }
 }
 
-pub fn vi(vi: &gekko::flipper::vi::VideoInterface) {
+pub fn vi(vi: &gecko::flipper::vi::VideoInterface) {
     println!("Display Configuration: {:?}", vi.dcr);
     println!("Bottom Field Base: {:08X?}", vi.bfbl);
     println!("Top Field Base: {:08X?}", vi.tfbl);
@@ -192,7 +192,7 @@ fn exi_channel(ch: &ExiChannelView) {
     println!("    Immediate Data:       0x{:08X}", ch.immediate_data);
 }
 
-pub fn exi(exi: &gekko::flipper::exi::ExternalInterface) {
+pub fn exi(exi: &gecko::flipper::exi::ExternalInterface) {
     println!("EXI:");
     exi_channel(&ExiChannelView {
         name: "Channel 0",

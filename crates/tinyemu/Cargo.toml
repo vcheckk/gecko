@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-gekko = { path = "../gekko" }
+gecko = { path = "../gecko" }
 image = { path = "../image" }
 colored = "3.1.1"
 disasm = { path = "../disasm" }

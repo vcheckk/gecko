@@ -1,6 +1,6 @@
 use egui::{Align, Color32, Context, Grid, RichText, ScrollArea};
-use gekko::cpu::Cpu;
-use gekko::mmio::Mmio;
+use gecko::cpu::Cpu;
+use gecko::mmio::Mmio;
 
 fn token_color(token: &disasm::tokenizer::AsmToken<'_>) -> Option<Color32> {
     use disasm::tokenizer::AsmToken;

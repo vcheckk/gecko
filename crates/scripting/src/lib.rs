@@ -5,8 +5,8 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
-use gekko::gekko::Gekko;
-use gekko::scripting::{AddressFilter, BusAddressFilter, HookFlags, ScriptHookFilters, ScriptHookState, ScriptHost};
+use gecko::gamecube::GameCube;
+use gecko::scripting::{AddressFilter, BusAddressFilter, HookFlags, ScriptHookFilters, ScriptHookState, ScriptHost};
 use mlua::{Function, Lua, RegistryKey, Result as LuaResult, Table, UserDataMethods, Value};
 
 pub struct LuaScriptHost {
@@ -207,7 +207,7 @@ impl LuaScriptHost {
         Ok(state)
     }
 
-    fn register_emu_methods(methods: &mut impl UserDataMethods<GekkoRef>) {
+    fn register_emu_methods(methods: &mut impl UserDataMethods<GameCubeRef>) {
         methods.add_method("gpr", |_, this, i: u8| Ok(this.cpu.read_gpr(i)));
         methods.add_method_mut("set_gpr", |_, this, (i, val): (u8, u32)| {
             this.cpu.write_gpr(i, val);
@@ -275,14 +275,14 @@ impl LuaScriptHost {
             Ok(())
         });
         methods.add_method("virt_to_phys", |_, _this, addr: u32| {
-            Ok(gekko::mmio::Mmio::virt_to_phys(addr))
+            Ok(gecko::mmio::Mmio::virt_to_phys(addr))
         });
     }
 
-    fn call_cpu_hook(&self, hook_name: &str, callback: &LuaCallback, emu: &mut Gekko) -> LuaResult<()> {
+    fn call_cpu_hook(&self, hook_name: &str, callback: &LuaCallback, emu: &mut GameCube) -> LuaResult<()> {
         self.lua
             .scope(|scope| {
-                let ud = scope.create_userdata(GekkoRef(emu as *mut Gekko))?;
+                let ud = scope.create_userdata(GameCubeRef(emu as *mut GameCube))?;
                 let func = callback.resolve(&self.lua)?;
                 func.call::<()>(&ud)
             })
@@ -293,14 +293,14 @@ impl LuaScriptHost {
         &self,
         hook_name: &str,
         callback: &LuaCallback,
-        emu: &mut Gekko,
+        emu: &mut GameCube,
         virt_addr: u32,
         phys_addr: u32,
         size: u8,
     ) -> LuaResult<Option<u32>> {
         self.lua
             .scope(|scope| {
-                let ud = scope.create_userdata(GekkoRef(emu as *mut Gekko))?;
+                let ud = scope.create_userdata(GameCubeRef(emu as *mut GameCube))?;
                 let func = callback.resolve(&self.lua)?;
                 func.call::<Option<u32>>((&ud, virt_addr, phys_addr, size))
             })
@@ -311,7 +311,7 @@ impl LuaScriptHost {
         &self,
         hook_name: &str,
         callback: &LuaCallback,
-        emu: &mut Gekko,
+        emu: &mut GameCube,
         virt_addr: u32,
         phys_addr: u32,
         size: u8,
@@ -319,7 +319,7 @@ impl LuaScriptHost {
     ) -> LuaResult<()> {
         self.lua
             .scope(|scope| {
-                let ud = scope.create_userdata(GekkoRef(emu as *mut Gekko))?;
+                let ud = scope.create_userdata(GameCubeRef(emu as *mut GameCube))?;
                 let func = callback.resolve(&self.lua)?;
                 func.call::<()>((&ud, virt_addr, phys_addr, size, value))
             })
@@ -330,7 +330,7 @@ impl LuaScriptHost {
         &self,
         hook_name: &str,
         callback: &LuaCallback,
-        emu: &mut Gekko,
+        emu: &mut GameCube,
         virt_addr: u32,
         phys_addr: u32,
         size: u8,
@@ -338,7 +338,7 @@ impl LuaScriptHost {
     ) -> LuaResult<Option<u32>> {
         self.lua
             .scope(|scope| {
-                let ud = scope.create_userdata(GekkoRef(emu as *mut Gekko))?;
+                let ud = scope.create_userdata(GameCubeRef(emu as *mut GameCube))?;
                 let func = callback.resolve(&self.lua)?;
                 func.call::<Option<u32>>((&ud, virt_addr, phys_addr, size, value))
             })
@@ -349,7 +349,7 @@ impl LuaScriptHost {
         &self,
         hook_name: &str,
         callback: &LuaCallback,
-        emu: &mut Gekko,
+        emu: &mut GameCube,
         virt_addr: u32,
         phys_addr: u32,
         size: u8,
@@ -357,7 +357,7 @@ impl LuaScriptHost {
     ) -> LuaResult<()> {
         self.lua
             .scope(|scope| {
-                let ud = scope.create_userdata(GekkoRef(emu as *mut Gekko))?;
+                let ud = scope.create_userdata(GameCubeRef(emu as *mut GameCube))?;
                 let func = callback.resolve(&self.lua)?;
                 func.call::<()>((&ud, virt_addr, phys_addr, size, value))
             })
@@ -439,26 +439,26 @@ fn parse_address_key(value: Value, context: &str) -> LuaResult<u32> {
     }
 }
 
-struct GekkoRef(*mut Gekko);
+struct GameCubeRef(*mut GameCube);
 
-unsafe impl Send for GekkoRef {}
+unsafe impl Send for GameCubeRef {}
 
-impl mlua::UserData for GekkoRef {
+impl mlua::UserData for GameCubeRef {
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
         LuaScriptHost::register_emu_methods(methods);
     }
 }
 
-impl std::ops::Deref for GekkoRef {
-    type Target = Gekko;
+impl std::ops::Deref for GameCubeRef {
+    type Target = GameCube;
 
-    fn deref(&self) -> &Gekko {
+    fn deref(&self) -> &GameCube {
         unsafe { &*self.0 }
     }
 }
 
-impl std::ops::DerefMut for GekkoRef {
-    fn deref_mut(&mut self) -> &mut Gekko {
+impl std::ops::DerefMut for GameCubeRef {
+    fn deref_mut(&mut self) -> &mut GameCube {
         unsafe { &mut *self.0 }
     }
 }
@@ -492,7 +492,7 @@ impl ScriptHost for LuaScriptHost {
         self.reload_dispatches().map(Some).map_err(|err| err.to_string())
     }
 
-    fn on_cpu_pre(&mut self, emu: &mut Gekko) {
+    fn on_cpu_pre(&mut self, emu: &mut GameCube) {
         let pc = emu.cpu.pc;
         if let Some(callback) = self.cpu_pre.get(&pc) {
             if let Err(err) = self.call_cpu_hook("cpu_pre", callback, emu) {
@@ -501,7 +501,7 @@ impl ScriptHost for LuaScriptHost {
         }
     }
 
-    fn on_cpu_post(&mut self, emu: &mut Gekko) {
+    fn on_cpu_post(&mut self, emu: &mut GameCube) {
         let pc = emu.cpu.cia;
         if let Some(callback) = self.cpu_post.get(&pc) {
             if let Err(err) = self.call_cpu_hook("cpu_post", callback, emu) {
@@ -510,7 +510,7 @@ impl ScriptHost for LuaScriptHost {
         }
     }
 
-    fn on_bus_read_pre(&mut self, emu: &mut Gekko, virt_addr: u32, phys_addr: u32, size: u8) -> Option<u32> {
+    fn on_bus_read_pre(&mut self, emu: &mut GameCube, virt_addr: u32, phys_addr: u32, size: u8) -> Option<u32> {
         let callback = self.bus_read_pre.resolve(virt_addr, phys_addr)?;
         match self.call_bus_read_pre_hook("bus_read_pre", callback, emu, virt_addr, phys_addr, size) {
             Ok(value) => value,
@@ -521,7 +521,7 @@ impl ScriptHost for LuaScriptHost {
         }
     }
 
-    fn on_bus_read_post(&mut self, emu: &mut Gekko, virt_addr: u32, phys_addr: u32, size: u8, value: u32) {
+    fn on_bus_read_post(&mut self, emu: &mut GameCube, virt_addr: u32, phys_addr: u32, size: u8, value: u32) {
         if let Some(callback) = self.bus_read_post.resolve(virt_addr, phys_addr) {
             if let Err(err) =
                 self.call_bus_read_post_hook("bus_read_post", callback, emu, virt_addr, phys_addr, size, value)
@@ -531,7 +531,7 @@ impl ScriptHost for LuaScriptHost {
         }
     }
 
-    fn on_bus_write_pre(&mut self, emu: &mut Gekko, virt_addr: u32, phys_addr: u32, size: u8, value: u32) -> u32 {
+    fn on_bus_write_pre(&mut self, emu: &mut GameCube, virt_addr: u32, phys_addr: u32, size: u8, value: u32) -> u32 {
         let Some(callback) = self.bus_write_pre.resolve(virt_addr, phys_addr) else {
             return value;
         };
@@ -546,7 +546,7 @@ impl ScriptHost for LuaScriptHost {
         }
     }
 
-    fn on_bus_write_post(&mut self, emu: &mut Gekko, virt_addr: u32, phys_addr: u32, size: u8, value: u32) {
+    fn on_bus_write_post(&mut self, emu: &mut GameCube, virt_addr: u32, phys_addr: u32, size: u8, value: u32) {
         if let Some(callback) = self.bus_write_post.resolve(virt_addr, phys_addr) {
             if let Err(err) =
                 self.call_bus_write_post_hook("bus_write_post", callback, emu, virt_addr, phys_addr, size, value)

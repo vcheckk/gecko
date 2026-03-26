@@ -8,8 +8,8 @@ use winit::{
     window::{Window, WindowId},
 };
 
-use gekko::flipper::si::pad::{self, PadStatus, STICK_CENTER};
-use gekko::gekko::Gekko;
+use gecko::flipper::si::pad::{self, PadStatus, STICK_CENTER};
+use gecko::gamecube::GameCube;
 use image::Dol;
 
 use crate::debugger::DebuggerUi;
@@ -20,7 +20,7 @@ mod render;
 mod windows;
 
 struct App {
-    emulator: Gekko,
+    emulator: GameCube,
     ui: DebuggerUi,
     window: Option<Arc<Window>>,
     state: Option<RenderState>,
@@ -31,7 +31,7 @@ impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         let window = Arc::new(
             event_loop
-                .create_window(Window::default_attributes().with_title("Gekko"))
+                .create_window(Window::default_attributes().with_title("Gecko"))
                 .unwrap(),
         );
 
@@ -99,11 +99,11 @@ fn main() {
 
     let mut emulator = if let Some(ipl) = ipl_path {
         let ipl_data = std::fs::read(ipl).expect("failed to read IPL");
-        Gekko::with_ipl(&ipl_data, idle_skip)
+        GameCube::with_ipl(&ipl_data, idle_skip)
     } else if let Some(rom) = rom_path {
         let rom_data = std::fs::read(rom).expect("failed to read ROM");
         let dol = Dol::parse(rom_data);
-        Gekko::with_image(&dol, idle_skip)
+        GameCube::with_image(&dol, idle_skip)
     } else {
         eprintln!(
             "usage: {} <path/to/game.dol> | --ipl <path> | --rom <path> [--immediate] [--idle-skip]",

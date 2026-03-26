@@ -9,7 +9,7 @@ use disasm::gekko::GekkoInstruction;
 use snaptshot::CpuSnapshot;
 
 #[derive(Parser)]
-#[command(about = "Gekko CPU emulator / debugger")]
+#[command(about = "GameCube emulator")]
 struct Args {
     /// Path to the ROM/DOL file
     #[arg(long)]
@@ -60,13 +60,13 @@ fn main() {
         )
         .init();
 
-    let mut gekko = if let Some(rom_path) = &args.rom {
+    let mut emulator = if let Some(rom_path) = &args.rom {
         let rom_data = std::fs::read(rom_path).expect("failed to read ROM");
         let dol = image::Dol::parse(rom_data);
-        gekko::gekko::Gekko::with_image(&dol, args.idle_skip)
+        gecko::gamecube::GameCube::with_image(&dol, args.idle_skip)
     } else if let Some(ipl_path) = &args.ipl {
         let ipl_data = std::fs::read(ipl_path).expect("failed to read IPL");
-        gekko::gekko::Gekko::with_ipl(&ipl_data, args.idle_skip)
+        gecko::gamecube::GameCube::with_ipl(&ipl_data, args.idle_skip)
     } else {
         panic!("Either --rom or --ipl must be provided");
     };
@@ -76,29 +76,29 @@ fn main() {
         image::elf::parse_elf_symbols(&elf_data).expect("failed to parse ELF symbols")
     });
 
-    run_emulator(&mut gekko, &args, symbols.as_ref());
+    run_emulator(&mut emulator, &args, symbols.as_ref());
 
     if !args.quiet {
-        dump::vi(&gekko.vi);
-        dump::exi(&gekko.exi);
+        dump::vi(&emulator.vi);
+        dump::exi(&emulator.exi);
         println!("Render current XFB:");
     }
 
-    let pixels = gekko.render_xfb();
-    let video_format = gekko.vi.dcr.video_format();
+    let pixels = emulator.render_xfb();
+    let video_format = emulator.vi.dcr.video_format();
     kitty::render_xfb(&pixels, video_format.columns(), video_format.lines());
 }
 
-fn run_emulator(gekko: &mut gekko::gekko::Gekko, args: &Args, symbols: Option<&image::symbols::SymbolTable>) {
-    let mut prev_snapshot = CpuSnapshot::from_cpu(&gekko.cpu);
-    let mut prev_pc = gekko.cpu.pc;
+fn run_emulator(emulator: &mut gecko::gamecube::GameCube, args: &Args, symbols: Option<&image::symbols::SymbolTable>) {
+    let mut prev_snapshot = CpuSnapshot::from_cpu(&emulator.cpu);
+    let mut prev_pc = emulator.cpu.pc;
     let mut in_busyloop = false;
     let mut current_func: Option<String> = None;
 
     loop {
         if !in_busyloop && !args.quiet {
             if let Some(symbols) = symbols {
-                if let Some(sym) = symbols.lookup_exact(gekko.cpu.pc) {
+                if let Some(sym) = symbols.lookup_exact(emulator.cpu.pc) {
                     if sym.kind == image::symbols::SymbolKind::Func {
                         let name = &sym.name;
                         let changed = current_func.as_ref() != Some(name);
@@ -109,13 +109,13 @@ fn run_emulator(gekko: &mut gekko::gekko::Gekko, args: &Args, symbols: Option<&i
                     }
                 }
             }
-            print_instruction(gekko, &prev_snapshot, args.debug);
+            print_instruction(emulator, &prev_snapshot, args.debug);
         }
 
-        gekko.step();
+        emulator.step();
 
-        let curr_snapshot = CpuSnapshot::from_cpu(&gekko.cpu);
-        let curr_pc = gekko.cpu.pc;
+        let curr_snapshot = CpuSnapshot::from_cpu(&emulator.cpu);
+        let curr_pc = emulator.cpu.pc;
 
         if curr_pc == prev_pc {
             if !in_busyloop && !args.quiet {
@@ -139,15 +139,15 @@ fn run_emulator(gekko: &mut gekko::gekko::Gekko, args: &Args, symbols: Option<&i
     }
 }
 
-fn print_instruction(gekko: &gekko::gekko::Gekko, prev_snapshot: &CpuSnapshot, debug: bool) {
-    let instr = GekkoInstruction::decode(gekko.mmio.virt_slice(gekko.cpu.pc, 4))
+fn print_instruction(emulator: &gecko::gamecube::GameCube, prev_snapshot: &CpuSnapshot, debug: bool) {
+    let instr = GekkoInstruction::decode(emulator.mmio.virt_slice(emulator.cpu.pc, 4))
         .unwrap_or_else(|| {
             dump::registers(prev_snapshot, prev_snapshot);
-            dump::memory(&gekko.mmio, gekko.cpu.read_gpr(1));
+            dump::memory(&emulator.mmio, emulator.cpu.read_gpr(1));
             panic!(
                 "Failed to decode instruction at {:08X} => {:08X}",
-                gekko.cpu.pc,
-                gekko.mmio.virt_read_u32(gekko.cpu.pc)
+                emulator.cpu.pc,
+                emulator.mmio.virt_read_u32(emulator.cpu.pc)
             );
         })
         .0;
@@ -161,7 +161,7 @@ fn print_instruction(gekko: &gekko::gekko::Gekko, prev_snapshot: &CpuSnapshot, d
     let comment = fmt::reg_comment(&prev_snapshot.gprs, &refs, &prev_snapshot.fprs, &fpr_refs);
     let prefix = format!(
         "{}: {}",
-        format!("{:08X}", gekko.cpu.pc).bold(),
+        format!("{:08X}", emulator.cpu.pc).bold(),
         fmt::colorize_instr(&instr)
     );
 

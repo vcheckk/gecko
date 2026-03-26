@@ -1,8 +1,8 @@
 use egui::{Context, Grid, RichText, ScrollArea};
 use egui_material_icons::icons;
-use gekko::flipper::gx::GraphicsProcessor;
-use gekko::flipper::gx::draw::TextureDescriptor;
-use gekko::mmio::Mmio;
+use gecko::flipper::gx::GraphicsProcessor;
+use gecko::flipper::gx::draw::TextureDescriptor;
+use gecko::mmio::Mmio;
 
 fn texture_preview(ui: &mut egui::Ui, tex: &TextureDescriptor, ram: &[u8]) {
     let rgba = backend_wgpu::texture::decode_to_rgba(ram, tex);

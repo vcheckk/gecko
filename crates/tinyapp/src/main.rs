@@ -1,8 +1,8 @@
 use egui::ViewportId;
 use egui_plot::{Line, Plot, PlotPoints};
-use gekko::flipper::si::pad::{self, PadStatus, STICK_CENTER};
-use gekko::flipper::vi::regs::RefreshRate;
-use gekko::gekko::Gekko;
+use gecko::flipper::si::pad::{self, PadStatus, STICK_CENTER};
+use gecko::flipper::vi::regs::RefreshRate;
+use gecko::gamecube::GameCube;
 use image::Dol;
 use std::collections::VecDeque;
 use std::env;
@@ -40,7 +40,7 @@ struct State {
 }
 
 impl State {
-    fn new(window: Arc<Window>, emulator: &Gekko, present_mode: wgpu::PresentMode) -> Self {
+    fn new(window: Arc<Window>, emulator: &GameCube, present_mode: wgpu::PresentMode) -> Self {
         let (w, h) = emulator.frame_size();
         let (w, h) = (w as u32, h as u32);
 
@@ -185,7 +185,7 @@ impl State {
         self.gx_renderer.resize(&self.device, width, height);
     }
 
-    fn render(&mut self, emulator: &mut Gekko, window: &Window) {
+    fn render(&mut self, emulator: &mut GameCube, window: &Window) {
         // update FPS history
         let delta = self.last_frame.elapsed().as_secs_f64();
         self.last_frame = Instant::now();
@@ -299,7 +299,7 @@ impl State {
         frame.present();
     }
 
-    fn render_gx(&mut self, emulator: &mut Gekko, view: &wgpu::TextureView) {
+    fn render_gx(&mut self, emulator: &mut GameCube, view: &wgpu::TextureView) {
         self.gx_renderer.render(
             &self.device,
             &self.queue,
@@ -312,7 +312,7 @@ impl State {
         emulator.gx.draw_commands.commands.clear();
     }
 
-    fn render_xfb(&mut self, emulator: &Gekko, view: &wgpu::TextureView) {
+    fn render_xfb(&mut self, emulator: &GameCube, view: &wgpu::TextureView) {
         let pixels = emulator.render_xfb();
         let (w, h) = emulator.frame_size();
         let (w, h) = (w as u32, h as u32);
@@ -424,7 +424,7 @@ fn create_xfb_texture(
 }
 
 struct App {
-    emulator: Gekko,
+    emulator: GameCube,
     window: Option<Arc<Window>>,
     state: Option<State>,
     present_mode: wgpu::PresentMode,
@@ -434,7 +434,7 @@ impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         let window = Arc::new(
             event_loop
-                .create_window(Window::default_attributes().with_title("Gekko"))
+                .create_window(Window::default_attributes().with_title("Gecko"))
                 .unwrap(),
         );
 
@@ -505,11 +505,11 @@ fn main() {
 
     let mut emulator = if let Some(ipl) = ipl_path {
         let ipl_data = std::fs::read(ipl).expect("failed to read IPL");
-        Gekko::with_ipl(&ipl_data, idle_skip)
+        GameCube::with_ipl(&ipl_data, idle_skip)
     } else if let Some(rom) = rom_path {
         let rom_data = std::fs::read(rom).expect("failed to read ROM");
         let dol = Dol::parse(rom_data);
-        Gekko::with_image(&dol, idle_skip)
+        GameCube::with_image(&dol, idle_skip)
     } else {
         eprintln!(
             "usage: {} <path/to/game.dol> | --ipl <path> | --rom <path> [--immediate] [--idle-skip]",

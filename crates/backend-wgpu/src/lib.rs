@@ -1,8 +1,8 @@
 mod helpers;
 pub mod texture;
 
-use gekko::flipper::gx::draw::{DrawCall, DrawCommands, Primitive, TextureFormat};
-use gekko::flipper::gx::regs::{BlendFactor, CompareFunc, MagFilter, MinFilter, WrapMode};
+use gecko::flipper::gx::draw::{DrawCall, DrawCommands, Primitive, TextureFormat};
+use gecko::flipper::gx::regs::{BlendFactor, CompareFunc, MagFilter, MinFilter, WrapMode};
 use std::collections::HashMap;
 
 #[repr(C)]
@@ -13,8 +13,8 @@ struct GpuVertex {
     tex0: [f32; 2],
 }
 
-impl From<&gekko::flipper::gx::draw::Vertex> for GpuVertex {
-    fn from(v: &gekko::flipper::gx::draw::Vertex) -> Self {
+impl From<&gecko::flipper::gx::draw::Vertex> for GpuVertex {
+    fn from(v: &gecko::flipper::gx::draw::Vertex) -> Self {
         Self {
             position: v.position,
             color: v.color0,

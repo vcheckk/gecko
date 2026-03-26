@@ -1,7 +1,7 @@
 use egui::{Align, Color32, Context, Grid, Layout, RichText};
 use egui_material_icons::icons;
-use gekko::cpu::Cpu;
-use gekko::flipper::pi::ProcessorInterface;
+use gecko::cpu::Cpu;
+use gecko::flipper::pi::ProcessorInterface;
 
 fn centered_icon(ui: &mut egui::Ui, icon: &str, color: Color32) {
     ui.with_layout(Layout::top_down(Align::Center), |ui| {

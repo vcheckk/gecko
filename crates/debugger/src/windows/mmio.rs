@@ -1,6 +1,6 @@
 use egui::{Context, Grid, ScrollArea};
 use egui_material_icons::icons;
-use gekko::mmio::Mmio;
+use gecko::mmio::Mmio;
 
 pub fn show_mmio(ctx: &Context, open: &mut bool, base: &mut u32, addr_input: &mut String, mmio: &Mmio) {
     egui::Window::new("Memory").open(open).show(ctx, |ui| {

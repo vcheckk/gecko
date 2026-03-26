@@ -4,10 +4,10 @@ version = "0.1.0"
 edition = "2024"
 
 [features]
-scripting-mut-traps = ["gekko/scripting-mut-traps", "scripting/scripting-mut-traps"]
+scripting-mut-traps = ["gecko/scripting-mut-traps", "scripting/scripting-mut-traps"]
 
 [dependencies]
-gekko = { path = "../gekko", features = ["scripting"] }
+gecko = { path = "../gecko", features = ["scripting"] }
 scripting = { path = "../scripting" }
 image = { path = "../image" }
 disasm = { path = "../disasm" }

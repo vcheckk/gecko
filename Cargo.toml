@@ -3,7 +3,7 @@ resolver = "3"
 members = [
     "crates/gctool",
     "crates/disasm",
-    "crates/gekko",
+    "crates/gecko",
     "crates/tinyemu",
     "crates/image",
     "crates/tinyapp",

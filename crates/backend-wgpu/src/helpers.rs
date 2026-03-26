@@ -1,4 +1,4 @@
-use gekko::flipper::gx::regs::{BlendFactor, CompareFunc, MagFilter, MinFilter, WrapMode};
+use gecko::flipper::gx::regs::{BlendFactor, CompareFunc, MagFilter, MinFilter, WrapMode};
 
 pub fn map_wrap_mode(wrap: WrapMode) -> wgpu::AddressMode {
     match wrap {

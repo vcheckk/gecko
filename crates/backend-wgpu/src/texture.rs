@@ -1,4 +1,4 @@
-use gekko::flipper::gx::draw::{TextureDescriptor, TextureFormat};
+use gecko::flipper::gx::draw::{TextureDescriptor, TextureFormat};
 
 pub fn decode_to_rgba(ram: &[u8], desc: &TextureDescriptor) -> Vec<u8> {
     let w = desc.width as usize;

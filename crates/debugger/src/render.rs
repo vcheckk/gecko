@@ -1,5 +1,5 @@
 use egui::ViewportId;
-use gekko::gekko::Gekko;
+use gecko::gamecube::GameCube;
 use std::sync::Arc;
 use winit::window::Window;
 
@@ -26,7 +26,7 @@ pub struct RenderState {
 }
 
 impl RenderState {
-    pub fn new(window: Arc<Window>, emulator: &Gekko, present_mode: wgpu::PresentMode) -> Self {
+    pub fn new(window: Arc<Window>, emulator: &GameCube, present_mode: wgpu::PresentMode) -> Self {
         let (w, h) = emulator.frame_size();
         let (w, h) = (w as u32, h as u32);
 
@@ -173,7 +173,7 @@ impl RenderState {
         self.gx_renderer.resize(&self.device, width, height);
     }
 
-    pub fn render(&mut self, emulator: &mut Gekko, debugger_ui: &mut DebuggerUi, window: &Window) {
+    pub fn render(&mut self, emulator: &mut GameCube, debugger_ui: &mut DebuggerUi, window: &Window) {
         if let Some(open) = debugger_ui.dvd_cover_open.take() {
             if open {
                 emulator.open_cover();
@@ -362,7 +362,7 @@ impl RenderState {
         }
     }
 
-    fn render_gx(&mut self, emulator: &mut Gekko, view: &wgpu::TextureView) {
+    fn render_gx(&mut self, emulator: &mut GameCube, view: &wgpu::TextureView) {
         self.gx_renderer.render(
             &self.device,
             &self.queue,
@@ -374,7 +374,7 @@ impl RenderState {
         );
     }
 
-    fn render_xfb(&mut self, emulator: &Gekko, view: &wgpu::TextureView) {
+    fn render_xfb(&mut self, emulator: &GameCube, view: &wgpu::TextureView) {
         let pixels = emulator.render_xfb();
         let (w, h) = emulator.frame_size();
         let (w, h) = (w as u32, h as u32);

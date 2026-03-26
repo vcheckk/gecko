@@ -1,9 +1,7 @@
 target/
-rsrc/*.dol
-rsrc/*.bin
 .idea/
 .vscode/
 perf.*
 profile.json.gz
 out*.txt
-*-dump/
+private/
