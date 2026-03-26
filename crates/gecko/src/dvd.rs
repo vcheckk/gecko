@@ -132,6 +132,7 @@ impl GameCube {
 
     pub fn complete_dvd_transfer(&mut self) {
         self.di.control.set_tstart(false);
+        self.di.dma_length = regs::DiDmaLengthRegister::from_raw(0);
         self.di.status.set_transfer_complete(true);
         self.check_di_interrupts();
     }
