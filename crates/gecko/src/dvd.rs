@@ -132,6 +132,9 @@ impl GameCube {
 
     pub fn complete_dvd_transfer(&mut self) {
         self.di.control.set_tstart(false);
+        // DMA length tracks the progress of the transfer, so when it hits 0, the transfer is complete
+        // On failure, this would denote how many bytes were not transfered, but we close our eyes
+        // and just hope nothing depends on that!
         self.di.dma_length = regs::DiDmaLengthRegister::from_raw(0);
         self.di.status.set_transfer_complete(true);
         self.check_di_interrupts();
