@@ -137,7 +137,9 @@ impl GameCube {
     }
 
     pub fn insert_dvd(&mut self, dvd: image::dvd::Dvd) {
-        tracing::info!("DVD inserted: {}", String::from_utf8_lossy(&dvd.header.game_name));
+        let name = String::from_utf8_lossy(&dvd.header.game_name);
+        let name = name.trim_end_matches('\0');
+        tracing::info!("DVD inserted: {}", name);
         self.di.dvd = Some(dvd);
         self.close_cover();
     }
