@@ -3,7 +3,13 @@ use egui_material_icons::icons;
 
 use crate::debugger::EmulatorState;
 
-pub fn show_controls(ctx: &Context, open: &mut bool, state: &mut EmulatorState, run_until_addr_input: &mut String) {
+pub fn show_controls(
+    ctx: &Context,
+    open: &mut bool,
+    state: &mut EmulatorState,
+    run_until_addr_input: &mut String,
+    dvd_cover_open: &mut Option<bool>,
+) {
     egui::Window::new("Controls")
         .open(open)
         .resizable(false)
@@ -72,5 +78,21 @@ pub fn show_controls(ctx: &Context, open: &mut bool, state: &mut EmulatorState, 
                     }
                 }
             });
+
+            ui.separator();
+
+            if ui
+                .add(egui::Button::new(format!("{} Open Cover", icons::ICON_EJECT)).min_size(btn_size))
+                .clicked()
+            {
+                *dvd_cover_open = Some(true);
+            }
+
+            if ui
+                .add(egui::Button::new(format!("{} Close Cover", icons::ICON_DISC_FULL)).min_size(btn_size))
+                .clicked()
+            {
+                *dvd_cover_open = Some(false);
+            }
         });
 }

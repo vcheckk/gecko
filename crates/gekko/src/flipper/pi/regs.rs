@@ -131,7 +131,7 @@ impl crate::mmio::traits::MmioAccess<Pi> for ResetCode {
     }
 
     fn write(self, _pi: &mut Pi) {
-        tracing::warn!("resetting console???");
+        tracing::warn!("TODO: reset DVD");
     }
 }
 

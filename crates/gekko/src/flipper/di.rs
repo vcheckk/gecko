@@ -79,4 +79,10 @@ impl crate::gekko::Gekko {
         self.di.cover = self.di.cover.with_cover_interrupt(true).with_cover_status(true);
         self.check_di_interrupts();
     }
+
+    pub fn close_cover(&mut self) {
+        tracing::debug!("DVD drive cover closed");
+        self.di.cover = self.di.cover.with_cover_status(false);
+        self.check_di_interrupts();
+    }
 }

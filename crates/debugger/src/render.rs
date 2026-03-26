@@ -174,6 +174,14 @@ impl RenderState {
     }
 
     pub fn render(&mut self, emulator: &mut Gekko, debugger_ui: &mut DebuggerUi, window: &Window) {
+        if let Some(open) = debugger_ui.dvd_cover_open.take() {
+            if open {
+                emulator.open_cover();
+            } else {
+                emulator.close_cover();
+            }
+        }
+
         match debugger_ui.emulator_state {
             EmulatorState::Running => emulator.run_until_vsync(),
             EmulatorState::Step => {
@@ -277,6 +285,7 @@ impl RenderState {
                     &mut debugger_ui.show_controls,
                     &mut debugger_ui.emulator_state,
                     &mut debugger_ui.run_until_addr_input,
+                    &mut debugger_ui.dvd_cover_open,
                 );
             }
             if debugger_ui.show_gx_state {

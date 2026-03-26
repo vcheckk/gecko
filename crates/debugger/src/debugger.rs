@@ -18,6 +18,7 @@ pub struct DebuggerUi {
     pub memory_base: u32,
     pub memory_addr_input: String,
     pub run_until_addr_input: String,
+    pub dvd_cover_open: Option<bool>,
 }
 
 impl Default for DebuggerUi {
@@ -33,6 +34,7 @@ impl Default for DebuggerUi {
             memory_base: 0x8000_0000,
             memory_addr_input: "80000000".to_string(),
             run_until_addr_input: String::new(),
+            dvd_cover_open: None,
         }
     }
 }
