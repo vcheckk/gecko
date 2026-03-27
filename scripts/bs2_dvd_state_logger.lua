@@ -45,7 +45,7 @@ traps = {
     -- },
     bus_write_pre = {
         virt = {
-             [0x8145d548] = log_state_machine_write,
+            [0x8145d548] = log_state_machine_write,
         },
     },
 }

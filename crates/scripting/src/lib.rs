@@ -159,7 +159,7 @@ impl LuaScriptHost {
         let refresh_requested = Arc::new(AtomicBool::new(false));
 
         let log_fn = lua.create_function(|_, msg: String| {
-            tracing::info!("{}", msg);
+            tracing::info!(target: "lua", "{}", msg);
             Ok(())
         })?;
         lua.globals().set("log", log_fn)?;

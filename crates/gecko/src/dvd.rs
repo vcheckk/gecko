@@ -13,6 +13,8 @@ const DIIMMBUF: u32 = DI_BASE + 0x20;
 
 pub enum Command {
     ReadDiskId,
+    ReadSectorData,
+    AudioToggle(bool),
 }
 
 pub struct DvdInterface {
@@ -59,8 +61,11 @@ impl DvdInterface {
         let sub1 = (self.cmdbuf0 >> 16) & 0xFF;
         let sub2 = self.cmdbuf0 & 0xFFFF;
 
-        match (cmd, sub2) {
-            (0xA8, 0x0040) => Some(Command::ReadDiskId),
+        match (cmd, sub1, sub2) {
+            (0xA8, _, 0x0000)   => Some(Command::ReadSectorData),
+            (0xA8, _, 0x0040)   => Some(Command::ReadDiskId),
+            (0xE4, 0x00, _)     => Some(Command::AudioToggle(false)),
+            (0xE4, 0x01, _)     => Some(Command::AudioToggle(true)),
             _ => {
                 tracing::error!(
                     cmd = format!("{cmd:02X}"),
@@ -80,6 +85,22 @@ impl GameCube {
     #[inline(always)]
     fn process_dvd_command(&mut self, cmd: Command, dvd: &image::dvd::Dvd) {
         match cmd {
+            Command::ReadSectorData => {
+                let src = self.di.cmdbuf1 << 2;
+                let dst = self.di.dma_address.address();
+                let len = self.di.cmdbuf2 as usize;
+                assert!(len == self.di.dma_length.length() as usize, "DMA length mismatch");
+
+                let buffer = self.mmio.phys_slice_mut(dst, len);
+                buffer.copy_from_slice(&dvd.data()[src as usize..src as usize + len]);
+
+                tracing::debug!(
+                    src = format!("{:08X}", src),
+                    dst = format!("{:08X}", dst),
+                    len = format!("{:08X}", len),
+                    "ReadSectorData command"
+                );
+            }
             Command::ReadDiskId => {
                 let src = self.di.cmdbuf1;
                 let dst = self.di.dma_address.address();
@@ -94,6 +115,10 @@ impl GameCube {
                     len = format!("{:08X}", len),
                     "ReadDiskId command"
                 );
+            }
+            Command::AudioToggle(enable) => {
+                tracing::warn!(enable, "AudioToggle stubbed");
+                self.di.immbuf = 0;
             }
         }
     }
