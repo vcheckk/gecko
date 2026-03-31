@@ -4,6 +4,21 @@ use crate::{flipper::dsp::Dsp, mmio::traits::MmioAccess};
 
 // 0xCC00500A 2 [R/W] CSR - DSP Control/Status Register
 
+#[derive(BitEnum, Debug, PartialEq, Eq)]
+pub enum ResetVector {
+    Low = 0,
+    High = 1,
+}
+
+impl ResetVector {
+    pub fn address(&self) -> u16 {
+        match self {
+            ResetVector::High => 0x8000, // IROM
+            ResetVector::Low => 0x0000,  // IRAM
+        }
+    }
+}
+
 crate::mmio_register! {
     ControlStatus: u16 @ 0xCC00500A {
         #[bits(0, alias = "res")]
@@ -36,8 +51,8 @@ crate::mmio_register! {
         #[bits(9, alias = "dspdma")]
         pub dma_status: bool,
 
-        #[bits(11, alias = "ucode")]
-        pub upload_ucode: bool, // also reset bit?
+        #[bits(11)]
+        pub reset_vector: ResetVector,
     }
 }
 
@@ -47,7 +62,7 @@ impl MmioAccess<super::Dsp> for ControlStatus {
     }
 
     fn write(self, dsp: &mut super::Dsp) {
-        tracing::trace!("CSR write: {:016b}", self.raw());
+        tracing::trace!("CSR write: {:016b} (prev: {:016b})", self.raw(), dsp.csr.raw());
 
         let mut csr = dsp.csr;
 
@@ -68,17 +83,21 @@ impl MmioAccess<super::Dsp> for ControlStatus {
             .with_ar_interrupt_mask(self.ar_interrupt_mask())
             .with_dsp_interrupt_mask(self.dsp_interrupt_mask())
             .with_dma_status(self.dma_status())
-            .with_upload_ucode(self.upload_ucode());
+            .with_reset_vector(self.reset_vector());
 
-        // ucode falling edge (bit 11: 1->0) schedules ucode upload from ARAM[0x0000]
-        if dsp.csr.upload_ucode() && !self.upload_ucode() {
-            tracing::debug!("scheduling ucode upload");
+        // reset vector falling edge (bit 11: 1->0) triggers DMA of stub from main RAM into IRAM
+        // and resets the PC to 0x0000 (IRAM) so the uploaded stub executes
+        if dsp.csr.reset_vector() == ResetVector::High && self.reset_vector() == ResetVector::Low {
+            tracing::info!("scheduling ucode upload, PC -> 0x0000 (IRAM)");
             dsp.pending_ucode_upload = true;
+            dsp.registers.pc = 0x0000;
         }
 
-        // ACK reset bit
+        // On reset, set PC to the address indicated by the reset vector
         if self.reset() {
-            tracing::debug!("reset");
+            let addr = self.reset_vector().address();
+            tracing::info!(reset_vector = ?self.reset_vector(), pc = format!("{addr:04X}"), "DSP reset, executing from reset vector");
+            dsp.registers.pc = addr;
         }
         csr = csr.with_reset(false);
 
@@ -88,7 +107,7 @@ impl MmioAccess<super::Dsp> for ControlStatus {
 
 impl Default for ControlStatus {
     fn default() -> Self {
-        ControlStatus::new().with_halt(true).with_upload_ucode(true)
+        ControlStatus::new().with_halt(true)
     }
 }
 
@@ -117,21 +136,57 @@ impl MmioAccess<Dsp> for MailboxToDspHi {
 }
 
 // 0xCC005002 2 [W] CPU-to-DSP Mailbox Low
+// Writing sets CMBH.M (busy), signaling to the DSP that mail is ready.
 
 crate::mmio_register! {
-    MailboxToDspLo: u16 @ 0xCC005002 => Dsp.mailbox_to_dsp_lo {}
+    MailboxToDspLo: u16 @ 0xCC005002 {}
 }
 
-// 0xCC005004 2 [R] DSP-to-CPU Mailbox High
+impl MmioAccess<Dsp> for MailboxToDspLo {
+    fn read(dsp: &Dsp) -> Self {
+        dsp.mailbox_to_dsp_lo
+    }
 
-crate::mmio_register! {
-    MailboxToCpuHi: u16 @ 0xCC005004 => Dsp.mailbox_to_cpu_hi {}
+    fn write(self, dsp: &mut Dsp) {
+        dsp.mailbox_to_dsp_lo = self;
+        dsp.mailbox_to_dsp_hi = dsp.mailbox_to_dsp_hi.with_busy(true);
+        tracing::debug!(
+            hi = format!("{:04X}", dsp.mailbox_to_dsp_hi.raw()),
+            lo = format!("{:04X}", self.raw()),
+            "CPU->DSP mailbox"
+        );
+    }
 }
 
-// 0xCC005006 2 [R] DSP-to-CPU Mailbox Low
+// 0xCC005004 2 [R] DSP-to-CPU Mailbox High (DMBH)
 
 crate::mmio_register! {
-    MailboxToCpuLo: u16 @ 0xCC005006 => Dsp.mailbox_to_cpu_lo {}
+    MailboxToCpuHi: u16 @ 0xCC005004 => Dsp.mailbox_to_cpu_hi {
+        #[bits(0..=14)]
+        pub data: u16,
+
+        #[bits(15)]
+        pub busy: bool,
+    }
+}
+
+// 0xCC005006 2 [R] DSP-to-CPU Mailbox Low (DMBL)
+// Reading clears DMBH.M (bit 15), indicating the CPU has consumed the mail.
+
+crate::mmio_register! {
+    MailboxToCpuLo: u16 @ 0xCC005006 {}
+}
+
+impl MmioAccess<Dsp> for MailboxToCpuLo {
+    fn read(dsp: &Dsp) -> Self {
+        // NOTE: ideally reading lo should clear hi.M, but read takes &self not &mut self.
+        // The M bit will be cleared on the next hi read after lo is read.
+        dsp.mailbox_to_cpu_lo
+    }
+
+    fn write(self, _dsp: &mut Dsp) {
+        // Read-only from CPU side
+    }
 }
 
 // 0xCC005012 2 [R/W] AR_INFO - ARAM Info/Size

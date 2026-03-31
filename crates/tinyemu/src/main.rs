@@ -43,6 +43,10 @@ struct Args {
     #[arg(long)]
     no_ansi: bool,
 
+    /// Path to a DSP IROM binary
+    #[arg(long)]
+    dsp: Option<String>,
+
     /// Path to a Lua script for scripting hooks
     #[cfg(feature = "scripting")]
     #[arg(long)]
@@ -83,6 +87,11 @@ fn main() {
         let iso_data = std::fs::read(iso_path).expect("failed to read ISO");
         let dvd = image::dvd::Dvd::parse(iso_data);
         emulator.insert_dvd(dvd);
+    }
+
+    if let Some(dsp_path) = &args.dsp {
+        let dsp_data = std::fs::read(dsp_path).expect("failed to read DSP IROM");
+        emulator.dsp.load_irom(&dsp_data);
     }
 
     #[cfg(feature = "scripting")]

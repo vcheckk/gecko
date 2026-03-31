@@ -8,5 +8,5 @@ scripting-mut-traps = ["gecko/scripting-mut-traps"]
 
 [dependencies]
 gecko = { path = "../gecko", features = ["scripting"] }
-mlua = { version = "0.10", features = ["lua54", "send"] }
-tracing = "0.1"
+mlua = { version = "0.10.5", features = ["lua54", "send"] }
+tracing = "0.1.44"

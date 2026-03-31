@@ -1,3 +1,5 @@
+#[cfg(feature = "idle-skip")]
+use crate::idle::{IDLE_LOOP_MAX_INSTRS, IdleCheck, IdleDetector};
 #[cfg(feature = "scripting")]
 use crate::scripting::{HookFlags, ScriptHookFilters, ScriptHookState, ScriptHost};
 use crate::{
@@ -18,8 +20,6 @@ use crate::{
     mmio::Mmio,
     scheduler::{CYCLES_PER_VSYNC, EventKind, Scheduler},
 };
-#[cfg(feature = "idle-skip")]
-use crate::idle::{IDLE_LOOP_MAX_INSTRS, IdleCheck, IdleDetector};
 use image::Executable;
 
 pub struct GameCube {

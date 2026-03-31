@@ -86,8 +86,8 @@ impl Dsp {
     ///
     /// - If an ARAM DMA was triggered (write to DmaControl), execute the transfer and
     ///   assert ARINT in the CSR
-    /// - If ucode upload (falling-edge) was detected (CSR bit 11: 1->0), copy from
-    ///   main RAM at DmaMmioAddr into IRAM (like Dolphin), then HLE the mailbox response.
+    /// - If ucode upload was triggered (CSR bit 11 falling edge), DMA 1024 bytes from
+    ///   main RAM into IRAM (we LLE, but we could HLE the mailbox response)
     #[inline]
     pub fn process_pending_dma(&mut self, mmio: &mut Mmio) {
         // Handle ARAM DMA
@@ -129,15 +129,15 @@ impl Dsp {
             let src = mmio.virt_slice(UCODE_ADDR as u32, UCODE_SIZE);
             self.iram[..UCODE_SIZE].copy_from_slice(&src);
 
-            tracing::debug!(
+            tracing::info!(
                 mmio_addr = format!("{UCODE_ADDR:08X}"),
                 count = UCODE_SIZE,
-                "uploaded ucode from RAM to IRAM"
+                "DSP stub uploaded from RAM to IRAM, executing IRAM"
             );
 
             // HLE: Write expected response to mailbox
-            self.mailbox_to_cpu_hi = regs::MailboxToCpuHi::from_raw(0x8071);
-            self.mailbox_to_cpu_lo = regs::MailboxToCpuLo::from_raw(0xFEED);
+            // self.mailbox_to_cpu_hi = regs::MailboxToCpuHi::from_raw(0x8071);
+            // self.mailbox_to_cpu_lo = regs::MailboxToCpuLo::from_raw(0xFEED);
         }
     }
 }
@@ -148,7 +148,11 @@ impl GameCube {
             return;
         }
 
-        let instr = Instruction::from_be_bytes(&self.dsp.iram[(self.dsp.registers.pc as usize) * 2..]);
+        let pc = self.dsp.registers.pc as usize;
+        let w0 = self.dsp.read_imem(pc as u16);
+        let w1 = self.dsp.read_imem(pc as u16 + 1);
+        let buf = [(w0 >> 8) as u8, w0 as u8, (w1 >> 8) as u8, w1 as u8];
+        let instr = Instruction::from_be_bytes(&buf);
         self.dsp.registers.cia = self.dsp.registers.pc;
         self.dsp.registers.nia = self
             .dsp
@@ -204,48 +208,82 @@ impl MmioRw for Dsp {
 impl Dsp {
     /// Read a 16-bit word from instruction memory (IRAM 0x0000-0x0FFF, IROM 0x8000-0x8FFF).
     pub fn read_imem(&self, addr: u16) -> u16 {
-        let byte_addr = addr as usize * 2;
-        let bytes = match addr as usize {
-            0x0000..0x1000 => &self.iram[byte_addr..byte_addr + 2],
-            0x8000..0x9000 => {
-                let offset = byte_addr - 0x8000 * 2;
-                &self.irom[offset..offset + 2]
-            }
-            _ => &[0, 0],
-        };
-        u16::from_be_bytes([bytes[0], bytes[1]])
+        match addr {
+            0x0000..0x1000 => read_word(&*self.iram, addr),
+            0x8000..0x9000 => read_word(&*self.irom, addr - 0x8000),
+            _ => 0,
+        }
     }
 
     /// Read a 16-bit word from data memory (DRAM 0x0000-0x0FFF, COEF 0x1000-0x1FFF, IFX 0xFF00-0xFFFF).
-    pub fn read_dmem(&self, addr: u16) -> u16 {
-        let byte_addr = addr as usize * 2;
-        let bytes = match addr as usize {
-            0x0000..0x1000 => &self.dram[byte_addr..byte_addr + 2],
-            0x1000..0x2000 => {
-                let offset = byte_addr - 0x1000 * 2;
-                &self.coef[offset..offset + 2]
+    pub fn read_dmem(&mut self, addr: u16) -> u16 {
+        match addr {
+            0x0000..0x1000 => read_word(&*self.dram, addr),
+            0x1000..0x2000 => read_word(&*self.coef, addr - 0x1000),
+            0xFF00..=0xFFFF => self.read_ifx(addr),
+            _ => 0,
+        }
+    }
+
+    /// Read a 16-bit word from IFX register space, with mailbox side-effects.
+    pub fn read_ifx(&mut self, addr: u16) -> u16 {
+        match addr {
+            // CMBH (CPU Mailbox High): reading returns data + M bit
+            0xFFFE => self.mailbox_to_dsp_hi.raw(),
+            // CMBL (CPU Mailbox Low): reading clears CMBH.M (busy)
+            0xFFFF => {
+                self.mailbox_to_dsp_hi.set_busy(false);
+                self.mailbox_to_dsp_lo.raw()
             }
-            0xFF00..0x10000 => {
-                let offset = (addr as usize - 0xFF00) * 2;
-                &self.ifx[offset..offset + 2]
+            // DMBH (DSP Mailbox High): DSP reads back what it wrote
+            0xFFFC => self.mailbox_to_cpu_hi.raw(),
+            // DMBL (DSP Mailbox Low): reading clears DMBH.M (CPU consumed the mail)
+            0xFFFD => {
+                let val = self.mailbox_to_cpu_lo.raw();
+                self.mailbox_to_cpu_hi.set_busy(false);
+                val
             }
-            _ => &[0, 0],
-        };
-        u16::from_be_bytes([bytes[0], bytes[1]])
+            _ => read_word(&*self.ifx, addr - 0xFF00),
+        }
+    }
+
+    /// Write a 16-bit word to IFX register space, with mailbox side-effects.
+    pub fn write_ifx(&mut self, addr: u16, value: u16) {
+        match addr {
+            // DMBH (DSP Mailbox High): store data bits, M will be set when DMBL is written
+            0xFFFC => {
+                self.mailbox_to_cpu_hi = regs::MailboxToCpuHi::from_raw(value & 0x7FFF);
+            }
+            // DMBL (DSP Mailbox Low): writing sets DMBH.M, signaling mail ready to CPU
+            0xFFFD => {
+                self.mailbox_to_cpu_lo = regs::MailboxToCpuLo::from_raw(value);
+                self.mailbox_to_cpu_hi.set_busy(true);
+                tracing::debug!(
+                    hi = format!("{:04X}", self.mailbox_to_cpu_hi.raw()),
+                    lo = format!("{:04X}", value),
+                    "DSP->CPU mailbox"
+                );
+            }
+            // CMBH/CMBL are read-only from DSP side
+            0xFFFE | 0xFFFF => {}
+            _ => write_word(&mut *self.ifx, addr - 0xFF00, value),
+        }
     }
 
     /// Write a 16-bit word to data memory (DRAM 0x0000-0x0FFF, IFX 0xFF00-0xFFFF).
     pub fn write_dmem(&mut self, addr: u16, value: u16) {
-        let byte_addr = addr as usize * 2;
-        let bytes = value.to_be_bytes();
-        match addr as usize {
-            0x0000..0x1000 => self.dram[byte_addr..byte_addr + 2].copy_from_slice(&bytes),
-            0xFF00..0x10000 => {
-                let offset = (addr as usize - 0xFF00) * 2;
-                self.ifx[offset..offset + 2].copy_from_slice(&bytes);
-            }
+        match addr {
+            0x0000..0x1000 => write_word(&mut *self.dram, addr, value),
+            0xFF00..=0xFFFF => self.write_ifx(addr, value),
             _ => {}
         }
+    }
+
+    /// Load a binary file into IROM.
+    pub fn load_irom(&mut self, data: &[u8]) {
+        let len = data.len().min(self.irom.len());
+        self.irom[..len].copy_from_slice(&data[..len]);
+        tracing::info!(size = len, "loaded DSP IROM");
     }
 
     pub fn interrupt_active(&self) -> bool {
@@ -263,4 +301,18 @@ impl crate::gamecube::GameCube {
             self.pi.clear_interrupt(crate::flipper::pi::InterruptFlag::Dsp);
         }
     }
+}
+
+/// Read a big-endian u16 from a byte slice at a DSP word address.
+#[inline(always)]
+fn read_word(mem: &[u8], word_addr: u16) -> u16 {
+    let off = word_addr as usize * 2;
+    u16::from_be_bytes([mem[off], mem[off + 1]])
+}
+
+/// Write a big-endian u16 into a byte slice at a DSP word address.
+#[inline(always)]
+fn write_word(mem: &mut [u8], word_addr: u16, value: u16) {
+    let off = word_addr as usize * 2;
+    mem[off..off + 2].copy_from_slice(&value.to_be_bytes());
 }

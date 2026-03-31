@@ -477,12 +477,10 @@ pub fn ext_ld<const OP: u32>(ctx: &mut crate::gamecube::GameCube, instr: GcDspEx
     let d = instr.d_2_2();
     let r = instr.r_3_3();
     let s = instr.s_6_7() as usize;
-    ctx.dsp
-        .registers
-        .write::<false>(0x18 + d * 2, ctx.dsp.read_dmem(ctx.dsp.registers.ar[s]));
-    ctx.dsp
-        .registers
-        .write::<false>(0x19 + r * 2, ctx.dsp.read_dmem(ctx.dsp.registers.ar[3]));
+    let val_d = ctx.dsp.read_dmem(ctx.dsp.registers.ar[s]);
+    ctx.dsp.registers.write::<false>(0x18 + d * 2, val_d);
+    let val_r = ctx.dsp.read_dmem(ctx.dsp.registers.ar[3]);
+    ctx.dsp.registers.write::<false>(0x19 + r * 2, val_r);
     match OP {
         OP_EXT_LD_00 => {
             ctx.dsp.registers.ar[s] = ctx.dsp.registers.ar[s].wrapping_add(1);

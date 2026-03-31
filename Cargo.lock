@@ -650,6 +650,7 @@ name = "debugger"
 version = "0.1.0"
 dependencies = [
  "backend-wgpu",
+ "clap",
  "disasm",
  "egui",
  "egui-phosphor",
@@ -2780,6 +2781,7 @@ name = "tinyapp"
 version = "0.1.0"
 dependencies = [
  "backend-wgpu",
+ "clap",
  "egui",
  "egui-wgpu",
  "egui-winit",

@@ -59,8 +59,7 @@ impl GameCube {
 
         self.cpu.spr.srr0 = Srr0::from(self.cpu.cia);
         // SRR1: MSR bits 0, 5-9, 16-31 preserved; bit 14 (TRAP) set
-        self.cpu.spr.srr1 =
-            chapa::extract_bits!(self.cpu.msr; 0, 5..=9, 16..=31).raw() | (1 << (31 - 14));
+        self.cpu.spr.srr1 = chapa::extract_bits!(self.cpu.msr; 0, 5..=9, 16..=31).raw() | (1 << (31 - 14));
 
         self.cpu.msr = self
             .cpu

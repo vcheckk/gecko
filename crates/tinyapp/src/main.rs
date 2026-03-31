@@ -1,3 +1,4 @@
+use clap::Parser;
 use egui::ViewportId;
 use egui_plot::{Line, Plot, PlotPoints};
 use gecko::flipper::si::pad::{self, PadStatus, STICK_CENTER};
@@ -5,7 +6,6 @@ use gecko::flipper::vi::regs::RefreshRate;
 use gecko::gamecube::GameCube;
 use image::{Dol, dvd::Dvd};
 use std::collections::VecDeque;
-use std::env;
 use std::sync::Arc;
 use std::time::Instant;
 use winit::{
@@ -474,51 +474,71 @@ impl ApplicationHandler for App {
     }
 }
 
-fn main() {
-    let args: Vec<String> = env::args().collect();
+#[derive(Parser)]
+#[command(about = "GameCube emulator")]
+struct Args {
+    /// Path to the ROM/DOL file
+    #[arg(long)]
+    rom: Option<String>,
 
-    let present_mode = std::env::args()
-        .any(|arg| arg == "--immediate")
-        .then(|| wgpu::PresentMode::Immediate)
-        .unwrap_or(wgpu::PresentMode::Fifo);
-    let ipl_path = args.iter().position(|a| a == "--ipl").map(|i| &args[i + 1]);
-    let rom_path = args
-        .iter()
-        .position(|a| a == "--rom")
-        .map(|i| &args[i + 1])
-        .or_else(|| args.get(1).filter(|a| !a.starts_with("--")));
-    let iso_path = args.iter().position(|a| a == "--iso").map(|i| &args[i + 1]);
+    /// Path to an IPL file
+    #[arg(long)]
+    ipl: Option<String>,
+
+    /// Path to a GameCube ISO file
+    #[arg(long)]
+    iso: Option<String>,
+
+    /// Use immediate present mode (no vsync)
+    #[arg(long)]
+    immediate: bool,
+
+    /// Disable ANSI escape codes
+    #[arg(long)]
+    no_ansi: bool,
+
+    /// Path to a DSP IROM binary
+    #[arg(long)]
+    dsp: Option<String>,
+
+    /// Path to a Lua script for scripting hooks
     #[cfg(feature = "scripting")]
-    let script_path = args.iter().position(|a| a == "--script").map(|i| &args[i + 1]);
+    #[arg(long)]
+    script: Option<String>,
+}
 
-    let no_ansi = std::env::args().any(|arg| arg == "--no-ansi");
+fn main() {
+    let args = Args::parse();
+
+    let present_mode = if args.immediate {
+        wgpu::PresentMode::Immediate
+    } else {
+        wgpu::PresentMode::Fifo
+    };
 
     tracing_subscriber::fmt()
         .without_time()
-        .with_ansi(!no_ansi)
+        .with_ansi(!args.no_ansi)
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn")),
         )
         .init();
 
-    let mut emulator = if let Some(ipl) = ipl_path {
+    let mut emulator = if let Some(ref ipl) = args.ipl {
         let ipl_data = std::fs::read(ipl).expect("failed to read IPL");
         GameCube::with_ipl(&ipl_data)
-    } else if let Some(rom) = rom_path {
+    } else if let Some(ref rom) = args.rom {
         let rom_data = std::fs::read(rom).expect("failed to read ROM");
         let dol = Dol::parse(rom_data);
         GameCube::with_image(&dol)
     } else {
-        eprintln!(
-            "usage: {} <path/to/game.dol> | --ipl <path> | --rom <path> [--iso <path>] [--immediate] ",
-            args[0]
-        );
+        eprintln!("error: either --ipl or --rom must be provided");
         std::process::exit(1);
     };
 
-    if let Some(iso) = iso_path {
-        if ipl_path.is_none() {
+    if let Some(ref iso) = args.iso {
+        if args.ipl.is_none() {
             eprintln!("--iso requires --ipl");
             std::process::exit(1);
         }
@@ -527,8 +547,13 @@ fn main() {
         emulator.insert_dvd(dvd);
     }
 
+    if let Some(ref dsp_path) = args.dsp {
+        let dsp_data = std::fs::read(dsp_path).expect("failed to read DSP IROM");
+        emulator.dsp.load_irom(&dsp_data);
+    }
+
     #[cfg(feature = "scripting")]
-    if let Some(path) = script_path {
+    if let Some(ref path) = args.script {
         let host = scripting::LuaScriptHost::from_file(path).expect("failed to load script");
         emulator.set_script_host(Box::new(host));
     }
