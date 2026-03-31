@@ -1,0 +1,11 @@
+[package]
+name = "dbglib"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+gecko = { path = "../gecko" }
+disasm = { path = "../disasm" }
+backend-wgpu = { path = "../backend-wgpu" }
+egui = "0.33.3"
+egui-phosphor = "0.11.0"

@@ -17,7 +17,6 @@ use crate::render::RenderState;
 
 mod debugger;
 mod render;
-mod windows;
 
 struct App {
     emulator: GameCube,

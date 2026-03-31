@@ -656,12 +656,23 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f27ae1dd37df86211c42e150270f82743308803d90a6f6e6651cd730d5e1732f"
 
 [[package]]
+name = "dbglib"
+version = "0.1.0"
+dependencies = [
+ "backend-wgpu",
+ "disasm",
+ "egui",
+ "egui-phosphor",
+ "gecko",
+]
+
+[[package]]
 name = "debugger"
 version = "0.1.0"
 dependencies = [
  "backend-wgpu",
  "clap",
- "disasm",
+ "dbglib",
  "egui",
  "egui-phosphor",
  "egui-wgpu",
@@ -1066,7 +1077,9 @@ version = "0.1.0"
 dependencies = [
  "backend-wgpu",
  "console_error_panic_hook",
+ "dbglib",
  "egui",
+ "egui-phosphor",
  "egui-wgpu",
  "egui-winit",
  "gecko",

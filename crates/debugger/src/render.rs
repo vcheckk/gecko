@@ -1,10 +1,10 @@
+use dbglib::EmulatorState;
 use egui::ViewportId;
 use gecko::gamecube::GameCube;
 use std::sync::Arc;
 use winit::window::Window;
 
-use crate::debugger::{DebuggerUi, EmulatorState};
-use crate::windows;
+use crate::debugger::DebuggerUi;
 
 const SHADER: &str = include_str!("xfb.wgsl");
 
@@ -184,44 +184,7 @@ impl RenderState {
             }
         }
 
-        match debugger_ui.emulator_state {
-            EmulatorState::Running => {
-                if debugger_ui.is_tracing() {
-                    emulator.prepare_frame();
-                    while !emulator.vsync_pending {
-                        debugger_ui.trace_step(emulator);
-                        emulator.step();
-                    }
-                } else {
-                    emulator.run_until_vsync();
-                }
-            }
-            EmulatorState::Step => {
-                debugger_ui.trace_step(emulator);
-                emulator.step();
-                debugger_ui.emulator_state = EmulatorState::Paused;
-            }
-            EmulatorState::RunUntilVsync => {
-                if debugger_ui.is_tracing() {
-                    emulator.prepare_frame();
-                    while !emulator.vsync_pending {
-                        debugger_ui.trace_step(emulator);
-                        emulator.step();
-                    }
-                } else {
-                    emulator.run_until_vsync();
-                }
-                debugger_ui.emulator_state = EmulatorState::Paused;
-            }
-            EmulatorState::RunUntilAddress(addr) => {
-                while emulator.cpu.pc != addr {
-                    debugger_ui.trace_step(emulator);
-                    emulator.step();
-                }
-                debugger_ui.emulator_state = EmulatorState::Paused;
-            }
-            EmulatorState::Paused => {}
-        }
+        debugger_ui.debugger.tick(emulator);
 
         let frame = match self.surface.get_current_texture() {
             Ok(f) => f,
@@ -250,33 +213,33 @@ impl RenderState {
             egui::Panel::top("menu_bar").show_inside(ui, |ui| {
                 egui::MenuBar::new().ui(ui, |ui| {
                     ui.menu_button("Emulator", |ui| {
-                        let is_paused = debugger_ui.emulator_state == EmulatorState::Paused;
-                        let is_running = debugger_ui.emulator_state == EmulatorState::Running;
+                        let is_paused = debugger_ui.debugger.state() == EmulatorState::Paused;
+                        let is_running = debugger_ui.debugger.state() == EmulatorState::Running;
 
                         use egui_phosphor::regular as icons;
                         if ui
                             .add_enabled(is_paused, egui::Button::new(format!("{} Continue", icons::PLAY)))
                             .clicked()
                         {
-                            debugger_ui.emulator_state = EmulatorState::Running;
+                            debugger_ui.debugger.set_state(EmulatorState::Running);
                             ui.close();
                         }
                         if ui
                             .add_enabled(is_running, egui::Button::new(format!("{} Pause", icons::PAUSE)))
                             .clicked()
                         {
-                            debugger_ui.emulator_state = EmulatorState::Paused;
+                            debugger_ui.debugger.set_state(EmulatorState::Paused);
                             ui.close();
                         }
                         if ui
                             .add_enabled(is_paused, egui::Button::new(format!("{} Step", icons::SKIP_FORWARD)))
                             .clicked()
                         {
-                            debugger_ui.emulator_state = EmulatorState::Step;
+                            debugger_ui.debugger.set_state(EmulatorState::Step);
                             ui.close();
                         }
                         if ui.button(format!("{} Run Until VSync", icons::FAST_FORWARD)).clicked() {
-                            debugger_ui.emulator_state = EmulatorState::RunUntilVsync;
+                            debugger_ui.debugger.set_state(EmulatorState::RunUntilVsync);
                             ui.close();
                         }
                     });
@@ -295,25 +258,27 @@ impl RenderState {
             });
 
             if debugger_ui.show_cpu {
-                windows::cpu::show_cpu(&ctx, &mut debugger_ui.show_cpu, cpu, mmio);
+                dbglib::windows::cpu::show_cpu(&ctx, &mut debugger_ui.show_cpu, cpu, mmio);
             }
             if debugger_ui.show_dsp {
-                windows::dsp::show_dsp(&ctx, &mut debugger_ui.show_dsp, &emulator.dsp);
+                dbglib::windows::dsp::show_dsp(&ctx, &mut debugger_ui.show_dsp, &emulator.dsp);
             }
             if debugger_ui.show_controls {
                 let mut start_trace = false;
                 let mut stop_trace = false;
-                let tracing = debugger_ui.is_tracing();
-                windows::controls::show_controls(
+                let tracing = debugger_ui.debugger.is_tracing();
+                let mut state = debugger_ui.debugger.state();
+                dbglib::windows::controls::show_controls(
                     &ctx,
                     &mut debugger_ui.show_controls,
-                    &mut debugger_ui.emulator_state,
+                    &mut state,
                     &mut debugger_ui.run_until_addr_input,
                     &mut debugger_ui.dvd_cover_open,
                     tracing,
                     &mut start_trace,
                     &mut stop_trace,
                 );
+                debugger_ui.debugger.set_state(state);
                 if start_trace {
                     debugger_ui.start_trace();
                 }
@@ -322,10 +287,10 @@ impl RenderState {
                 }
             }
             if debugger_ui.show_gx_state {
-                windows::gx::show_gx(&ctx, &mut debugger_ui.show_gx_state, gx, mmio);
+                dbglib::windows::gx::show_gx(&ctx, &mut debugger_ui.show_gx_state, gx, mmio);
             }
             if debugger_ui.show_mmio {
-                windows::mmio::show_mmio(
+                dbglib::windows::mmio::show_mmio(
                     &ctx,
                     &mut debugger_ui.show_mmio,
                     &mut debugger_ui.memory_base,
@@ -334,13 +299,13 @@ impl RenderState {
                 );
             }
             if debugger_ui.show_dvd {
-                windows::dvd::show_dvd(&ctx, &mut debugger_ui.show_dvd, &emulator.di);
+                dbglib::windows::dvd::show_dvd(&ctx, &mut debugger_ui.show_dvd, &emulator.di);
             }
             if debugger_ui.show_exi {
-                windows::exi::show_exi(&ctx, &mut debugger_ui.show_exi, &emulator.exi);
+                dbglib::windows::exi::show_exi(&ctx, &mut debugger_ui.show_exi, &emulator.exi);
             }
             if debugger_ui.show_irqs {
-                windows::irq::show_irq(&ctx, &mut debugger_ui.show_irqs, &emulator.cpu, &emulator.pi);
+                dbglib::windows::irq::show_irq(&ctx, &mut debugger_ui.show_irqs, &emulator.cpu, &emulator.pi);
             }
         });
 

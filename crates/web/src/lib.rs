@@ -18,6 +18,9 @@ use winit::{
     window::{Window, WindowId},
 };
 
+#[cfg(feature = "debug")]
+mod debug_ui;
+
 const SHADER: &str = include_str!("../../tinyapp/src/xfb.wgsl");
 
 struct State {
@@ -167,6 +170,12 @@ impl State {
         );
 
         let egui_ctx = egui::Context::default();
+        #[cfg(feature = "debug")]
+        {
+            let mut fonts = egui::FontDefinitions::default();
+            egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
+            egui_ctx.set_fonts(fonts);
+        }
         let egui_renderer = egui_wgpu::Renderer::new(&device, surface_format, egui_wgpu::RendererOptions::default());
         let egui_winit = egui_winit::State::new(egui_ctx.clone(), ViewportId::ROOT, window.as_ref(), None, None, None);
 
@@ -203,7 +212,12 @@ impl State {
         self.gx_renderer.resize(&self.device, width, height);
     }
 
-    fn render(&mut self, emulator: &mut GameCube, window: &Window) {
+    fn render(
+        &mut self,
+        emulator: &mut GameCube,
+        #[cfg(feature = "debug")] debug_state: &mut debug_ui::DebugState,
+        window: &Window,
+    ) {
         let now = now_ms();
         let delta = (now - self.last_frame_ms) / 1000.0;
         self.last_frame_ms = now;
@@ -219,6 +233,9 @@ impl State {
         };
         let native_pct = (fps / native_hz) * 100.0;
 
+        #[cfg(feature = "debug")]
+        debug_state.tick(emulator);
+        #[cfg(not(feature = "debug"))]
         emulator.run_until_vsync();
 
         let frame = match self.surface.get_current_texture() {
@@ -227,7 +244,8 @@ impl State {
         };
         let view = frame.texture.create_view(&Default::default());
 
-        if !emulator.gx.draw_commands.commands.is_empty() {
+        let used_gx = !emulator.gx.draw_commands.commands.is_empty();
+        if used_gx {
             self.render_gx(emulator, &view);
         } else {
             self.render_xfb(emulator, &view);
@@ -248,6 +266,9 @@ impl State {
                 .show(&ctx, |ui| {
                     ui.label(egui::RichText::new(format!("{fps:.1} FPS  {native_pct:.1}%")).monospace());
                 });
+
+            #[cfg(feature = "debug")]
+            debug_state.show(&ctx, emulator);
         });
 
         self.egui_winit
@@ -297,6 +318,10 @@ impl State {
         }
 
         frame.present();
+
+        if used_gx {
+            emulator.gx.draw_commands.commands.clear();
+        }
     }
 
     fn render_gx(&mut self, emulator: &mut GameCube, view: &wgpu::TextureView) {
@@ -309,7 +334,6 @@ impl State {
             self.surface_config.width,
             self.surface_config.height,
         );
-        emulator.gx.draw_commands.commands.clear();
     }
 
     fn render_xfb(&mut self, emulator: &GameCube, view: &wgpu::TextureView) {
@@ -430,6 +454,8 @@ struct App {
     emulator: GameCube,
     window: Option<Arc<Window>>,
     state: SharedState,
+    #[cfg(feature = "debug")]
+    debug_state: debug_ui::DebugState,
 }
 
 impl ApplicationHandler for App {
@@ -481,7 +507,12 @@ impl ApplicationHandler for App {
             WindowEvent::RedrawRequested => {
                 if let Some(window) = self.window.clone() {
                     if let Some(state) = self.state.borrow_mut().as_mut() {
-                        state.render(&mut self.emulator, &window);
+                        state.render(
+                            &mut self.emulator,
+                            #[cfg(feature = "debug")]
+                            &mut self.debug_state,
+                            &window,
+                        );
                     }
                     window.request_redraw();
                 }
@@ -517,6 +548,8 @@ pub fn start_emulator(rom_data: &[u8], filename: String, dsp_irom: Option<Vec<u8
         emulator,
         window: None,
         state: Rc::new(RefCell::new(None)),
+        #[cfg(feature = "debug")]
+        debug_state: debug_ui::DebugState::default(),
     };
 
     event_loop.spawn_app(app);

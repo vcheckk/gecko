@@ -8,6 +8,7 @@ members = [
     "crates/image",
     "crates/tinyapp",
     "crates/backend-wgpu",
+    "crates/dbglib",
     "crates/debugger",
     "crates/scripting",
     "crates/dspemu",

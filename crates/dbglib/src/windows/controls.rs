@@ -1,7 +1,7 @@
 use egui::Context;
 use egui_phosphor::regular as icons;
 
-use crate::debugger::EmulatorState;
+use crate::EmulatorState;
 
 pub fn show_controls(
     ctx: &Context,

@@ -2,20 +2,7 @@ use egui::{Align, Color32, Context, Grid, RichText, ScrollArea};
 use gecko::cpu::Cpu;
 use gecko::mmio::Mmio;
 
-fn token_color(token: &disasm::tokenizer::AsmToken<'_>) -> Option<Color32> {
-    use disasm::tokenizer::AsmToken;
-    match token {
-        AsmToken::Mnemonic(_) => Some(Color32::from_rgb(100, 180, 255)),
-        AsmToken::Gpr(_) | AsmToken::Fpr(_) | AsmToken::CrField(_) | AsmToken::Spr(_) => {
-            Some(Color32::from_rgb(255, 200, 100))
-        }
-        AsmToken::ImmSigned(_) | AsmToken::ImmUnsigned(_) | AsmToken::ImmHex(_) | AsmToken::Displacement(_) => {
-            Some(Color32::from_rgb(150, 220, 150))
-        }
-        AsmToken::BranchTarget(_) => Some(Color32::from_rgb(255, 150, 150)),
-        AsmToken::Punct(_) | AsmToken::Text(_) => None,
-    }
-}
+use super::token_color;
 
 pub fn show_cpu(ctx: &Context, open: &mut bool, cpu: &Cpu, mmio: &Mmio) {
     egui::Window::new("CPU")

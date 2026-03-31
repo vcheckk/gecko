@@ -11,14 +11,14 @@ scripting-mut-traps = ["gecko/scripting-mut-traps", "scripting/scripting-mut-tra
 gecko = { path = "../gecko", features = ["scripting"] }
 scripting = { path = "../scripting" }
 image = { path = "../image" }
-disasm = { path = "../disasm" }
+dbglib = { path = "../dbglib" }
 backend-wgpu = { path = "../backend-wgpu" }
 wgpu = "28.0.0"
 winit = "0.30.13"
 pollster = "0.4.0"
-egui = "0.33"
-egui-wgpu = "0.33"
-egui-winit = { version = "0.33", features = ["wayland", "x11"] }
+egui = "0.33.3"
+egui-wgpu = "0.33.3"
+egui-winit = { version = "0.33.3", features = ["wayland", "x11"] }
 egui-phosphor = "0.11.0"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 clap = { version = "4.6.0", features = ["derive"] }

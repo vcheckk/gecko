@@ -40,11 +40,24 @@
             gap: 12px;
         }
 
-        .file-row label {
+        .file-row .file-label {
             width: 100px;
             text-align: right;
             color: #aaa;
             font-size: 14px;
+        }
+
+        .file-picker {
+            position: relative;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+            flex: 0 0 auto;
+            width: auto;
+            white-space: nowrap;
+            line-height: 1.2;
+            text-align: center;
         }
 
         .file-row .name {
@@ -53,18 +66,18 @@
             min-width: 120px;
         }
 
-        .file-row button,
+        .file-picker,
         #start {
             background: #333;
             color: #ccc;
             border: 1px solid #555;
             border-radius: 6px;
-            padding: 6px 16px;
+            padding: 6px 12px;
             cursor: pointer;
             font-size: 14px;
         }
 
-        .file-row button:hover,
+        .file-picker:hover,
         #start:hover {
             background: #444;
             border-color: #8f8;
@@ -88,31 +101,38 @@
             height: 100vh;
         }
 
-        input[type="file"] {
+        .file-picker input[type="file"] {
             position: absolute;
+            inset: 0;
             opacity: 0;
-            width: 0;
-            height: 0;
-            pointer-events: none;
+            width: 100%;
+            height: 100%;
+            cursor: pointer;
         }
     </style>
 </head>
 
 <body>
+    <!-- shoutout to hazel, vxpm, geo, pdawg, lycoder and everyone else :> -->
+
     <div id="setup">
         <div class="file-row">
-            <label>IPL / DOL:</label>
-            <button id="btn-rom">Choose file</button>
+            <label class="file-label">IPL / DOL:</label>
+            <label class="file-picker">
+                <span>Choose file</span>
+                <input type="file" id="input-rom" accept=".dol,.bin">
+            </label>
             <span class="name" id="rom-name">none</span>
         </div>
-        <input type="file" id="input-rom" accept=".dol,.ipl">
 
         <div class="file-row">
-            <label>DSP IROM:</label>
-            <button id="btn-dsp">Choose file</button>
+            <label class="file-label">DSP IROM:</label>
+            <label class="file-picker">
+                <span>Choose file</span>
+                <input type="file" id="input-dsp" accept=".bin">
+            </label>
             <span class="name" id="dsp-name">none</span>
         </div>
-        <input type="file" id="input-dsp" accept=".bin">
 
         <button id="start" disabled>Start</button>
     </div>
@@ -127,8 +147,6 @@
             let romName = '';
             let dspData = null;
 
-            const btnRom = document.getElementById('btn-rom');
-            const btnDsp = document.getElementById('btn-dsp');
             const inputRom = document.getElementById('input-rom');
             const inputDsp = document.getElementById('input-dsp');
             const romNameEl = document.getElementById('rom-name');
@@ -142,9 +160,6 @@
                     reader.readAsArrayBuffer(file);
                 });
             }
-
-            btnRom.addEventListener('click', () => inputRom.click());
-            btnDsp.addEventListener('click', () => inputDsp.click());
 
             inputRom.addEventListener('change', async (e) => {
                 if (e.target.files.length > 0) {

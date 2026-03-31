@@ -1,20 +1,7 @@
 use egui::{Color32, Context, Grid, RichText, ScrollArea};
 use gecko::flipper::dsp::Dsp;
 
-fn token_color(token: &disasm::tokenizer::AsmToken<'_>) -> Option<Color32> {
-    use disasm::tokenizer::AsmToken;
-    match token {
-        AsmToken::Mnemonic(_) => Some(Color32::from_rgb(100, 180, 255)),
-        AsmToken::Gpr(_) | AsmToken::Fpr(_) | AsmToken::CrField(_) | AsmToken::Spr(_) => {
-            Some(Color32::from_rgb(255, 200, 100))
-        }
-        AsmToken::ImmSigned(_) | AsmToken::ImmUnsigned(_) | AsmToken::ImmHex(_) | AsmToken::Displacement(_) => {
-            Some(Color32::from_rgb(150, 220, 150))
-        }
-        AsmToken::BranchTarget(_) => Some(Color32::from_rgb(255, 150, 150)),
-        AsmToken::Punct(_) | AsmToken::Text(_) => None,
-    }
-}
+use super::token_color;
 
 pub fn show_dsp(ctx: &Context, open: &mut bool, dsp: &Dsp) {
     egui::Window::new("DSP").open(open).show(ctx, |ui| {
@@ -34,6 +21,7 @@ pub fn show_dsp(ctx: &Context, open: &mut bool, dsp: &Dsp) {
                 ui.monospace(format!("{:#06X}", dsp.csr.raw()));
                 ui.end_row();
 
+                #[cfg(not(target_arch = "wasm32"))]
                 if ui.button("Dump DSP").clicked() {
                     let mut dump = Vec::new();
                     dump.extend_from_slice(&dsp.iram[..]);
