@@ -477,9 +477,9 @@ impl ApplicationHandler for App {
 #[derive(Parser)]
 #[command(about = "GameCube emulator")]
 struct Args {
-    /// Path to the ROM/DOL file
+    /// Path to the DOL file
     #[arg(long)]
-    rom: Option<String>,
+    dol: Option<String>,
 
     /// Path to an IPL file
     #[arg(long)]
@@ -528,12 +528,12 @@ fn main() {
     let mut emulator = if let Some(ref ipl) = args.ipl {
         let ipl_data = std::fs::read(ipl).expect("failed to read IPL");
         GameCube::with_ipl(&ipl_data)
-    } else if let Some(ref rom) = args.rom {
-        let rom_data = std::fs::read(rom).expect("failed to read ROM");
-        let dol = Dol::parse(rom_data);
+    } else if let Some(ref path) = args.dol {
+        let dol_data = std::fs::read(path).expect("failed to read DOL");
+        let dol = Dol::parse(dol_data);
         GameCube::with_image(&dol)
     } else {
-        eprintln!("error: either --ipl or --rom must be provided");
+        eprintln!("error: either --ipl or --dol must be provided");
         std::process::exit(1);
     };
 

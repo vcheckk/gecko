@@ -11,9 +11,9 @@ use snaptshot::CpuSnapshot;
 #[derive(Parser)]
 #[command(about = "GameCube emulator")]
 struct Args {
-    /// Path to the ROM/DOL file
+    /// Path to the DOL file
     #[arg(long)]
-    rom: Option<String>,
+    dol: Option<String>,
 
     /// Path to an IPL file
     #[arg(long)]
@@ -69,15 +69,15 @@ fn main() {
         )
         .init();
 
-    let mut emulator = if let Some(rom_path) = &args.rom {
-        let rom_data = std::fs::read(rom_path).expect("failed to read ROM");
-        let dol = image::Dol::parse(rom_data);
+    let mut emulator = if let Some(dol_path) = &args.dol {
+        let dol_data = std::fs::read(dol_path).expect("failed to read DOL");
+        let dol = image::Dol::parse(dol_data);
         gecko::gamecube::GameCube::with_image(&dol)
     } else if let Some(ipl_path) = &args.ipl {
         let ipl_data = std::fs::read(ipl_path).expect("failed to read IPL");
         gecko::gamecube::GameCube::with_ipl(&ipl_data)
     } else {
-        panic!("Either --rom or --ipl must be provided");
+        panic!("Either --dol or --ipl must be provided");
     };
 
     if let Some(iso_path) = &args.iso {

@@ -664,6 +664,7 @@ dependencies = [
  "egui",
  "egui-phosphor",
  "gecko",
+ "image 0.1.0",
 ]
 
 [[package]]

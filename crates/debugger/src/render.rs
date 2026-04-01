@@ -246,6 +246,7 @@ impl RenderState {
 
                     ui.menu_button("Windows", |ui| {
                         ui.checkbox(&mut debugger_ui.show_cpu, "CPU");
+                        ui.checkbox(&mut debugger_ui.show_callstack, "Call Stack");
                         ui.checkbox(&mut debugger_ui.show_dsp, "DSP");
                         ui.checkbox(&mut debugger_ui.show_gx_state, "GX");
                         ui.checkbox(&mut debugger_ui.show_mmio, "MMIO");
@@ -258,7 +259,22 @@ impl RenderState {
             });
 
             if debugger_ui.show_cpu {
-                dbglib::windows::cpu::show_cpu(&ctx, &mut debugger_ui.show_cpu, cpu, mmio);
+                dbglib::windows::cpu::show_cpu(
+                    &ctx,
+                    &mut debugger_ui.show_cpu,
+                    cpu,
+                    mmio,
+                    debugger_ui.symbols.as_ref(),
+                );
+            }
+            if debugger_ui.show_callstack {
+                dbglib::windows::callstack::show_callstack(
+                    &ctx,
+                    &mut debugger_ui.show_callstack,
+                    cpu,
+                    mmio,
+                    debugger_ui.symbols.as_ref(),
+                );
             }
             if debugger_ui.show_dsp {
                 dbglib::windows::dsp::show_dsp(&ctx, &mut debugger_ui.show_dsp, &emulator.dsp);

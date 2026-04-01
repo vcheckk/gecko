@@ -1,8 +1,10 @@
 use dbglib::{Debugger, EmulatorState};
 use gecko::gamecube::GameCube;
+use image::symbols::SymbolTable;
 
 pub struct DebugState {
     pub debugger: Debugger,
+    pub symbols: Option<SymbolTable>,
     pub show_cpu: bool,
     pub show_dsp: bool,
     pub show_gx_state: bool,
@@ -11,6 +13,7 @@ pub struct DebugState {
     pub show_exi: bool,
     pub show_irqs: bool,
     pub show_controls: bool,
+    pub show_callstack: bool,
     pub memory_base: u32,
     pub memory_addr_input: String,
     pub run_until_addr_input: String,
@@ -23,6 +26,7 @@ impl Default for DebugState {
         debugger.set_state(EmulatorState::Running);
         DebugState {
             debugger,
+            symbols: None,
             show_cpu: false,
             show_dsp: false,
             show_controls: true,
@@ -31,6 +35,7 @@ impl Default for DebugState {
             show_dvd: false,
             show_exi: false,
             show_irqs: false,
+            show_callstack: false,
             memory_base: 0x8000_0000,
             memory_addr_input: "80000000".to_string(),
             run_until_addr_input: String::new(),
@@ -60,6 +65,7 @@ impl DebugState {
                 ui.horizontal(|ui| {
                     ui.checkbox(&mut self.show_controls, "Controls");
                     ui.checkbox(&mut self.show_cpu, "CPU");
+                    ui.checkbox(&mut self.show_callstack, "Call Stack");
                     ui.checkbox(&mut self.show_dsp, "DSP");
                     ui.checkbox(&mut self.show_gx_state, "GX");
                     ui.checkbox(&mut self.show_mmio, "MMIO");
@@ -70,7 +76,22 @@ impl DebugState {
             });
 
         if self.show_cpu {
-            dbglib::windows::cpu::show_cpu(ctx, &mut self.show_cpu, &emulator.cpu, &emulator.mmio);
+            dbglib::windows::cpu::show_cpu(
+                ctx,
+                &mut self.show_cpu,
+                &emulator.cpu,
+                &emulator.mmio,
+                self.symbols.as_ref(),
+            );
+        }
+        if self.show_callstack {
+            dbglib::windows::callstack::show_callstack(
+                ctx,
+                &mut self.show_callstack,
+                &emulator.cpu,
+                &emulator.mmio,
+                self.symbols.as_ref(),
+            );
         }
         if self.show_dsp {
             dbglib::windows::dsp::show_dsp(ctx, &mut self.show_dsp, &emulator.dsp);

@@ -74,9 +74,9 @@ impl ApplicationHandler for App {
 #[derive(Parser)]
 #[command(about = "GameCube debugger")]
 struct Args {
-    /// Path to the ROM/DOL file
+    /// Path to the DOL file
     #[arg(long)]
-    rom: Option<String>,
+    dol: Option<String>,
 
     /// Path to an IPL file
     #[arg(long)]
@@ -93,6 +93,10 @@ struct Args {
     /// Path to a DSP IROM binary
     #[arg(long)]
     dsp: Option<String>,
+
+    /// Path to a companion ELF file for symbol names
+    #[arg(long)]
+    elf: Option<String>,
 
     /// Path to a Lua script for scripting hooks
     #[arg(long)]
@@ -119,12 +123,12 @@ fn main() {
     let mut emulator = if let Some(ref ipl) = args.ipl {
         let ipl_data = std::fs::read(ipl).expect("failed to read IPL");
         GameCube::with_ipl(&ipl_data)
-    } else if let Some(ref rom) = args.rom {
-        let rom_data = std::fs::read(rom).expect("failed to read ROM");
-        let dol = Dol::parse(rom_data);
+    } else if let Some(ref path) = args.dol {
+        let dol_data = std::fs::read(path).expect("failed to read DOL");
+        let dol = Dol::parse(dol_data);
         GameCube::with_image(&dol)
     } else {
-        eprintln!("error: either --ipl or --rom must be provided");
+        eprintln!("error: either --ipl or --dol must be provided");
         std::process::exit(1);
     };
 
@@ -149,15 +153,25 @@ fn main() {
         emulator.set_script_host(Box::new(host));
     }
 
+    let symbols = args.elf.as_ref().map(|path| {
+        let elf_data = std::fs::read(path).expect("failed to read ELF file");
+        image::elf::parse_elf_symbols(&elf_data).expect("failed to parse ELF symbols")
+    });
+
     emulator.add_primary_controller(PadStatus {
         connected: true,
         ..PadStatus::default()
     });
 
+    let ui = DebuggerUi {
+        symbols,
+        ..DebuggerUi::default()
+    };
+
     let event_loop = EventLoop::new().unwrap();
     let mut app = App {
         emulator,
-        ui: DebuggerUi::default(),
+        ui,
         window: None,
         state: None,
         present_mode,

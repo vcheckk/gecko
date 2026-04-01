@@ -1,3 +1,6 @@
 [submodule "submodules/chipi-spec"]
 	path = submodules/chipi-spec
 	url = https://github.com/ioncodes/chipi-spec
+[submodule "submodules/lilyskategc"]
+	path = submodules/lilyskategc
+	url = https://github.com/ioncodes/lilyskategc

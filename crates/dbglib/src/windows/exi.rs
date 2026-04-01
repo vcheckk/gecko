@@ -231,15 +231,12 @@ fn show_channel(ui: &mut egui::Ui, ch: &ChannelInfo) {
 }
 
 pub fn show_exi(ctx: &Context, open: &mut bool, exi: &ExternalInterface) {
-    egui::Window::new("EXI")
-        .open(open)
-        .default_size(egui::vec2(600.0, 400.0))
-        .show(ctx, |ui| {
-            ui.columns(3, |cols| {
-                for (i, col) in cols.iter_mut().enumerate() {
-                    let ch = channel_info(exi, i);
-                    show_channel(col, &ch);
-                }
-            });
+    egui::Window::new("EXI").open(open).show(ctx, |ui| {
+        ui.columns(3, |cols| {
+            for (i, col) in cols.iter_mut().enumerate() {
+                let ch = channel_info(exi, i);
+                show_channel(col, &ch);
+            }
         });
+    });
 }

@@ -2,11 +2,13 @@ use std::fs::File;
 use std::io::BufWriter;
 
 use dbglib::Debugger;
+use image::symbols::SymbolTable;
 
 const TRACE_FILENAME: &str = "trace.log";
 
 pub struct DebuggerUi {
     pub debugger: Debugger,
+    pub symbols: Option<SymbolTable>,
     pub show_cpu: bool,
     pub show_dsp: bool,
     pub show_gx_state: bool,
@@ -15,6 +17,7 @@ pub struct DebuggerUi {
     pub show_exi: bool,
     pub show_irqs: bool,
     pub show_controls: bool,
+    pub show_callstack: bool,
     pub memory_base: u32,
     pub memory_addr_input: String,
     pub run_until_addr_input: String,
@@ -25,6 +28,7 @@ impl Default for DebuggerUi {
     fn default() -> Self {
         DebuggerUi {
             debugger: Debugger::new(),
+            symbols: None,
             show_cpu: true,
             show_dsp: false,
             show_controls: true,
@@ -33,6 +37,7 @@ impl Default for DebuggerUi {
             show_dvd: false,
             show_exi: false,
             show_irqs: false,
+            show_callstack: false,
             memory_base: 0x8000_0000,
             memory_addr_input: "80000000".to_string(),
             run_until_addr_input: String::new(),
