@@ -3242,6 +3242,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "tinybench"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "gecko",
+ "image 0.1.0",
+]
+
+[[package]]
 name = "tinyemu"
 version = "0.1.0"
 dependencies = [
