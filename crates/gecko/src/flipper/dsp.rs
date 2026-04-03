@@ -228,6 +228,11 @@ impl GameCube {
             }
         }
 
+        if self.dsp.pending_dsp_dma {
+            self.dsp.pending_dsp_dma = false;
+            self.dsp.process_dsp_dma(&mut self.mmio);
+        }
+
         self.dsp.registers.pc = self.dsp.registers.nia;
         self.check_dsp_interrupts();
     }
