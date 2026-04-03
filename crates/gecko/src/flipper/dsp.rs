@@ -108,11 +108,6 @@ impl Dsp {
             self.pending_ucode_upload = false;
             self.process_ucode_upload(mmio);
         }
-
-        if self.pending_dsp_dma {
-            self.pending_dsp_dma = false;
-            self.process_dsp_dma(mmio);
-        }
     }
 
     fn process_aram_dma(&mut self, mmio: &mut Mmio) {
