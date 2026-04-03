@@ -1,6 +1,7 @@
 pub mod addr;
 pub mod condition;
 pub mod core;
+#[allow(dead_code, unused_variables, non_upper_case_globals, clippy::all)]
 pub mod instruction;
 pub mod interpreter;
 pub mod regs;
@@ -197,11 +198,7 @@ impl GameCube {
         let buf = [(w0 >> 8) as u8, w0 as u8, (w1 >> 8) as u8, w1 as u8];
         let instr = Instruction::from_be_bytes(&buf);
         self.dsp.registers.cia = self.dsp.registers.pc;
-        self.dsp.registers.nia = self
-            .dsp
-            .registers
-            .cia
-            .wrapping_add(lut::instr_size(instr) as u16);
+        self.dsp.registers.nia = self.dsp.registers.cia.wrapping_add(lut::instr_size(instr) as u16);
 
         lut::dispatch(self, instr);
 

@@ -1,9 +1,11 @@
 pub mod tokenizer;
 
+#[allow(dead_code, unused_variables, non_upper_case_globals, clippy::all)]
 pub mod gekko {
     include!(concat!(env!("OUT_DIR"), "/gekko.rs"));
 }
 
+#[allow(dead_code, unused_variables, non_upper_case_globals, clippy::all)]
 pub mod dsp {
     include!(concat!(env!("OUT_DIR"), "/dsp.rs"));
 }

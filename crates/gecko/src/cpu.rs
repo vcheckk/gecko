@@ -1,4 +1,5 @@
 pub mod condition;
+#[allow(dead_code, unused_variables, non_upper_case_globals, clippy::all)]
 pub mod instruction;
 pub mod interpreter;
 pub mod irq;
