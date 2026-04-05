@@ -43,12 +43,12 @@ egui-winit = { git = "https://github.com/ioncodes/egui.git" }
 
 [profile.release-max]
 inherits = "release"
-lto = "fat"
 codegen-units = 1
 debug = false
 
 [profile.release]
 debug = true
+lto = "fat"
 
 [profile.dev]
 opt-level = 3

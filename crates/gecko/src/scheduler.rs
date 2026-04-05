@@ -16,6 +16,7 @@ pub enum EventKind {
 
 pub struct Scheduler {
     pub cycles: u64,
+    next_deadline: u64,
     timebase_offset: i64,
     events: BinaryHeap<Reverse<(u64, EventKind)>>,
 }
@@ -24,12 +25,24 @@ impl Scheduler {
     pub fn new() -> Self {
         let mut s = Scheduler {
             cycles: 0,
+            next_deadline: 0,
             timebase_offset: 0,
             events: BinaryHeap::new(),
         };
         s.schedule_at(CYCLES_PER_VSYNC, EventKind::VSync);
         s.schedule_at(CPU_CYCLES_PER_DSP_TICK * DSP_BATCH_SIZE, EventKind::DspTick);
         s
+    }
+
+    /// Set `next_deadline` to the next event deadline so the CPU knows
+    /// how far it can run before an event must be serviced.
+    /// This may later be updated if an event is scheduled sooner than the current target.
+    #[inline(always)]
+    pub fn update_deadline(&mut self) {
+        self.next_deadline = self
+            .events
+            .peek()
+            .map_or(self.cycles, |Reverse((d, _))| *d);
     }
 
     pub fn timebase(&self) -> u64 {
@@ -58,6 +71,9 @@ impl Scheduler {
 
     pub fn schedule_at(&mut self, deadline: u64, kind: EventKind) {
         self.events.push(Reverse((deadline, kind)));
+        if deadline < self.next_deadline {
+            self.next_deadline = deadline;
+        }
     }
 
     pub fn schedule_in(&mut self, delay: u64, kind: EventKind) {
@@ -73,7 +89,8 @@ impl Scheduler {
         }
     }
 
-    pub fn next_event_deadline(&self) -> Option<u64> {
-        self.events.peek().map(|Reverse((d, _))| *d)
+    #[inline(always)]
+    pub fn next_deadline(&self) -> u64 {
+        self.next_deadline
     }
 }
