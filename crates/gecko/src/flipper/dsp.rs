@@ -112,26 +112,26 @@ impl Dsp {
     }
 
     fn process_aram_dma(&mut self, mmio: &mut Mmio) {
-        let mmio_addr = (self.aram_dma_mmio_addr.raw() & 0x3FFFFFFF) as usize;
+        let ram_addr = (self.aram_dma_mmio_addr.raw() & 0x3FFFFFFF) as usize;
         let aram_addr = self.aram_dma_aram_addr.raw() as usize;
         let count = self.aram_dma_control.count() as usize * 4;
 
-        if self.aram_dma_control.direction() == regs::DmaDirection::AramToRam {
-            let src = &self.aram[aram_addr..aram_addr + count];
-            let dst = mmio.virt_slice_mut(mmio_addr as u32, count);
-            dst.copy_from_slice(src);
-        } else {
-            let src = mmio.virt_slice(mmio_addr as u32, count);
-            self.aram[aram_addr..aram_addr + count].copy_from_slice(&src);
-        }
-
         tracing::debug!(
-            mmio_addr = format!("{mmio_addr:08X}"),
+            ram_addr = format!("{ram_addr:08X}"),
             aram_addr = format!("{aram_addr:08X}"),
             count,
             direction = ?self.aram_dma_control.direction(),
-            "ARAM DMA complete"
+            "ARAM DMA"
         );
+
+        if self.aram_dma_control.direction() == regs::DmaDirection::AramToRam {
+            let src = &self.aram[aram_addr..aram_addr + count];
+            let dst = mmio.virt_slice_mut(ram_addr as u32, count);
+            dst.copy_from_slice(src);
+        } else {
+            let src = mmio.virt_slice(ram_addr as u32, count);
+            self.aram[aram_addr..aram_addr + count].copy_from_slice(&src);
+        }
 
         self.csr = self.csr.with_ar_interrupt(true);
     }

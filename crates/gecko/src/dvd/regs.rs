@@ -185,3 +185,13 @@ impl Default for DiConfigurationRegister {
         DiConfigurationRegister::from_raw(0b1)
     }
 }
+
+impl MmioAccess<DvdInterface> for DiConfigurationRegister {
+    fn read(di: &DvdInterface) -> Self {
+        di.config
+    }
+
+    fn write(self, _di: &mut DvdInterface) {
+        // Read-only
+    }
+}

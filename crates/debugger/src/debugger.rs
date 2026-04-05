@@ -6,7 +6,7 @@ use image::symbols::SymbolTable;
 
 const CPU_TRACE_FILENAME: &str = "cpu_trace.log";
 const DSP_TRACE_FILENAME: &str = "dsp_trace.log";
-const DEFAULT_LUA_SCRIPT: &str = include_str!("../../../scripts/bs2_dvd_state_logger.lua");
+const DEFAULT_LUA_SCRIPT: &str = include_str!("../../../scripts/ipl_state_dump.lua");
 
 pub struct DebuggerUi {
     pub debugger: Debugger,

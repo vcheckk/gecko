@@ -28,21 +28,12 @@ STATE_MACHINE_VALUES = {
     [26] = "BS2_MAX_STATE"
 }
 
--- local function log_state_machine(emu)
---     local r3 = emu:gpr(0)
---     local state = STATE_MACHINE_VALUES[r3] or "Unknown"
---     log(string.format("[dvd] state machine=%d (%s)", r3, state))
--- end
-
 local function log_state_machine_write(emu, virt_addr, phys_addr, size, value)
     local state = STATE_MACHINE_VALUES[value] or "Unknown"
-    log(string.format("[dvd] state machine write: value=%d (%s) from pc=%08X", value, state, emu:pc()))
+    log(string.format("[bs2] state machine write: value=%d (%s) from pc=%08X", value, state, emu:pc()))
 end
 
 traps = {
-    -- cpu_post = {
-    --     [0x81300A9C] = log_state_machine,
-    -- },
     bus_write_pre = {
         virt = {
             [0x8145d548] = log_state_machine_write,

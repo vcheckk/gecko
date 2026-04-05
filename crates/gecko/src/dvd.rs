@@ -224,6 +224,13 @@ impl MmioRw for DvdInterface {
                 access_size,
             ));
         }
+        if <regs::DiConfigurationRegister as MmioRegister>::fits(addr, access_size) {
+            return Some(<regs::DiConfigurationRegister as MmioAccess<Self>>::read_at(
+                self,
+                addr,
+                access_size,
+            ));
+        }
 
         match addr {
             DICMDBUF0 if access_size == 4 => Some(self.cmdbuf0),
@@ -253,6 +260,10 @@ impl MmioRw for DvdInterface {
         }
         if <regs::DiControlRegister as MmioRegister>::fits(addr, access_size) {
             <regs::DiControlRegister as MmioAccess<Self>>::write_at(self, addr, access_size, val);
+            return true;
+        }
+        if <regs::DiConfigurationRegister as MmioRegister>::fits(addr, access_size) {
+            <regs::DiConfigurationRegister as MmioAccess<Self>>::write_at(self, addr, access_size, val);
             return true;
         }
 

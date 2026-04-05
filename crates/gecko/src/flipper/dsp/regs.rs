@@ -217,7 +217,20 @@ crate::mmio_register! {
 // 0xCC005016 2 [R/W] AR_MODE - ARAM Mode
 
 crate::mmio_register! {
-    AramMode: u16 @ 0xCC005016 => Dsp.aram_mode {}
+    AramMode: u16 @ 0xCC005016 {
+        #[bits(0)]
+        pub status: bool,
+    }
+}
+
+impl MmioAccess<super::Dsp> for AramMode {
+    fn read(dsp: &super::Dsp) -> Self {
+        dsp.aram_mode.with_status(true)
+    }
+
+    fn write(self, dsp: &mut super::Dsp) {
+        dsp.aram_mode = self;
+    }
 }
 
 // 0xCC00501A 2 [R/W] AR_REFRESH - ARAM Refresh
