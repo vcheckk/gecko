@@ -1,11 +1,11 @@
 use crate::gamecube::GameCube;
 #[cfg(feature = "hooks")]
 use crate::hooks::HookFlags;
+use crate::mmio::MmioRw;
 use crate::mmio::constants::{
     AI_BASE, AI_END, CP_BASE, CP_END, DI_BASE, DI_END, DSP_BASE, DSP_END, EXI_BASE, EXI_END, GX_FIFO_BASE, GX_FIFO_END,
     IPL_BASE, IPL_END, MI_BASE, MI_END, PE_BASE, PE_END, PI_BASE, PI_END, RAM_END, SI_BASE, SI_END, VI_BASE, VI_END,
 };
-use crate::mmio::{Mmio, MmioRw};
 
 enum BusTarget {
     Cp,
@@ -114,11 +114,52 @@ macro_rules! bus_write_hooks {
 }
 
 impl GameCube {
+    /// Translate a virtual address to physical using DBAT registers.
+    /// Falls back to simple masking if no BAT matches.
+    #[inline(always)]
+    fn translate_addr(&self, ea: u32) -> u32 {
+        // Fast path: 0x80/0xC0 with simple mask covers most accesses
+        let top = ea >> 28;
+        if top == 0x8 || top == 0xC {
+            return ea & 0x3FFFFFFF;
+        }
+
+        // Check all 4 DBATs
+        let dbats = [
+            (self.cpu.spr.dbat0u, self.cpu.spr.dbat0l),
+            (self.cpu.spr.dbat1u, self.cpu.spr.dbat1l),
+            (self.cpu.spr.dbat2u, self.cpu.spr.dbat2l),
+            (self.cpu.spr.dbat3u, self.cpu.spr.dbat3l),
+        ];
+
+        for (batu, batl) in dbats {
+            // Valid in supervisor (Vs) or problem (Vp) mode
+            if (batu & 0x3) == 0 {
+                continue;
+            }
+
+            let bl = (batu >> 2) & 0x7FF; // block length mask
+            let bepi = batu >> 17; // upper 15 bits of EA
+            let ea_upper = ea >> 17;
+
+            // Check if EA falls within this BAT's range
+            // Match condition: (EA >> 17) & ~BL == BEPI & ~BL
+            if (ea_upper & !bl) == (bepi & !bl) {
+                let brpn = batl >> 17; // upper 15 bits of PA
+                let pa = (brpn | (ea_upper & bl)) << 17 | (ea & 0x1FFFF);
+                return pa;
+            }
+        }
+
+        // No BAT match, fall back to simple mask
+        ea & 0x3FFFFFFF
+    }
+
     // Read fast path for RAM access
 
     #[inline(always)]
     pub fn read_u8(&mut self, addr: u32) -> u8 {
-        let phys = Mmio::virt_to_phys(addr);
+        let phys = self.translate_addr(addr);
         bus_read_hooks!(self, addr, phys, 1, {
             if phys <= RAM_END {
                 self.mmio.ram_read_u8(phys)
@@ -130,7 +171,7 @@ impl GameCube {
 
     #[inline(always)]
     pub fn read_u16(&mut self, addr: u32) -> u16 {
-        let phys = Mmio::virt_to_phys(addr);
+        let phys = self.translate_addr(addr);
         bus_read_hooks!(self, addr, phys, 2, {
             if phys <= RAM_END - 1 {
                 self.mmio.ram_read_u16(phys)
@@ -142,7 +183,7 @@ impl GameCube {
 
     #[inline(always)]
     pub fn read_u32(&mut self, addr: u32) -> u32 {
-        let phys = Mmio::virt_to_phys(addr);
+        let phys = self.translate_addr(addr);
         bus_read_hooks!(self, addr, phys, 4, {
             if phys <= RAM_END - 3 {
                 self.mmio.ram_read_u32(phys)
@@ -156,7 +197,7 @@ impl GameCube {
 
     #[inline(always)]
     pub fn write_u8(&mut self, addr: u32, val: u8) {
-        let phys = Mmio::virt_to_phys(addr);
+        let phys = self.translate_addr(addr);
         bus_write_hooks!(self, addr, phys, 1, val, {
             if phys <= RAM_END {
                 self.mmio.ram_write_u8(phys, val);
@@ -168,7 +209,7 @@ impl GameCube {
 
     #[inline(always)]
     pub fn write_u16(&mut self, addr: u32, val: u16) {
-        let phys = Mmio::virt_to_phys(addr);
+        let phys = self.translate_addr(addr);
         bus_write_hooks!(self, addr, phys, 2, val, {
             if phys <= RAM_END - 1 {
                 self.mmio.ram_write_u16(phys, val);
@@ -180,7 +221,7 @@ impl GameCube {
 
     #[inline(always)]
     pub fn write_u32(&mut self, addr: u32, val: u32) {
-        let phys = Mmio::virt_to_phys(addr);
+        let phys = self.translate_addr(addr);
         bus_write_hooks!(self, addr, phys, 4, val, {
             if phys <= RAM_END - 3 {
                 self.mmio.ram_write_u32(phys, val);
@@ -324,6 +365,7 @@ impl GameCube {
             BusTarget::Dsp      => {
                 self.dsp.mmio_write_u8(offset, val);
                 self.dsp.process_pending_dma(&mut self.mmio);
+                self.maybe_schedule_aram_dma();
                 self.check_dsp_interrupts();
             }
             BusTarget::Di       => {
@@ -352,7 +394,7 @@ impl GameCube {
                 self.pi.advance_fifo_wptr(1);
                 if self.cp.control.gp_link_enable() {
                     self.gx.mmio_write_u8(&mut self.mmio, val);
-                    self.check_gx_pe_finish();
+                    self.check_gx_pe_interrupts();
                 }
             }
             BusTarget::Ipl      => self.mmio.phys_write_u8(phys, val),
@@ -385,6 +427,7 @@ impl GameCube {
             BusTarget::Dsp      => {
                 self.dsp.mmio_write_u16(offset, val);
                 self.dsp.process_pending_dma(&mut self.mmio);
+                self.maybe_schedule_aram_dma();
                 self.check_dsp_interrupts();
             }
             BusTarget::Di       => {
@@ -414,7 +457,7 @@ impl GameCube {
                 self.pi.advance_fifo_wptr(2);
                 if self.cp.control.gp_link_enable() {
                     self.gx.mmio_write_u16(&mut self.mmio, val);
-                    self.check_gx_pe_finish();
+                    self.check_gx_pe_interrupts();
                 }
             }
             BusTarget::Ipl      => self.mmio.phys_write_u16(phys, val),
@@ -447,6 +490,7 @@ impl GameCube {
             BusTarget::Dsp      => {
                 self.dsp.mmio_write_u32(offset, val);
                 self.dsp.process_pending_dma(&mut self.mmio);
+                self.maybe_schedule_aram_dma();
                 self.check_dsp_interrupts();
             }
             BusTarget::Di       => {
@@ -476,7 +520,7 @@ impl GameCube {
                 self.pi.advance_fifo_wptr(4);
                 if self.cp.control.gp_link_enable() {
                     self.gx.mmio_write_u32(&mut self.mmio, val);
-                    self.check_gx_pe_finish();
+                    self.check_gx_pe_interrupts();
                 }
             }
             BusTarget::Ipl      => self.mmio.phys_write_u32(phys, val),

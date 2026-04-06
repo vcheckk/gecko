@@ -18,6 +18,9 @@ use fifo::FifoCmd;
 
 pub struct GraphicsProcessor {
     pub raise_interrupt: bool,
+    pub raise_token_interrupt: bool,
+    pub pending_token: u16,
+    pub token_dirty: bool,
     pub draw_commands: DrawCommands,
     pub bp_regs: Vec<u32>,
     pub cp_regs: Vec<u32>,
@@ -44,6 +47,9 @@ impl GraphicsProcessor {
     pub fn new() -> Self {
         GraphicsProcessor {
             raise_interrupt: false,
+            raise_token_interrupt: false,
+            pending_token: 0,
+            token_dirty: false,
             bp_regs: vec![0; BP_REG_SIZE],
             cp_regs: vec![0; CP_REG_SIZE],
             xf_mem: vec![0; XF_MEM_SIZE],
@@ -105,12 +111,23 @@ impl GraphicsProcessor {
 }
 
 impl GameCube {
-    /// Check if the GX stub detected a finish command and signal PE
-    pub fn check_gx_pe_finish(&mut self) {
+    /// Check if the GX stub detected a finish or token command and signal PE
+    pub fn check_gx_pe_interrupts(&mut self) {
         if self.gx.raise_interrupt {
             self.gx.raise_interrupt = false;
             self.pe.signal_finish();
         }
+
+        if self.gx.token_dirty {
+            self.gx.token_dirty = false;
+            if self.gx.raise_token_interrupt {
+                self.gx.raise_token_interrupt = false;
+                self.pe.signal_token(self.gx.pending_token);
+            } else {
+                self.pe.set_token(self.gx.pending_token);
+            }
+        }
+
         self.check_pe_interrupts();
     }
 }

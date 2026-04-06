@@ -7,6 +7,32 @@ pub struct Srr0 {
 
 #[chapa::bitfield(u32, width = 32, order = msb0)]
 #[derive(Clone, Copy, Default)]
+pub struct DmaUpper {
+    #[bits(0..=26)]
+    pub ram_addr: u32,
+
+    #[bits(27..=31)]
+    pub length_hi: u8,
+}
+
+#[chapa::bitfield(u32, width = 32, order = msb0)]
+#[derive(Clone, Copy, Default)]
+pub struct DmaLower {
+    #[bits(0..=26)]
+    pub lcache_addr: u32,
+
+    #[bits(27)]
+    pub load: bool,
+
+    #[bits(28..=29)]
+    pub length_lo: u8,
+
+    #[bits(30)]
+    pub trigger: bool,
+}
+
+#[chapa::bitfield(u32, width = 32, order = msb0)]
+#[derive(Clone, Copy, Default)]
 pub struct Xer {
     #[bits(0, alias = "so")]
     pub summary_overflow: bool,
@@ -67,8 +93,8 @@ pub struct Spr {
     pub hid2: u32,
     pub iabr: u32,
     pub wpar: u32,
-    pub dmau: u32,
-    pub dmal: u32,
+    pub dmau: DmaUpper,
+    pub dmal: DmaLower,
     pub ummcr0: u32,
     pub upmc1: u32,
     pub upmc2: u32,
@@ -152,8 +178,8 @@ impl Spr {
             919 => self.gqr7,
             920 => self.hid2,
             921 => self.wpar,
-            922 => self.dmau,
-            923 => self.dmal,
+            922 => self.dmau.raw(),
+            923 => self.dmal.raw(),
             936 => self.ummcr0,
             937 => self.upmc1,
             938 => self.upmc2,
@@ -234,8 +260,8 @@ impl Spr {
             919 => self.gqr7 = value,
             920 => self.hid2 = value,
             921 => self.wpar = value,
-            922 => self.dmau = value,
-            923 => self.dmal = value,
+            922 => self.dmau = DmaUpper::from_raw(value),
+            923 => self.dmal = DmaLower::from_raw(value),
             936 => self.ummcr0 = value,
             937 => self.upmc1 = value,
             938 => self.upmc2 = value,

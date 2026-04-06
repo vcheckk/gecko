@@ -48,3 +48,8 @@ pub const GX_FIFO_END: u32 = 0x0C00_801F;
 // IPL / Bootrom
 pub const IPL_BASE: u32 = 0x3FF0_0000;
 pub const IPL_END: u32 = 0x3FFF_FFFF;
+
+// Locked Cache 16KB
+pub const LCACHE_BASE: u32 = 0xE000_0000;
+pub const LCACHE_END: u32 = 0xE000_3FFF;
+pub const LCACHE_SIZE: usize = 0x4000;

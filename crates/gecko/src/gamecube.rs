@@ -178,6 +178,10 @@ impl GameCube {
                 self.scheduler
                     .schedule_in(CPU_CYCLES_PER_DSP_TICK * DSP_BATCH_SIZE, EventKind::DspTick);
             }
+            EventKind::AramDmaComplete => {
+                self.dsp.process_aram_dma(&mut self.mmio);
+                self.check_dsp_interrupts();
+            }
         }
     }
 

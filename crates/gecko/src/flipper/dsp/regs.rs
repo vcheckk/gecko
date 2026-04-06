@@ -305,8 +305,6 @@ impl MmioAccess<super::Dsp> for AramDmaControl {
 
     fn write(self, dsp: &mut super::Dsp) {
         dsp.aram_dma_control = self;
-
-        // Schedule the ARAM->RAM DMA immediately when this register is written
         dsp.pending_aram_dma = true;
     }
 }

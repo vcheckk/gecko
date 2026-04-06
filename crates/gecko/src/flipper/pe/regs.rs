@@ -51,7 +51,8 @@ crate::mmio_register! {
 
 impl MmioAccess<PixelEngine> for InterruptStatus {
     fn read(pe: &PixelEngine) -> Self {
-        pe.sr
+        // status bits (token/finish) always read back as zero
+        pe.sr.with_pe_token(false).with_pe_finish(false)
     }
 
     fn write(self, pe: &mut PixelEngine) {

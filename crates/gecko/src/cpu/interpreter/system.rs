@@ -28,6 +28,12 @@ pub fn spr<const OP: u32>(ctx: &mut crate::gamecube::GameCube, instr: crate::cpu
             match spr_num {
                 284 => ctx.scheduler.set_timebase_lower(val),
                 285 => ctx.scheduler.set_timebase_upper(val),
+                923 => {
+                    ctx.cpu.spr.dmal = crate::cpu::spr::DmaLower::from_raw(val);
+                    if ctx.cpu.spr.dmal.trigger() {
+                        ctx.mmio.process_locked_cache_dma(&ctx.cpu.spr.dmau, &ctx.cpu.spr.dmal);
+                    }
+                }
                 _ => ctx.cpu.spr.write(spr_num, val),
             }
         }

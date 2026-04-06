@@ -12,6 +12,7 @@ pub enum EventKind {
     ViHalfLine,
     DiTransferComplete,
     DspTick,
+    AramDmaComplete,
 }
 
 pub struct Scheduler {

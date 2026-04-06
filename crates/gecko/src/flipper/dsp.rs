@@ -106,10 +106,7 @@ impl Dsp {
 
     #[inline]
     pub fn process_pending_dma(&mut self, mmio: &mut Mmio) {
-        if self.pending_aram_dma {
-            self.pending_aram_dma = false;
-            self.process_aram_dma(mmio);
-        }
+        // ARAM DMA is handled via scheduler
 
         if self.pending_audio_dma {
             self.pending_audio_dma = false;
@@ -122,10 +119,10 @@ impl Dsp {
         }
     }
 
-    fn process_aram_dma(&mut self, mmio: &mut Mmio) {
+    pub fn process_aram_dma(&mut self, mmio: &mut Mmio) {
         let ram_addr = (self.aram_dma_mmio_addr.raw() & 0x3FFFFFFF) as usize;
         let aram_addr = self.aram_dma_aram_addr.raw() as usize;
-        let count = self.aram_dma_control.count() as usize * 4;
+        let count = self.aram_dma_control.count() as usize;
 
         tracing::debug!(
             ram_addr = format!("{ram_addr:08X}"),
@@ -248,9 +245,7 @@ impl GameCube {
         self.dsp.registers.nia = natural_nia;
 
         // Save state before main instruction so extensions read pre-instruction values.
-        let pre_snap = instr
-            .ext_opcode()
-            .map(|_| self.dsp.registers.snapshot());
+        let pre_snap = instr.ext_opcode().map(|_| self.dsp.registers.snapshot());
 
         lut::dispatch(self, instr);
 
@@ -439,6 +434,15 @@ impl crate::gamecube::GameCube {
             self.pi.assert_interrupt(crate::flipper::pi::InterruptFlag::Dsp);
         } else {
             self.pi.clear_interrupt(crate::flipper::pi::InterruptFlag::Dsp);
+        }
+    }
+
+    pub fn maybe_schedule_aram_dma(&mut self) {
+        if self.dsp.pending_aram_dma {
+            self.dsp.pending_aram_dma = false;
+            const ARAM_DMA_DELAY: u64 = 10_000;
+            self.scheduler
+                .schedule_in(ARAM_DMA_DELAY, crate::scheduler::EventKind::AramDmaComplete);
         }
     }
 }

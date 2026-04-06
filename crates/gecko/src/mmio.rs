@@ -13,6 +13,7 @@ pub struct Mmio {
     pub efb: Vec<u8>,
     pub hwr: Vec<u8>,
     pub ipl: Vec<u8>,
+    pub lcache: Vec<u8>,
 }
 
 impl Mmio {
@@ -22,6 +23,7 @@ impl Mmio {
             efb: vec![0; EFB_SIZE],
             hwr: vec![0; HW_REG_SIZE],
             ipl: vec![0; 0],
+            lcache: vec![0; LCACHE_SIZE],
         }
     }
 
@@ -32,11 +34,9 @@ impl Mmio {
         match phys {
             RAM_BASE..=RAM_END => (&self.ram, phys as usize),
             EFB_BASE..=EFB_END => (&self.efb, (phys - EFB_BASE) as usize),
-            HW_REG_BASE..=HW_REG_END => {
-                //tracing::warn!(phys_addr = format!("{:08X}", phys), "read from mmio");
-                (&self.hwr, (phys - HW_REG_BASE) as usize)
-            }
+            HW_REG_BASE..=HW_REG_END => (&self.hwr, (phys - HW_REG_BASE) as usize),
             IPL_BASE..=IPL_END => (&self.ipl, (phys - IPL_BASE) as usize),
+            LCACHE_BASE..=LCACHE_END => (&self.lcache, (phys - LCACHE_BASE) as usize),
             _ => {
                 tracing::error!(phys_addr = format!("{:08X}", phys), "unmapped physical read");
                 (&self.ram, 0)
@@ -52,11 +52,9 @@ impl Mmio {
         match phys {
             RAM_BASE..=RAM_END => (&mut self.ram, phys as usize),
             EFB_BASE..=EFB_END => (&mut self.efb, (phys - EFB_BASE) as usize),
-            HW_REG_BASE..=HW_REG_END => {
-                //tracing::warn!(phys_addr = format!("{:08X}", phys), "write to mmio");
-                (&mut self.hwr, (phys - HW_REG_BASE) as usize)
-            }
+            HW_REG_BASE..=HW_REG_END => (&mut self.hwr, (phys - HW_REG_BASE) as usize),
             IPL_BASE..=IPL_END => (&mut self.ipl, (phys - IPL_BASE) as usize),
+            LCACHE_BASE..=LCACHE_END => (&mut self.lcache, (phys - LCACHE_BASE) as usize),
             _ => {
                 tracing::error!(phys_addr = format!("{:08X}", phys), "unmapped physical write");
                 (&mut self.ram, 0)
@@ -216,6 +214,32 @@ impl Mmio {
     #[inline(always)]
     pub const fn virt_to_phys(addr: u32) -> u32 {
         addr & 0x3FFFFFFF
+    }
+
+    /// Process a locked cache DMA transfer triggered by writing to SPR DMAL (923).
+    pub fn process_locked_cache_dma(&mut self, dmau: &crate::cpu::spr::DmaUpper, dmal: &crate::cpu::spr::DmaLower) {
+        let ram_addr = dmau.ram_addr() << 5;
+        let lcache_vaddr = dmal.lcache_addr() << 5;
+        let lcache_paddr = (lcache_vaddr - LCACHE_BASE) as usize;
+        let block_count = ((dmau.length_hi() as usize) << 2) | dmal.length_lo() as usize;
+        let length = if block_count == 0 { 128 } else { block_count } * 32;
+
+        tracing::debug!(
+            ram_addr = format!("{ram_addr:08X}"),
+            lcache_vaddr = format!("{lcache_vaddr:08X}"),
+            lcache_paddr = format!("{lcache_paddr:08X}"),
+            length,
+            direction = if dmal.load() { "mem -> lcache" } else { "lcache -> mem" },
+            "locked cache DMA"
+        );
+
+        if dmal.load() {
+            let src = self.virt_slice(ram_addr, length).to_vec();
+            self.lcache[lcache_paddr..lcache_paddr + length].copy_from_slice(&src);
+        } else {
+            let src = self.lcache[lcache_paddr..lcache_paddr + length].to_vec();
+            self.virt_slice_mut(ram_addr, length).copy_from_slice(&src);
+        }
     }
 
     #[inline(always)]

@@ -1,7 +1,7 @@
 use super::constants::{
-    BP_GEN_MODE, BP_PE_ALPHA_COMPARE, BP_PE_CMODE0, BP_PE_DONE, BP_PE_DONE_FINISH_BIT, BP_PE_ZMODE, BP_RAS1_TREF_COUNT,
-    BP_RAS1_TREF0, BP_TEV_COLOR_ENV_0, BP_TEV_REGISTERL_0, BP_TX_SETIMAGE0_I0, BP_TX_SETIMAGE0_I4, BP_TX_SETIMAGE3_I0,
-    BP_TX_SETIMAGE3_I4, BP_TX_SETMODE0_I0, BP_TX_SETMODE0_I4,
+    BP_GEN_MODE, BP_PE_ALPHA_COMPARE, BP_PE_CMODE0, BP_PE_DONE, BP_PE_DONE_FINISH_BIT, BP_PE_TOKEN, BP_PE_TOKEN_INT,
+    BP_PE_ZMODE, BP_RAS1_TREF_COUNT, BP_RAS1_TREF0, BP_TEV_COLOR_ENV_0, BP_TEV_REGISTERL_0, BP_TX_SETIMAGE0_I0,
+    BP_TX_SETIMAGE0_I4, BP_TX_SETIMAGE3_I0, BP_TX_SETIMAGE3_I4, BP_TX_SETMODE0_I0, BP_TX_SETMODE0_I4,
 };
 use super::regs::{
     AlphaCompare, BlendMode, GenMode, TevAlphaEnv, TevColorEnv, TevOrder, TevRegType, TevRegisterH, TevRegisterL,
@@ -71,6 +71,20 @@ impl GraphicsProcessor {
         // PE finish
         if idx == BP_PE_DONE && (val & BP_PE_DONE_FINISH_BIT) != 0 {
             self.raise_interrupt = true;
+        }
+
+        // PE token (0x47): store token value only
+        if idx == BP_PE_TOKEN {
+            self.pending_token = (val & 0xFFFF) as u16;
+            self.token_dirty = true;
+        }
+
+        // PE token interrupt (0x48): store token value + raise interrupt
+        if idx == BP_PE_TOKEN_INT {
+            tracing::debug!(token = val & 0xFFFF, "PE token interrupt raised");
+            self.pending_token = (val & 0xFFFF) as u16;
+            self.token_dirty = true;
+            self.raise_token_interrupt = true;
         }
     }
 

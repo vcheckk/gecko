@@ -6,5 +6,6 @@ short term todolist
 - [ ] Implement mailbox polling detection for DSP?
 - [ ] HLE? IDK if ever a goal
 - [ ] FIFO Tokens
+- [ ] BATs
 
 JIT via Cranelift

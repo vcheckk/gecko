@@ -39,6 +39,10 @@ impl PixelEngine {
         self.sr = self.sr.with_pe_finish(true);
     }
 
+    pub fn set_token(&mut self, token: u16) {
+        self.token = regs::Token::from_raw(token.into());
+    }
+
     pub fn signal_token(&mut self, token: u16) {
         self.token = regs::Token::from_raw(token.into());
         self.sr = self.sr.with_pe_token(true);

@@ -99,6 +99,8 @@ pub const BP_PE_CMODE0: usize = 0x41; // blend mode
 pub const BP_PE_ALPHA_COMPARE: usize = 0xF3;
 pub const BP_PE_DONE: usize = 0x45;
 pub const BP_PE_DONE_FINISH_BIT: u32 = 0x02;
+pub const BP_PE_TOKEN: usize = 0x47;
+pub const BP_PE_TOKEN_INT: usize = 0x48;
 
 // BP TEV (Texture Environment) registers
 pub const BP_GEN_MODE: usize = 0x00;
