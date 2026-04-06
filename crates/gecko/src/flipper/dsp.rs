@@ -229,6 +229,15 @@ impl GameCube {
             return false;
         }
 
+        // Check for external interrupt (CPU->DSP mailbox interrupt via CSR bit 1)
+        if self.dsp.csr.pi_interrupt() && self.dsp.registers.status.external_interrupt_enable() {
+            self.dsp.csr = self.dsp.csr.with_pi_interrupt(false);
+            self.dsp.registers.call_stack.push(self.dsp.registers.pc);
+            self.dsp.registers.data_stack.push(self.dsp.registers.status.raw());
+            self.dsp.registers.status = self.dsp.registers.status.with_external_interrupt_enable(false);
+            self.dsp.registers.pc = 0x000E;
+        }
+
         let pc = self.dsp.registers.pc as usize;
         let w0 = self.dsp.read_imem(pc as u16);
         let w1 = self.dsp.read_imem(pc as u16 + 1);
