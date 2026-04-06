@@ -1,5 +1,7 @@
 pub mod dvd;
 pub mod elf;
+pub mod idb;
+pub mod loader;
 pub mod symbols;
 
 pub struct Section {

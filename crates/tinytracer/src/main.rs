@@ -52,9 +52,9 @@ struct Args {
     #[arg(long, value_parser = parse_hex_addr)]
     until: Option<u32>,
 
-    /// Path to a companion ELF file for symbol names
+    /// Path to a symbol file (ELF, IDA .idb, or .i64)
     #[arg(long)]
-    elf: Option<String>,
+    symbols: Option<String>,
 
     /// Suppress all stdout output (tracing is unaffected)
     #[arg(long)]
@@ -121,10 +121,10 @@ fn main() {
         emulator.set_hook_host(Box::new(host));
     }
 
-    let symbols = args.elf.as_ref().map(|path| {
-        let elf_data = std::fs::read(path).expect("failed to read ELF file");
-        image::elf::parse_elf_symbols(&elf_data).expect("failed to parse ELF symbols")
-    });
+    let symbols = args
+        .symbols
+        .as_ref()
+        .map(|path| image::loader::load_symbols(std::path::Path::new(path)).expect("failed to load symbols"));
 
     run_emulator(&mut emulator, &args, symbols.as_ref());
 
