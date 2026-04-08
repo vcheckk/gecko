@@ -1,41 +1,43 @@
-use super::DvdInterface;
-use crate::mmio::traits::MmioAccess;
+use crate::dvd;
+use crate::gamecube::GameCube;
+use crate::mmio::traits::{MmioHandler, WriteMask};
 use chapa::BitEnum;
 
 // 0xCC006000  4  R/W  DISR - DI Status Register
 
-crate::mmio_register! {
-    DiStatusRegister: u32 @ 0xCC006000 {
-        #[bits(0)]
-        pub brk: bool,
+#[chapa::bitfield(u32, order = lsb0)]
+#[derive(Copy, Clone, Debug)]
+pub struct DiStatusRegister {
+    #[bits(0)]
+    pub brk: bool,
 
-        #[bits(1)]
-        pub device_error_mask: bool,
+    #[bits(1)]
+    pub device_error_mask: bool,
 
-        #[bits(2)]
-        pub device_error: bool,
+    #[bits(2)]
+    pub device_error: bool,
 
-        #[bits(3)]
-        pub transfer_complete_mask: bool,
+    #[bits(3)]
+    pub transfer_complete_mask: bool,
 
-        #[bits(4)]
-        pub transfer_complete: bool,
+    #[bits(4)]
+    pub transfer_complete: bool,
 
-        #[bits(5)]
-        pub break_complete_mask: bool,
+    #[bits(5)]
+    pub break_complete_mask: bool,
 
-        #[bits(6)]
-        pub break_complete: bool,
-    }
+    #[bits(6)]
+    pub break_complete: bool,
 }
+crate::mmio_reg!(DiStatusRegister: u32 @ 0xCC006000);
 
-impl MmioAccess<DvdInterface> for DiStatusRegister {
-    fn read(di: &DvdInterface) -> Self {
-        di.status
+impl MmioHandler<GameCube> for DiStatusRegister {
+    fn read(gc: &mut GameCube) -> Self {
+        gc.di.status
     }
 
-    fn write(self, di: &mut DvdInterface) {
-        let mut sr = di.status;
+    fn write(self, gc: &mut GameCube, _: WriteMask) {
+        let mut sr = gc.di.status;
 
         if self.break_complete() {
             sr = sr.with_break_complete(false);
@@ -57,32 +59,34 @@ impl MmioAccess<DvdInterface> for DiStatusRegister {
             .with_device_error_mask(self.device_error_mask())
             .with_transfer_complete_mask(self.transfer_complete_mask());
 
-        di.status = sr;
+        gc.di.status = sr;
+        dvd::refresh_interrupts(gc);
     }
 }
 
 // 0xCC006004  4  R/W  DICVR - DI Cover Register
 
-crate::mmio_register! {
-    DiCoverRegister: u32 @ 0xCC006004 {
-        #[bits(0)]
-        pub cover_status: bool,
+#[chapa::bitfield(u32, order = lsb0)]
+#[derive(Copy, Clone, Debug)]
+pub struct DiCoverRegister {
+    #[bits(0)]
+    pub cover_status: bool,
 
-        #[bits(1)]
-        pub cover_interrupt_mask: bool,
+    #[bits(1)]
+    pub cover_interrupt_mask: bool,
 
-        #[bits(2)]
-        pub cover_interrupt: bool,
-    }
+    #[bits(2)]
+    pub cover_interrupt: bool,
 }
+crate::mmio_reg!(DiCoverRegister: u32 @ 0xCC006004);
 
-impl MmioAccess<DvdInterface> for DiCoverRegister {
-    fn read(di: &DvdInterface) -> Self {
-        di.cover
+impl MmioHandler<GameCube> for DiCoverRegister {
+    fn read(gc: &mut GameCube) -> Self {
+        gc.di.cover
     }
 
-    fn write(self, di: &mut DvdInterface) {
-        let mut cvr = di.cover;
+    fn write(self, gc: &mut GameCube, _: WriteMask) {
+        let mut cvr = gc.di.cover;
 
         if self.cover_interrupt() {
             cvr = cvr.with_cover_interrupt(false);
@@ -90,47 +94,99 @@ impl MmioAccess<DvdInterface> for DiCoverRegister {
 
         cvr = cvr.with_cover_interrupt_mask(self.cover_interrupt_mask());
 
-        di.cover = cvr;
+        gc.di.cover = cvr;
+        dvd::refresh_interrupts(gc);
+    }
+}
+
+// 0xCC006008  4  W  DICMDBUF0 - DI Command Buffer 0
+// 0xCC00600C  4  W  DICMDBUF1 - DI Command Buffer 1
+// 0xCC006010  4  W  DICMDBUF2 - DI Command Buffer 2
+
+#[chapa::bitfield(u32, order = lsb0)]
+#[derive(Copy, Clone, Debug)]
+pub struct DiCommandBuf0 {
+    #[bits(0..=31)]
+    pub value: u32,
+}
+crate::mmio_reg!(DiCommandBuf0: u32 @ 0xCC006008);
+
+impl MmioHandler<GameCube> for DiCommandBuf0 {
+    fn read(gc: &mut GameCube) -> Self {
+        DiCommandBuf0::from_raw(gc.di.cmdbuf0)
+    }
+
+    fn write(self, gc: &mut GameCube, _: WriteMask) {
+        gc.di.cmdbuf0 = self.raw();
+        let val = self.raw();
+        tracing::debug!(
+            cmd = format!("{:02X}", val >> 24),
+            sub1 = format!("{:02X}", (val >> 16) & 0xFF),
+            sub2 = format!("{:04X}", val & 0xFFFF),
+            "DICMDBUF0 write"
+        );
+    }
+}
+
+#[chapa::bitfield(u32, order = lsb0)]
+#[derive(Copy, Clone, Debug)]
+pub struct DiCommandBuf1 {
+    #[bits(0..=31)]
+    pub value: u32,
+}
+crate::mmio_reg!(DiCommandBuf1: u32 @ 0xCC00600C);
+
+impl MmioHandler<GameCube> for DiCommandBuf1 {
+    fn read(gc: &mut GameCube) -> Self {
+        DiCommandBuf1::from_raw(gc.di.cmdbuf1)
+    }
+
+    fn write(self, gc: &mut GameCube, _: WriteMask) {
+        gc.di.cmdbuf1 = self.raw();
+        tracing::debug!(val = format!("{:08X}", self.raw()), "DICMDBUF1 write");
+    }
+}
+
+#[chapa::bitfield(u32, order = lsb0)]
+#[derive(Copy, Clone, Debug)]
+pub struct DiCommandBuf2 {
+    #[bits(0..=31)]
+    pub value: u32,
+}
+crate::mmio_reg!(DiCommandBuf2: u32 @ 0xCC006010);
+
+impl MmioHandler<GameCube> for DiCommandBuf2 {
+    fn read(gc: &mut GameCube) -> Self {
+        DiCommandBuf2::from_raw(gc.di.cmdbuf2)
+    }
+
+    fn write(self, gc: &mut GameCube, _: WriteMask) {
+        gc.di.cmdbuf2 = self.raw();
+        tracing::debug!(val = format!("{:08X}", self.raw()), "DICMDBUF2 write");
     }
 }
 
 // 0xCC006014  4  R/W  DIMAR - DMA Memory Address Register
 
-crate::mmio_register! {
-    DiDmaAddressRegister: u32 @ 0xCC006014 {
-        #[bits(0..=25)]
-        pub address: u32,
-    }
+#[chapa::bitfield(u32, order = lsb0)]
+#[derive(Copy, Clone, Debug)]
+pub struct DiDmaAddressRegister {
+    #[bits(0..=25)]
+    pub address: u32,
 }
-
-impl MmioAccess<DvdInterface> for DiDmaAddressRegister {
-    fn read(di: &DvdInterface) -> Self {
-        di.dma_address
-    }
-
-    fn write(self, di: &mut DvdInterface) {
-        di.dma_address = self;
-    }
-}
+crate::mmio_reg!(DiDmaAddressRegister: u32 @ 0xCC006014);
+crate::mmio_default_access!(DiDmaAddressRegister => GameCube.di.dma_address);
 
 // 0xCC006018  4  R/W  DILENGTH - DI DMA Transfer Length Register
 
-crate::mmio_register! {
-    DiDmaLengthRegister: u32 @ 0xCC006018 {
-        #[bits(0..=25)]
-        pub length: u32,
-    }
+#[chapa::bitfield(u32, order = lsb0)]
+#[derive(Copy, Clone, Debug)]
+pub struct DiDmaLengthRegister {
+    #[bits(0..=25)]
+    pub length: u32,
 }
-
-impl MmioAccess<DvdInterface> for DiDmaLengthRegister {
-    fn read(di: &DvdInterface) -> Self {
-        di.dma_length
-    }
-
-    fn write(self, di: &mut DvdInterface) {
-        di.dma_length = self;
-    }
-}
+crate::mmio_reg!(DiDmaLengthRegister: u32 @ 0xCC006018);
+crate::mmio_default_access!(DiDmaLengthRegister => GameCube.di.dma_length);
 
 // 0xCC00601C  4  R/W  DICR - DI Control Register
 
@@ -146,39 +202,68 @@ pub enum AccessMode {
     Write = 1,
 }
 
-crate::mmio_register! {
-    DiControlRegister: u32 @ 0xCC00601C {
-        #[bits(0)]
-        pub tstart: bool,
+#[chapa::bitfield(u32, order = lsb0)]
+#[derive(Copy, Clone, Debug)]
+pub struct DiControlRegister {
+    #[bits(0)]
+    pub tstart: bool,
 
-        #[bits(1)]
-        pub dma: TransferMode,
+    #[bits(1)]
+    pub dma: TransferMode,
 
-        #[bits(2)]
-        pub access_mode: AccessMode,
-    }
+    #[bits(2)]
+    pub access_mode: AccessMode,
 }
+crate::mmio_reg!(DiControlRegister: u32 @ 0xCC00601C);
 
-impl MmioAccess<DvdInterface> for DiControlRegister {
-    fn read(di: &DvdInterface) -> Self {
-        di.control
+impl MmioHandler<GameCube> for DiControlRegister {
+    fn read(gc: &mut GameCube) -> Self {
+        gc.di.control
     }
 
-    fn write(self, di: &mut DvdInterface) {
-        di.control = self;
+    fn write(self, gc: &mut GameCube, _: WriteMask) {
+        gc.di.control = self;
 
+        // tstart latches a transfer: resolve the command and run it now.
+        // The scheduled "transfer complete" callback fires after the canonical
+        // delay so the CPU side-effect ordering matches real hardware.
         if self.tstart() {
-            di.transfer_started = true;
+            dvd::start_transfer(gc);
         }
+
+        dvd::refresh_interrupts(gc);
     }
 }
 
-crate::mmio_register! {
-    DiConfigurationRegister: u32 @ 0xCC006024 {
-        #[bits(0, readonly)]
-        pub config: bool
+// 0xCC006020  4  W  DIIMMBUF - DI Immediate Data Buffer
+
+#[chapa::bitfield(u32, order = lsb0)]
+#[derive(Copy, Clone, Debug)]
+pub struct DiImmBuf {
+    #[bits(0..=31)]
+    pub value: u32,
+}
+crate::mmio_reg!(DiImmBuf: u32 @ 0xCC006020);
+
+impl MmioHandler<GameCube> for DiImmBuf {
+    fn read(gc: &mut GameCube) -> Self {
+        DiImmBuf::from_raw(gc.di.immbuf)
+    }
+
+    fn write(self, gc: &mut GameCube, _: WriteMask) {
+        gc.di.immbuf = self.raw();
     }
 }
+
+// 0xCC006024  4  R  DICFG - DI Configuration Register (read-only)
+
+#[chapa::bitfield(u32, order = lsb0)]
+#[derive(Copy, Clone, Debug)]
+pub struct DiConfigurationRegister {
+    #[bits(0, readonly)]
+    pub config: bool,
+}
+crate::mmio_reg!(DiConfigurationRegister: u32 @ 0xCC006024);
 
 impl Default for DiConfigurationRegister {
     fn default() -> Self {
@@ -186,12 +271,12 @@ impl Default for DiConfigurationRegister {
     }
 }
 
-impl MmioAccess<DvdInterface> for DiConfigurationRegister {
-    fn read(di: &DvdInterface) -> Self {
-        di.config
+impl MmioHandler<GameCube> for DiConfigurationRegister {
+    fn read(gc: &mut GameCube) -> Self {
+        gc.di.config
     }
 
-    fn write(self, _di: &mut DvdInterface) {
+    fn write(self, _gc: &mut GameCube, _: WriteMask) {
         // Read-only
     }
 }

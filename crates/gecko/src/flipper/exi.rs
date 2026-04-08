@@ -3,9 +3,7 @@ pub mod macronix;
 pub mod regs;
 
 use crate::flipper::exi::regs::TransferType;
-use crate::mmio::Mmio;
-use crate::mmio::constants::EXI_BASE;
-use crate::mmio::traits::{MmioAccess, MmioRegister, MmioRw};
+use crate::gamecube::GameCube;
 
 pub struct ExternalInterface {
     // Channel 0
@@ -78,16 +76,19 @@ impl ExternalInterface {
         }
     }
 
-    fn start_immediate_transfer(&mut self, channel: usize) {
-        match channel {
-            0 => self.start_immediate_transfer_for_channel::<0>(),
-            1 => self.start_immediate_transfer_for_channel::<1>(),
-            2 => self.start_immediate_transfer_for_channel::<2>(),
-            _ => unreachable!(),
-        }
+    pub fn interrupt_active(&self) -> bool {
+        Self::channel_interrupt_active(&self.ch0_csr)
+            || Self::channel_interrupt_active(&self.ch1_csr)
+            || Self::channel_interrupt_active(&self.ch2_csr)
     }
 
-    fn start_immediate_transfer_for_channel<const CHANNEL: usize>(&mut self) {
+    fn channel_interrupt_active(csr: &impl regs::ChannelStatus) -> bool {
+        (csr.exi_interrupt() && csr.exi_interrupt_mask())
+            || (csr.tc_interrupt() && csr.tc_interrupt_mask())
+            || (csr.ext_interrupt() && csr.ext_interrupt_mask())
+    }
+
+    pub fn start_immediate_transfer<const CHANNEL: usize>(&mut self) {
         let (transfer_type, transfer_length, chip_select, mut bytes) = match CHANNEL {
             0 => (
                 self.ch0_cr.transfer_type(),
@@ -118,147 +119,29 @@ impl ExternalInterface {
                     cs = chip_select,
                     "EXI immediate transfer with no/invalid chip select"
                 );
-                self.finish_transfer_for_channel::<CHANNEL>();
+                self.finish_transfer::<CHANNEL>();
                 return;
             }
         };
 
         let size = (transfer_length as usize) + 1;
 
-        // TODO: idk
         if let Some(device) = &mut self.devices[CHANNEL][slot] {
             for i in 0..size {
                 if transfer_type == TransferType::Read {
                     bytes[i] = 0;
                 }
-
                 device.transfer_byte(&mut bytes[i]);
             }
         } else {
             bytes[..size].fill(0);
         }
 
-        self.set_data_for_channel::<CHANNEL>(u32::from_be_bytes(bytes));
-        self.finish_transfer_for_channel::<CHANNEL>();
+        self.set_data::<CHANNEL>(u32::from_be_bytes(bytes));
+        self.finish_transfer::<CHANNEL>();
     }
 
-    fn pending_dma(&self, channel: usize) -> Option<(u8, TransferType, u32, u32)> {
-        match channel {
-            0 => self.pending_dma_for_channel::<0>(),
-            1 => self.pending_dma_for_channel::<1>(),
-            2 => self.pending_dma_for_channel::<2>(),
-            _ => None,
-        }
-    }
-
-    fn pending_dma_for_channel<const CHANNEL: usize>(&self) -> Option<(u8, TransferType, u32, u32)> {
-        let (transfer_start, dma_mode, chip_select, transfer_type, address, length) = match CHANNEL {
-            0 => (
-                self.ch0_cr.transfer_start(),
-                self.ch0_cr.dma_mode(),
-                self.ch0_csr.chip_select(),
-                self.ch0_cr.transfer_type(),
-                self.ch0_mar.address(),
-                self.ch0_length.length(),
-            ),
-            1 => (
-                self.ch1_cr.transfer_start(),
-                self.ch1_cr.dma_mode(),
-                self.ch1_csr.chip_select(),
-                self.ch1_cr.transfer_type(),
-                self.ch1_mar.address(),
-                self.ch1_length.length(),
-            ),
-            2 => (
-                self.ch2_cr.transfer_start(),
-                self.ch2_cr.dma_mode(),
-                self.ch2_csr.chip_select(),
-                self.ch2_cr.transfer_type(),
-                self.ch2_mar.address(),
-                self.ch2_length.length(),
-            ),
-            _ => unreachable!(),
-        };
-
-        if !transfer_start || !dma_mode {
-            return None;
-        }
-
-        Some((chip_select, transfer_type, address << 5, length << 5))
-    }
-
-    pub fn process_cs_changes(&mut self) {
-        let current = [
-            self.ch0_csr.chip_select(),
-            self.ch1_csr.chip_select(),
-            self.ch2_csr.chip_select(),
-        ];
-
-        for channel in 0..3 {
-            let prev = self.prev_cs[channel];
-            let curr = current[channel];
-            if curr != prev && curr != 0 {
-                if let Some(slot) = Self::cs_to_slot(curr)
-                    && let Some(device) = &mut self.devices[channel][slot]
-                {
-                    device.on_select();
-                }
-            }
-        }
-
-        self.prev_cs = current;
-    }
-
-    pub fn process_dma_transfers(&mut self, mmio: &mut Mmio) {
-        const CHANNEL_COUNT: usize = 3;
-
-        for channel in 0..CHANNEL_COUNT {
-            let Some((cs, transfer_type, address, length)) = self.pending_dma(channel) else {
-                continue;
-            };
-
-            tracing::debug!(
-                channel,
-                cs,
-                ?transfer_type,
-                address = format!("{:08X}", address),
-                length,
-                "EXI DMA transfer"
-            );
-
-            let slot = match Self::cs_to_slot(cs) {
-                Some(s) => s,
-                None => {
-                    tracing::warn!(channel, cs, "EXI DMA transfer with no/invalid chip select");
-                    self.finish_transfer(channel);
-                    continue;
-                }
-            };
-
-            if let Some(device) = &mut self.devices[channel][slot] {
-                match transfer_type {
-                    TransferType::Read => device.dma_read(mmio.phys_slice_mut(address, length as usize)),
-                    TransferType::Write => device.dma_write(mmio.phys_slice(address, length as usize)),
-                    TransferType::ReadAndWrite | TransferType::Reserved => {
-                        tracing::error!(channel, cs, "EXI DMA transfer with invalid/unimplemented transfer type");
-                    }
-                }
-            }
-
-            self.finish_transfer(channel);
-        }
-    }
-
-    fn finish_transfer(&mut self, channel: usize) {
-        match channel {
-            0 => self.finish_transfer_for_channel::<0>(),
-            1 => self.finish_transfer_for_channel::<1>(),
-            2 => self.finish_transfer_for_channel::<2>(),
-            _ => {}
-        }
-    }
-
-    fn set_data_for_channel<const CHANNEL: usize>(&mut self, val: u32) {
+    fn set_data<const CHANNEL: usize>(&mut self, val: u32) {
         match CHANNEL {
             0 => self.ch0_data = regs::Channel0Data::from_raw(val),
             1 => self.ch1_data = regs::Channel1Data::from_raw(val),
@@ -267,7 +150,7 @@ impl ExternalInterface {
         }
     }
 
-    fn finish_transfer_for_channel<const CHANNEL: usize>(&mut self) {
+    fn finish_transfer<const CHANNEL: usize>(&mut self) {
         match CHANNEL {
             0 => {
                 self.ch0_cr.set_transfer_start(false);
@@ -286,11 +169,10 @@ impl ExternalInterface {
     }
 }
 
-impl MmioRw for ExternalInterface {
-    const BASE: u32 = EXI_BASE;
-    const NAME: &'static str = "EXI";
-
-    crate::impl_mmio_dispatch!(
+crate::mmio_device_dispatch! {
+    read = exi_read,
+    write = exi_write,
+    registers = [
         regs::Channel0Status,
         regs::Channel0DmaAddress,
         regs::Channel0DmaLength,
@@ -306,29 +188,87 @@ impl MmioRw for ExternalInterface {
         regs::Channel2DmaLength,
         regs::Channel2Control,
         regs::Channel2Data,
-    );
+    ],
 }
 
-impl ExternalInterface {
-    pub fn interrupt_active(&self) -> bool {
-        Self::channel_interrupt_active(&self.ch0_csr)
-            || Self::channel_interrupt_active(&self.ch1_csr)
-            || Self::channel_interrupt_active(&self.ch2_csr)
-    }
+#[inline(always)]
+pub fn refresh_interrupts(gc: &mut GameCube) {
+    use crate::flipper::pi::InterruptFlag;
 
-    fn channel_interrupt_active(csr: &impl regs::ChannelStatus) -> bool {
-        (csr.exi_interrupt() && csr.exi_interrupt_mask())
-            || (csr.tc_interrupt() && csr.tc_interrupt_mask())
-            || (csr.ext_interrupt() && csr.ext_interrupt_mask())
+    if gc.exi.interrupt_active() {
+        gc.pi.assert_interrupt(InterruptFlag::Exi);
+    } else {
+        gc.pi.clear_interrupt(InterruptFlag::Exi);
     }
 }
 
-impl crate::gamecube::GameCube {
-    pub fn check_exi_interrupts(&mut self) {
-        if self.exi.interrupt_active() {
-            self.pi.assert_interrupt(crate::flipper::pi::InterruptFlag::Exi);
-        } else {
-            self.pi.clear_interrupt(crate::flipper::pi::InterruptFlag::Exi);
+#[inline(always)]
+pub fn on_chip_select_written<const CHANNEL: usize>(gc: &mut GameCube, new_cs: u8) {
+    let prev = gc.exi.prev_cs[CHANNEL];
+    if new_cs != prev && new_cs != 0 {
+        if let Some(slot) = ExternalInterface::cs_to_slot(new_cs)
+            && let Some(device) = &mut gc.exi.devices[CHANNEL][slot]
+        {
+            device.on_select();
         }
     }
+    gc.exi.prev_cs[CHANNEL] = new_cs;
+}
+
+pub fn run_dma<const CHANNEL: usize>(gc: &mut GameCube) {
+    let (cs, transfer_type, address, length) = match CHANNEL {
+        0 => (
+            gc.exi.ch0_csr.chip_select(),
+            gc.exi.ch0_cr.transfer_type(),
+            gc.exi.ch0_mar.address() << 5,
+            gc.exi.ch0_length.length() << 5,
+        ),
+        1 => (
+            gc.exi.ch1_csr.chip_select(),
+            gc.exi.ch1_cr.transfer_type(),
+            gc.exi.ch1_mar.address() << 5,
+            gc.exi.ch1_length.length() << 5,
+        ),
+        2 => (
+            gc.exi.ch2_csr.chip_select(),
+            gc.exi.ch2_cr.transfer_type(),
+            gc.exi.ch2_mar.address() << 5,
+            gc.exi.ch2_length.length() << 5,
+        ),
+        _ => unreachable!(),
+    };
+
+    tracing::debug!(
+        channel = CHANNEL,
+        cs,
+        ?transfer_type,
+        address = format!("{:08X}", address),
+        length,
+        "EXI DMA transfer"
+    );
+
+    let slot = match ExternalInterface::cs_to_slot(cs) {
+        Some(s) => s,
+        None => {
+            tracing::warn!(channel = CHANNEL, cs, "EXI DMA transfer with no/invalid chip select");
+            gc.exi.finish_transfer::<CHANNEL>();
+            return;
+        }
+    };
+
+    if let Some(device) = &mut gc.exi.devices[CHANNEL][slot] {
+        match transfer_type {
+            TransferType::Read => device.dma_read(gc.mmio.phys_slice_mut(address, length as usize)),
+            TransferType::Write => device.dma_write(gc.mmio.phys_slice(address, length as usize)),
+            TransferType::ReadAndWrite | TransferType::Reserved => {
+                tracing::error!(
+                    channel = CHANNEL,
+                    cs,
+                    "EXI DMA transfer with invalid/unimplemented transfer type"
+                );
+            }
+        }
+    }
+
+    gc.exi.finish_transfer::<CHANNEL>();
 }

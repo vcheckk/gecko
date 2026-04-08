@@ -252,15 +252,10 @@ impl GameCube {
             BusTarget::Pi       => self.pi.mmio_read_u8(offset),
             BusTarget::Mi       => self.mi.mmio_read_u8(offset),
             BusTarget::Dsp      => crate::flipper::dsp::dsp_read(self, phys, 1).unwrap_or(0) as u8,
-            BusTarget::Di       => self.di.mmio_read_u8(offset),
-            BusTarget::Si       => self.si.mmio_read_u8(offset),
-            BusTarget::Exi      => self.exi.mmio_read_u8(offset),
-            BusTarget::Ai       => {
-                if offset == 0x08 {
-                    return self.ai.sample_count(self.scheduler.cycles) as u8;
-                }
-                self.ai.mmio_read_u8(offset)
-            }
+            BusTarget::Di       => crate::dvd::di_read(self, phys, 1).unwrap_or(0) as u8,
+            BusTarget::Si       => crate::flipper::si::si_read(self, phys, 1).unwrap_or(0) as u8,
+            BusTarget::Exi      => crate::flipper::exi::exi_read(self, phys, 1).unwrap_or(0) as u8,
+            BusTarget::Ai       => crate::flipper::ai::ai_read(self, phys, 1).unwrap_or(0) as u8,
             BusTarget::Gx       => {
                 tracing::error!(addr = format!("{:08X}", addr), "Invalid GX FIFO read");
                 0
@@ -286,15 +281,10 @@ impl GameCube {
             BusTarget::Pi       => self.pi.mmio_read_u16(offset),
             BusTarget::Mi       => self.mi.mmio_read_u16(offset),
             BusTarget::Dsp      => crate::flipper::dsp::dsp_read(self, phys, 2).unwrap_or(0) as u16,
-            BusTarget::Di       => self.di.mmio_read_u16(offset),
-            BusTarget::Si       => self.si.mmio_read_u16(offset),
-            BusTarget::Exi      => self.exi.mmio_read_u16(offset),
-            BusTarget::Ai       => {
-                if offset == 0x08 || offset == 0x0A {
-                    return self.ai.sample_count(self.scheduler.cycles) as u16;
-                }
-                self.ai.mmio_read_u16(offset)
-            }
+            BusTarget::Di       => crate::dvd::di_read(self, phys, 2).unwrap_or(0) as u16,
+            BusTarget::Si       => crate::flipper::si::si_read(self, phys, 2).unwrap_or(0) as u16,
+            BusTarget::Exi      => crate::flipper::exi::exi_read(self, phys, 2).unwrap_or(0) as u16,
+            BusTarget::Ai       => crate::flipper::ai::ai_read(self, phys, 2).unwrap_or(0) as u16,
             BusTarget::Gx       => {
                 tracing::error!(addr = format!("{:08X}", addr), "Invalid GX FIFO read");
                 0
@@ -322,15 +312,10 @@ impl GameCube {
             BusTarget::Pi       => self.pi.mmio_read_u32(offset),
             BusTarget::Mi       => self.mi.mmio_read_u32(offset),
             BusTarget::Dsp      => crate::flipper::dsp::dsp_read(self, phys, 4).unwrap_or(0),
-            BusTarget::Di       => self.di.mmio_read_u32(offset),
-            BusTarget::Si       => self.si.mmio_read_u32(offset),
-            BusTarget::Exi      => self.exi.mmio_read_u32(offset),
-            BusTarget::Ai       => {
-                if offset == 0x08 {
-                    return self.ai.sample_count(self.scheduler.cycles);
-                }
-                self.ai.mmio_read_u32(offset)
-            }
+            BusTarget::Di       => crate::dvd::di_read(self, phys, 4).unwrap_or(0),
+            BusTarget::Si       => crate::flipper::si::si_read(self, phys, 4).unwrap_or(0),
+            BusTarget::Exi      => crate::flipper::exi::exi_read(self, phys, 4).unwrap_or(0),
+            BusTarget::Ai       => crate::flipper::ai::ai_read(self, phys, 4).unwrap_or(0),
             BusTarget::Gx       => {
                 tracing::error!(addr = format!("{:08X}", addr), "Invalid GX FIFO read");
                 0
@@ -363,26 +348,10 @@ impl GameCube {
             BusTarget::Pi       => self.pi.mmio_write_u8(offset, val),
             BusTarget::Mi       => self.mi.mmio_write_u8(offset, val),
             BusTarget::Dsp      => { crate::flipper::dsp::dsp_write(self, phys, 1, val as u32); }
-            BusTarget::Di       => {
-                self.di.mmio_write_u8(offset, val);
-                self.start_dvd_transfer();
-                self.check_di_interrupts();
-            }
-            BusTarget::Si       => {
-                self.si.mmio_write_u8(offset, val);
-                self.check_si_interrupts();
-            }
-            BusTarget::Exi      => {
-                self.exi.mmio_write_u8(offset, val);
-                self.exi.process_cs_changes();
-                self.exi.process_dma_transfers(&mut self.mmio);
-                self.check_exi_interrupts();
-            }
-            BusTarget::Ai       => {
-                self.ai.mmio_write_u8(offset, val);
-                self.check_sample_counter_reset();
-                self.check_ai_interrupts();
-            }
+            BusTarget::Di       => { crate::dvd::di_write(self, phys, 1, val as u32); }
+            BusTarget::Si       => { crate::flipper::si::si_write(self, phys, 1, val as u32); }
+            BusTarget::Exi      => { crate::flipper::exi::exi_write(self, phys, 1, val as u32); }
+            BusTarget::Ai       => { crate::flipper::ai::ai_write(self, phys, 1, val as u32); }
             BusTarget::Gx       => {
                 let wptr = self.pi.fifo_wptr as usize;
                 self.mmio.ram[wptr] = val;
@@ -420,26 +389,10 @@ impl GameCube {
             BusTarget::Pi       => self.pi.mmio_write_u16(offset, val),
             BusTarget::Mi       => self.mi.mmio_write_u16(offset, val),
             BusTarget::Dsp      => { crate::flipper::dsp::dsp_write(self, phys, 2, val as u32); }
-            BusTarget::Di       => {
-                self.di.mmio_write_u16(offset, val);
-                self.start_dvd_transfer();
-                self.check_di_interrupts();
-            }
-            BusTarget::Si       => {
-                self.si.mmio_write_u16(offset, val);
-                self.check_si_interrupts();
-            }
-            BusTarget::Exi      => {
-                self.exi.mmio_write_u16(offset, val);
-                self.exi.process_cs_changes();
-                self.exi.process_dma_transfers(&mut self.mmio);
-                self.check_exi_interrupts();
-            }
-            BusTarget::Ai       => {
-                self.ai.mmio_write_u16(offset, val);
-                self.check_sample_counter_reset();
-                self.check_ai_interrupts();
-            }
+            BusTarget::Di       => { crate::dvd::di_write(self, phys, 2, val as u32); }
+            BusTarget::Si       => { crate::flipper::si::si_write(self, phys, 2, val as u32); }
+            BusTarget::Exi      => { crate::flipper::exi::exi_write(self, phys, 2, val as u32); }
+            BusTarget::Ai       => { crate::flipper::ai::ai_write(self, phys, 2, val as u32); }
             BusTarget::Gx       => {
                 let wptr = self.pi.fifo_wptr as usize;
                 let bytes = val.to_be_bytes();
@@ -478,26 +431,10 @@ impl GameCube {
             BusTarget::Pi       => self.pi.mmio_write_u32(offset, val),
             BusTarget::Mi       => self.mi.mmio_write_u32(offset, val),
             BusTarget::Dsp      => { crate::flipper::dsp::dsp_write(self, phys, 4, val); }
-            BusTarget::Di       => {
-                self.di.mmio_write_u32(offset, val);
-                self.start_dvd_transfer();
-                self.check_di_interrupts();
-            }
-            BusTarget::Si       => {
-                self.si.mmio_write_u32(offset, val);
-                self.check_si_interrupts();
-            }
-            BusTarget::Exi      => {
-                self.exi.mmio_write_u32(offset, val);
-                self.exi.process_cs_changes();
-                self.exi.process_dma_transfers(&mut self.mmio);
-                self.check_exi_interrupts();
-            }
-            BusTarget::Ai       => {
-                self.ai.mmio_write_u32(offset, val);
-                self.check_sample_counter_reset();
-                self.check_ai_interrupts();
-            }
+            BusTarget::Di       => { crate::dvd::di_write(self, phys, 4, val); }
+            BusTarget::Si       => { crate::flipper::si::si_write(self, phys, 4, val); }
+            BusTarget::Exi      => { crate::flipper::exi::exi_write(self, phys, 4, val); }
+            BusTarget::Ai       => { crate::flipper::ai::ai_write(self, phys, 4, val); }
             BusTarget::Gx       => {
                 let wptr = self.pi.fifo_wptr as usize;
                 let bytes = val.to_be_bytes();

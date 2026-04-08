@@ -1,5 +1,6 @@
-use super::AudioInterface;
-use crate::mmio::traits::MmioAccess;
+use crate::flipper::ai;
+use crate::gamecube::GameCube;
+use crate::mmio::traits::{MmioHandler, WriteMask};
 use chapa::BitEnum;
 
 // 0xCC006C00  4  R/W  AICR - Audio Interface Control Register
@@ -16,38 +17,39 @@ pub enum SampleRate {
     Rate32KHz = 1,
 }
 
-crate::mmio_register! {
-    AiControl: u32 @ 0xCC006C00 {
-        #[bits(0, alias = "pstat")]
-        pub playback_status: Status,
+#[chapa::bitfield(u32, order = lsb0)]
+#[derive(Copy, Clone, Debug)]
+pub struct AiControl {
+    #[bits(0, alias = "pstat")]
+    pub playback_status: Status,
 
-        #[bits(1, alias = "afr")]
-        pub sample_rate: SampleRate,
+    #[bits(1, alias = "afr")]
+    pub sample_rate: SampleRate,
 
-        #[bits(2, alias = "aiintmsk")]
-        pub interrupt_mask: bool,
+    #[bits(2, alias = "aiintmsk")]
+    pub interrupt_mask: bool,
 
-        #[bits(3, alias = "aiint")]
-        pub interrupt: bool,
+    #[bits(3, alias = "aiint")]
+    pub interrupt: bool,
 
-        #[bits(4, alias = "aiintvld")]
-        pub interrupt_valid: bool,
+    #[bits(4, alias = "aiintvld")]
+    pub interrupt_valid: bool,
 
-        #[bits(5, alias = "screset")]
-        pub sample_counter_reset: bool,
+    #[bits(5, alias = "screset")]
+    pub sample_counter_reset: bool,
 
-        #[bits(6)]
-        pub dsp_sample_rate: bool,
-    }
+    #[bits(6)]
+    pub dsp_sample_rate: bool,
 }
+crate::mmio_reg!(AiControl: u32 @ 0xCC006C00);
 
-impl MmioAccess<AudioInterface> for AiControl {
-    fn read(ai: &AudioInterface) -> Self {
-        ai.control
+impl MmioHandler<GameCube> for AiControl {
+    fn read(gc: &mut GameCube) -> Self {
+        gc.ai.control
     }
 
-    fn write(self, ai: &mut AudioInterface) {
-        let mut cr = ai.control;
+    fn write(self, gc: &mut GameCube, _: WriteMask) {
+        let mut cr = gc.ai.control;
 
         // AIINT is w1c
         if self.interrupt() {
@@ -64,48 +66,65 @@ impl MmioAccess<AudioInterface> for AiControl {
 
         // SCRESET resets the sample counter
         if self.sample_counter_reset() {
-            ai.sample_counter_reset_pending = true;
-            ai.sample_counter = AiSampleCounter::from_raw(0);
+            gc.ai.sample_counter_base_cycle = gc.scheduler.cycles;
+            gc.ai.sample_counter = AiSampleCounter::from_raw(0);
         }
 
-        ai.control = cr;
+        gc.ai.control = cr;
+        ai::refresh_interrupts(gc);
     }
 }
 
 // 0xCC006C04  4  R/W  AIVR - Audio Interface Volume Register
-crate::mmio_register! {
-    AiVolume: u32 @ 0xCC006C04 => AudioInterface.volume {
-        #[bits(0..=7)]
-        pub left: u8,
+#[chapa::bitfield(u32, order = lsb0)]
+#[derive(Copy, Clone, Debug)]
+pub struct AiVolume {
+    #[bits(0..=7)]
+    pub left: u8,
 
-        #[bits(8..=15)]
-        pub right: u8,
-    }
+    #[bits(8..=15)]
+    pub right: u8,
 }
+crate::mmio_reg!(AiVolume: u32 @ 0xCC006C04);
+crate::mmio_default_access!(AiVolume => GameCube.ai.volume);
 
 // 0xCC006C08  4  R  AISCNT - Audio Interface Sample Counter
 
-crate::mmio_register! {
-    AiSampleCounter: u32 @ 0xCC006C08 {
-        #[bits(0..=30)]
-        pub sample_count: u32,
-    }
+#[chapa::bitfield(u32, order = lsb0)]
+#[derive(Copy, Clone, Debug)]
+pub struct AiSampleCounter {
+    #[bits(0..=30)]
+    pub sample_count: u32,
 }
+crate::mmio_reg!(AiSampleCounter: u32 @ 0xCC006C08);
 
-impl MmioAccess<AudioInterface> for AiSampleCounter {
-    fn read(ai: &AudioInterface) -> Self {
-        ai.sample_counter
+impl MmioHandler<GameCube> for AiSampleCounter {
+    fn read(gc: &mut GameCube) -> Self {
+        let count = gc.ai.sample_count(gc.scheduler.cycles);
+        AiSampleCounter::from_raw(count)
     }
 
-    fn write(self, _ai: &mut AudioInterface) {
+    fn write(self, _gc: &mut GameCube, _: WriteMask) {
         tracing::warn!("attempted to write to read-only AiSampleCounter");
     }
 }
 
 // 0xCC006C0C  4  R/W  AIIT - Audio Interface Interrupt Timing
-crate::mmio_register! {
-    AiInterruptTiming: u32 @ 0xCC006C0C => AudioInterface.interrupt_timing {
-        #[bits(0..=30)]
-        pub sample_count: u32,
+#[chapa::bitfield(u32, order = lsb0)]
+#[derive(Copy, Clone, Debug)]
+pub struct AiInterruptTiming {
+    #[bits(0..=30)]
+    pub sample_count: u32,
+}
+crate::mmio_reg!(AiInterruptTiming: u32 @ 0xCC006C0C);
+
+impl MmioHandler<GameCube> for AiInterruptTiming {
+    fn read(gc: &mut GameCube) -> Self {
+        gc.ai.interrupt_timing
+    }
+
+    fn write(self, gc: &mut GameCube, _: WriteMask) {
+        gc.ai.interrupt_timing = self;
+        ai::refresh_interrupts(gc);
     }
 }

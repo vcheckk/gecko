@@ -1,7 +1,8 @@
 use chapa::BitEnum;
 
-use super::ExternalInterface;
-use crate::mmio::traits::{MmioAccess, MmioRegister};
+use crate::flipper::exi;
+use crate::gamecube::GameCube;
+use crate::mmio::traits::{MmioHandler, MmioRegister, WriteMask};
 
 pub trait ChannelStatus {
     fn exi_interrupt(&self) -> bool;
@@ -63,173 +64,246 @@ impl std::fmt::Debug for TransferType {
 
 // 0xCC006800	4	R/W	EXI0CSR - EXI Channel 0 Status Register
 
-crate::mmio_register! {
-    Channel0Status: u32 @ 0xCC006800 {
-        #[bits(0, alias = "exiintmask")] pub exi_interrupt_mask: bool,
-        #[bits(1, alias = "exiint")] pub exi_interrupt: bool,
-        #[bits(2, alias = "tcintmask")] pub tc_interrupt_mask: bool,
-        #[bits(3, alias = "tcint")] pub tc_interrupt: bool,
-        #[bits(4..=6, alias = "clk")] pub clock: u8,
-        #[bits(7..=9, alias = "cs")] pub chip_select: u8,
-        #[bits(10, alias = "extintmask")] pub ext_interrupt_mask: bool,
-        #[bits(11, alias = "extint")] pub ext_interrupt: bool,
-        #[bits(12, alias = "ext")] pub device_connected: bool,
-        #[bits(13, alias = "romdis")] pub rom_descramble_disabled: bool,
-    }
+#[chapa::bitfield(u32, order = lsb0)]
+#[derive(Copy, Clone, Debug)]
+pub struct Channel0Status {
+    #[bits(0, alias = "exiintmask")]
+    pub exi_interrupt_mask: bool,
+    #[bits(1, alias = "exiint")]
+    pub exi_interrupt: bool,
+    #[bits(2, alias = "tcintmask")]
+    pub tc_interrupt_mask: bool,
+    #[bits(3, alias = "tcint")]
+    pub tc_interrupt: bool,
+    #[bits(4..=6, alias = "clk")]
+    pub clock: u8,
+    #[bits(7..=9, alias = "cs")]
+    pub chip_select: u8,
+    #[bits(10, alias = "extintmask")]
+    pub ext_interrupt_mask: bool,
+    #[bits(11, alias = "extint")]
+    pub ext_interrupt: bool,
+    #[bits(12, alias = "ext")]
+    pub device_connected: bool,
+    #[bits(13, alias = "romdis")]
+    pub rom_descramble_disabled: bool,
 }
+crate::mmio_reg!(Channel0Status: u32 @ 0xCC006800);
 
-impl MmioAccess<ExternalInterface> for Channel0Status {
-    fn read(exi: &ExternalInterface) -> Self {
-        exi.ch0_csr
+impl MmioHandler<GameCube> for Channel0Status {
+    fn read(gc: &mut GameCube) -> Self {
+        gc.exi.ch0_csr
     }
-    fn write(self, exi: &mut ExternalInterface) {
-        write_csr(&mut exi.ch0_csr, self);
+    fn write(self, gc: &mut GameCube, _: WriteMask) {
+        write_csr(&mut gc.exi.ch0_csr, self);
+        exi::on_chip_select_written::<0>(gc, self.chip_select());
+        exi::refresh_interrupts(gc);
     }
 }
 
 // 0xCC006804	4	R/W	EXI0MAR - EXI Channel 0 DMA Start Address
 
-crate::mmio_register! {
-    Channel0DmaAddress: u32 @ 0xCC006804 => ExternalInterface.ch0_mar {
-        #[bits(5..=25, alias = "addr")] pub address: u32,
-    }
+#[chapa::bitfield(u32, order = lsb0)]
+#[derive(Copy, Clone, Debug)]
+pub struct Channel0DmaAddress {
+    #[bits(5..=25, alias = "addr")]
+    pub address: u32,
 }
+crate::mmio_reg!(Channel0DmaAddress: u32 @ 0xCC006804);
+crate::mmio_default_access!(Channel0DmaAddress => GameCube.exi.ch0_mar);
 
 // 0xCC006808	4	R/W	EXI0LENGTH - EXI Channel 0 DMA Transfer Length
 
-crate::mmio_register! {
-    Channel0DmaLength: u32 @ 0xCC006808 => ExternalInterface.ch0_length {
-        #[bits(5..=25, alias = "len")] pub length: u32,
-    }
+#[chapa::bitfield(u32, order = lsb0)]
+#[derive(Copy, Clone, Debug)]
+pub struct Channel0DmaLength {
+    #[bits(5..=25, alias = "len")]
+    pub length: u32,
 }
+crate::mmio_reg!(Channel0DmaLength: u32 @ 0xCC006808);
+crate::mmio_default_access!(Channel0DmaLength => GameCube.exi.ch0_length);
 
 // 0xCC00680C	4	R/W	EXI0CR - EXI Channel 0 Control Register
 
-crate::mmio_register! {
-    Channel0Control: u32 @ 0xCC00680C {
-        #[bits(0, alias = "tstart")] pub transfer_start: bool,
-        #[bits(1, alias = "dma")] pub dma_mode: bool,
-        #[bits(2..=3, alias = "rw")] pub transfer_type: TransferType,
-        #[bits(4..=5, alias = "tlen")] pub transfer_length: u8,
-    }
+#[chapa::bitfield(u32, order = lsb0)]
+#[derive(Copy, Clone, Debug)]
+pub struct Channel0Control {
+    #[bits(0, alias = "tstart")]
+    pub transfer_start: bool,
+    #[bits(1, alias = "dma")]
+    pub dma_mode: bool,
+    #[bits(2..=3, alias = "rw")]
+    pub transfer_type: TransferType,
+    #[bits(4..=5, alias = "tlen")]
+    pub transfer_length: u8,
 }
+crate::mmio_reg!(Channel0Control: u32 @ 0xCC00680C);
 
-impl MmioAccess<ExternalInterface> for Channel0Control {
-    fn read(exi: &ExternalInterface) -> Self {
-        exi.ch0_cr
+impl MmioHandler<GameCube> for Channel0Control {
+    fn read(gc: &mut GameCube) -> Self {
+        gc.exi.ch0_cr
     }
-    fn write(self, exi: &mut ExternalInterface) {
-        let was_started = exi.ch0_cr.transfer_start();
-        exi.ch0_cr = self;
-        if self.transfer_start() && !was_started && !self.dma_mode() {
-            exi.start_immediate_transfer(0);
+    fn write(self, gc: &mut GameCube, _: WriteMask) {
+        let was_started = gc.exi.ch0_cr.transfer_start();
+        gc.exi.ch0_cr = self;
+        if self.transfer_start() && !was_started {
+            if self.dma_mode() {
+                exi::run_dma::<0>(gc);
+            } else {
+                gc.exi.start_immediate_transfer::<0>();
+            }
         }
+        exi::refresh_interrupts(gc);
     }
 }
 
 // 0xCC006810	4	R/W	EXI0DATA - EXI Channel 0 Immediate Data
 
-crate::mmio_register! {
-    Channel0Data: u32 @ 0xCC006810 => ExternalInterface.ch0_data {}
-}
+#[chapa::bitfield(u32, order = lsb0)]
+#[derive(Copy, Clone, Debug)]
+pub struct Channel0Data {}
+crate::mmio_reg!(Channel0Data: u32 @ 0xCC006810);
+crate::mmio_default_access!(Channel0Data => GameCube.exi.ch0_data);
 
 // --- Channel 1 ---
 
 // 0xCC006814	4	R/W	EXI1CSR - EXI Channel 1 Status Register
 
-crate::mmio_register! {
-    Channel1Status: u32 @ 0xCC006814 {
-        #[bits(0, alias = "exiintmask")] pub exi_interrupt_mask: bool,
-        #[bits(1, alias = "exiint")] pub exi_interrupt: bool,
-        #[bits(2, alias = "tcintmask")] pub tc_interrupt_mask: bool,
-        #[bits(3, alias = "tcint")] pub tc_interrupt: bool,
-        #[bits(4..=6, alias = "clk")] pub clock: u8,
-        #[bits(7..=9, alias = "cs")] pub chip_select: u8,
-        #[bits(10, alias = "extintmask")] pub ext_interrupt_mask: bool,
-        #[bits(11, alias = "extint")] pub ext_interrupt: bool,
-        #[bits(12, alias = "ext")] pub device_connected: bool,
-    }
+#[chapa::bitfield(u32, order = lsb0)]
+#[derive(Copy, Clone, Debug)]
+pub struct Channel1Status {
+    #[bits(0, alias = "exiintmask")]
+    pub exi_interrupt_mask: bool,
+    #[bits(1, alias = "exiint")]
+    pub exi_interrupt: bool,
+    #[bits(2, alias = "tcintmask")]
+    pub tc_interrupt_mask: bool,
+    #[bits(3, alias = "tcint")]
+    pub tc_interrupt: bool,
+    #[bits(4..=6, alias = "clk")]
+    pub clock: u8,
+    #[bits(7..=9, alias = "cs")]
+    pub chip_select: u8,
+    #[bits(10, alias = "extintmask")]
+    pub ext_interrupt_mask: bool,
+    #[bits(11, alias = "extint")]
+    pub ext_interrupt: bool,
+    #[bits(12, alias = "ext")]
+    pub device_connected: bool,
 }
+crate::mmio_reg!(Channel1Status: u32 @ 0xCC006814);
 
-impl MmioAccess<ExternalInterface> for Channel1Status {
-    fn read(exi: &ExternalInterface) -> Self {
-        exi.ch1_csr
+impl MmioHandler<GameCube> for Channel1Status {
+    fn read(gc: &mut GameCube) -> Self {
+        gc.exi.ch1_csr
     }
-    fn write(self, exi: &mut ExternalInterface) {
-        write_csr(&mut exi.ch1_csr, self);
+    fn write(self, gc: &mut GameCube, _: WriteMask) {
+        write_csr(&mut gc.exi.ch1_csr, self);
+        exi::on_chip_select_written::<1>(gc, self.chip_select());
+        exi::refresh_interrupts(gc);
     }
 }
 
 // 0xCC006818	4	R/W	EXI1MAR - EXI Channel 1 DMA Start Address
 
-crate::mmio_register! {
-    Channel1DmaAddress: u32 @ 0xCC006818 => ExternalInterface.ch1_mar {
-        #[bits(5..=25, alias = "addr")] pub address: u32,
-    }
+#[chapa::bitfield(u32, order = lsb0)]
+#[derive(Copy, Clone, Debug)]
+pub struct Channel1DmaAddress {
+    #[bits(5..=25, alias = "addr")]
+    pub address: u32,
 }
+crate::mmio_reg!(Channel1DmaAddress: u32 @ 0xCC006818);
+crate::mmio_default_access!(Channel1DmaAddress => GameCube.exi.ch1_mar);
 
 // 0xCC00681C	4	R/W	EXI1LENGTH - EXI Channel 1 DMA Transfer Length
 
-crate::mmio_register! {
-    Channel1DmaLength: u32 @ 0xCC00681C => ExternalInterface.ch1_length {
-        #[bits(5..=25, alias = "len")] pub length: u32,
-    }
+#[chapa::bitfield(u32, order = lsb0)]
+#[derive(Copy, Clone, Debug)]
+pub struct Channel1DmaLength {
+    #[bits(5..=25, alias = "len")]
+    pub length: u32,
 }
+crate::mmio_reg!(Channel1DmaLength: u32 @ 0xCC00681C);
+crate::mmio_default_access!(Channel1DmaLength => GameCube.exi.ch1_length);
 
 // 0xCC006820	4	R/W	EXI1CR - EXI Channel 1 Control Register
 
-crate::mmio_register! {
-    Channel1Control: u32 @ 0xCC006820 {
-        #[bits(0, alias = "tstart")] pub transfer_start: bool,
-        #[bits(1, alias = "dma")] pub dma_mode: bool,
-        #[bits(2..=3, alias = "rw")] pub transfer_type: TransferType,
-        #[bits(4..=5, alias = "tlen")] pub transfer_length: u8,
-    }
+#[chapa::bitfield(u32, order = lsb0)]
+#[derive(Copy, Clone, Debug)]
+pub struct Channel1Control {
+    #[bits(0, alias = "tstart")]
+    pub transfer_start: bool,
+    #[bits(1, alias = "dma")]
+    pub dma_mode: bool,
+    #[bits(2..=3, alias = "rw")]
+    pub transfer_type: TransferType,
+    #[bits(4..=5, alias = "tlen")]
+    pub transfer_length: u8,
 }
+crate::mmio_reg!(Channel1Control: u32 @ 0xCC006820);
 
-impl MmioAccess<ExternalInterface> for Channel1Control {
-    fn read(exi: &ExternalInterface) -> Self {
-        exi.ch1_cr
+impl MmioHandler<GameCube> for Channel1Control {
+    fn read(gc: &mut GameCube) -> Self {
+        gc.exi.ch1_cr
     }
-    fn write(self, exi: &mut ExternalInterface) {
-        let was_started = exi.ch1_cr.transfer_start();
-        exi.ch1_cr = self;
-        if self.transfer_start() && !was_started && !self.dma_mode() {
-            exi.start_immediate_transfer(1);
+    fn write(self, gc: &mut GameCube, _: WriteMask) {
+        let was_started = gc.exi.ch1_cr.transfer_start();
+        gc.exi.ch1_cr = self;
+        if self.transfer_start() && !was_started {
+            if self.dma_mode() {
+                exi::run_dma::<1>(gc);
+            } else {
+                gc.exi.start_immediate_transfer::<1>();
+            }
         }
+        exi::refresh_interrupts(gc);
     }
 }
 
 // 0xCC006824	4	R/W	EXI1DATA - EXI Channel 1 Immediate Data
 
-crate::mmio_register! {
-    Channel1Data: u32 @ 0xCC006824 => ExternalInterface.ch1_data {}
-}
+#[chapa::bitfield(u32, order = lsb0)]
+#[derive(Copy, Clone, Debug)]
+pub struct Channel1Data {}
+crate::mmio_reg!(Channel1Data: u32 @ 0xCC006824);
+crate::mmio_default_access!(Channel1Data => GameCube.exi.ch1_data);
 
 // --- Channel 2 ---
 
 // 0xCC006828	4	R/W	EXI2CSR - EXI Channel 2 Status Register
 
-crate::mmio_register! {
-    Channel2Status: u32 @ 0xCC006828 {
-        #[bits(0, alias = "exiintmask")] pub exi_interrupt_mask: bool,
-        #[bits(1, alias = "exiint")] pub exi_interrupt: bool,
-        #[bits(2, alias = "tcintmask")] pub tc_interrupt_mask: bool,
-        #[bits(3, alias = "tcint")] pub tc_interrupt: bool,
-        #[bits(4..=6, alias = "clk")] pub clock: u8,
-        #[bits(7..=9, alias = "cs")] pub chip_select: u8,
-        #[bits(10, alias = "extintmask")] pub ext_interrupt_mask: bool,
-        #[bits(11, alias = "extint")] pub ext_interrupt: bool,
-        #[bits(12, alias = "ext")] pub device_connected: bool,
-    }
+#[chapa::bitfield(u32, order = lsb0)]
+#[derive(Copy, Clone, Debug)]
+pub struct Channel2Status {
+    #[bits(0, alias = "exiintmask")]
+    pub exi_interrupt_mask: bool,
+    #[bits(1, alias = "exiint")]
+    pub exi_interrupt: bool,
+    #[bits(2, alias = "tcintmask")]
+    pub tc_interrupt_mask: bool,
+    #[bits(3, alias = "tcint")]
+    pub tc_interrupt: bool,
+    #[bits(4..=6, alias = "clk")]
+    pub clock: u8,
+    #[bits(7..=9, alias = "cs")]
+    pub chip_select: u8,
+    #[bits(10, alias = "extintmask")]
+    pub ext_interrupt_mask: bool,
+    #[bits(11, alias = "extint")]
+    pub ext_interrupt: bool,
+    #[bits(12, alias = "ext")]
+    pub device_connected: bool,
 }
+crate::mmio_reg!(Channel2Status: u32 @ 0xCC006828);
 
-impl MmioAccess<ExternalInterface> for Channel2Status {
-    fn read(exi: &ExternalInterface) -> Self {
-        exi.ch2_csr
+impl MmioHandler<GameCube> for Channel2Status {
+    fn read(gc: &mut GameCube) -> Self {
+        gc.exi.ch2_csr
     }
-    fn write(self, exi: &mut ExternalInterface) {
-        write_csr(&mut exi.ch2_csr, self);
+    fn write(self, gc: &mut GameCube, _: WriteMask) {
+        write_csr(&mut gc.exi.ch2_csr, self);
+        exi::on_chip_select_written::<2>(gc, self.chip_select());
+        exi::refresh_interrupts(gc);
     }
 }
 
@@ -237,46 +311,64 @@ impl_channel_status!(Channel0Status, Channel1Status, Channel2Status);
 
 // 0xCC00682C	4	R/W	EXI2MAR - EXI Channel 2 DMA Start Address
 
-crate::mmio_register! {
-    Channel2DmaAddress: u32 @ 0xCC00682C => ExternalInterface.ch2_mar {
-        #[bits(5..=25, alias = "addr")] pub address: u32,
-    }
+#[chapa::bitfield(u32, order = lsb0)]
+#[derive(Copy, Clone, Debug)]
+pub struct Channel2DmaAddress {
+    #[bits(5..=25, alias = "addr")]
+    pub address: u32,
 }
+crate::mmio_reg!(Channel2DmaAddress: u32 @ 0xCC00682C);
+crate::mmio_default_access!(Channel2DmaAddress => GameCube.exi.ch2_mar);
 
 // 0xCC006830	4	R/W	EXI2LENGTH - EXI Channel 2 DMA Transfer Length
 
-crate::mmio_register! {
-    Channel2DmaLength: u32 @ 0xCC006830 => ExternalInterface.ch2_length {
-        #[bits(5..=25, alias = "len")] pub length: u32,
-    }
+#[chapa::bitfield(u32, order = lsb0)]
+#[derive(Copy, Clone, Debug)]
+pub struct Channel2DmaLength {
+    #[bits(5..=25, alias = "len")]
+    pub length: u32,
 }
+crate::mmio_reg!(Channel2DmaLength: u32 @ 0xCC006830);
+crate::mmio_default_access!(Channel2DmaLength => GameCube.exi.ch2_length);
 
 // 0xCC006834	4	R/W	EXI2CR - EXI Channel 2 Control Register
 
-crate::mmio_register! {
-    Channel2Control: u32 @ 0xCC006834 {
-        #[bits(0, alias = "tstart")] pub transfer_start: bool,
-        #[bits(1, alias = "dma")] pub dma_mode: bool,
-        #[bits(2..=3, alias = "rw")] pub transfer_type: TransferType,
-        #[bits(4..=5, alias = "tlen")] pub transfer_length: u8,
-    }
+#[chapa::bitfield(u32, order = lsb0)]
+#[derive(Copy, Clone, Debug)]
+pub struct Channel2Control {
+    #[bits(0, alias = "tstart")]
+    pub transfer_start: bool,
+    #[bits(1, alias = "dma")]
+    pub dma_mode: bool,
+    #[bits(2..=3, alias = "rw")]
+    pub transfer_type: TransferType,
+    #[bits(4..=5, alias = "tlen")]
+    pub transfer_length: u8,
 }
+crate::mmio_reg!(Channel2Control: u32 @ 0xCC006834);
 
-impl MmioAccess<ExternalInterface> for Channel2Control {
-    fn read(exi: &ExternalInterface) -> Self {
-        exi.ch2_cr
+impl MmioHandler<GameCube> for Channel2Control {
+    fn read(gc: &mut GameCube) -> Self {
+        gc.exi.ch2_cr
     }
-    fn write(self, exi: &mut ExternalInterface) {
-        let was_started = exi.ch2_cr.transfer_start();
-        exi.ch2_cr = self;
-        if self.transfer_start() && !was_started && !self.dma_mode() {
-            exi.start_immediate_transfer(2);
+    fn write(self, gc: &mut GameCube, _: WriteMask) {
+        let was_started = gc.exi.ch2_cr.transfer_start();
+        gc.exi.ch2_cr = self;
+        if self.transfer_start() && !was_started {
+            if self.dma_mode() {
+                exi::run_dma::<2>(gc);
+            } else {
+                gc.exi.start_immediate_transfer::<2>();
+            }
         }
+        exi::refresh_interrupts(gc);
     }
 }
 
 // 0xCC006838	4	R/W	EXI2DATA - EXI Channel 2 Immediate Data
 
-crate::mmio_register! {
-    Channel2Data: u32 @ 0xCC006838 => ExternalInterface.ch2_data {}
-}
+#[chapa::bitfield(u32, order = lsb0)]
+#[derive(Copy, Clone, Debug)]
+pub struct Channel2Data {}
+crate::mmio_reg!(Channel2Data: u32 @ 0xCC006838);
+crate::mmio_default_access!(Channel2Data => GameCube.exi.ch2_data);

@@ -233,7 +233,7 @@ impl GameCube {
     pub fn prepare_frame(&mut self) {
         self.vsync_pending = false;
         self.si.update_polling();
-        self.check_si_interrupts();
+        crate::flipper::si::refresh_interrupts(self);
     }
 
     pub fn run_until_vsync(&mut self) {

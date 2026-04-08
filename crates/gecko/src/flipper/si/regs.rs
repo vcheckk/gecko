@@ -1,25 +1,29 @@
-use super::SerialInterface;
-use crate::mmio::traits::MmioAccess;
+use crate::flipper::si;
+use crate::gamecube::GameCube;
+use crate::mmio::traits::{MmioHandler, WriteMask};
 use chapa::BitEnum;
 
-// 0xCC006430  4  R/W  SIPOLL - SI Poll Register
-crate::mmio_register! {
-    SiPoll: u32 @ 0xCC006430 => SerialInterface.poll {
-        #[bits(0..=3)]
-        pub vbcpy: u8,
+// 0xCC006430  4  R/W  SIPOLL (SI Poll Register)
 
-        #[bits(4..=7)]
-        pub enable: u8,
+#[chapa::bitfield(u32, order = lsb0)]
+#[derive(Copy, Clone, Debug)]
+pub struct SiPoll {
+    #[bits(0..=3)]
+    pub vbcpy: u8,
 
-        #[bits(8..=15)]
-        pub y_times: u8,
+    #[bits(4..=7)]
+    pub enable: u8,
 
-        #[bits(16..=25)]
-        pub x_lines: u16,
-    }
+    #[bits(8..=15)]
+    pub y_times: u8,
+
+    #[bits(16..=25)]
+    pub x_lines: u16,
 }
+crate::mmio_reg!(SiPoll: u32 @ 0xCC006430);
+crate::mmio_default_access!(SiPoll => GameCube.si.poll);
 
-// 0xCC006434  4  R/W  SICOMCSR - SI Communication Control Status Register
+// 0xCC006434  4  R/W  SICOMCSR (SI Communication Control Status Register)
 
 #[derive(BitEnum, Debug, PartialEq, Eq)]
 pub enum Channel {
@@ -29,56 +33,57 @@ pub enum Channel {
     Channel3 = 3,
 }
 
-crate::mmio_register! {
-    SiComcsr: u32 @ 0xCC006434 {
-        #[bits(0)]
-        pub tstart: bool,
+#[chapa::bitfield(u32, order = lsb0)]
+#[derive(Copy, Clone, Debug)]
+pub struct SiComcsr {
+    #[bits(0)]
+    pub tstart: bool,
 
-        #[bits(1..=2)]
-        pub channel: Channel,
+    #[bits(1..=2)]
+    pub channel: Channel,
 
-        #[bits(6)]
-        pub callback_enable: bool,
+    #[bits(6)]
+    pub callback_enable: bool,
 
-        #[bits(7)]
-        pub command_enable: bool,
+    #[bits(7)]
+    pub command_enable: bool,
 
-        #[bits(8..=14)]
-        pub in_length: u8,
+    #[bits(8..=14)]
+    pub in_length: u8,
 
-        #[bits(16..=22)]
-        pub out_length: u8,
+    #[bits(16..=22)]
+    pub out_length: u8,
 
-        #[bits(24)]
-        pub channel_enable: bool,
+    #[bits(24)]
+    pub channel_enable: bool,
 
-        #[bits(25..=26)]
-        pub channel_number: u8,
+    #[bits(25..=26)]
+    pub channel_number: u8,
 
-        #[bits(27)]
-        pub rdst_interrupt_mask: bool,
+    #[bits(27)]
+    pub rdst_interrupt_mask: bool,
 
-        #[bits(28)]
-        pub rdst_interrupt: bool,
+    #[bits(28)]
+    pub rdst_interrupt: bool,
 
-        #[bits(29)]
-        pub com_error: bool,
+    #[bits(29)]
+    pub com_error: bool,
 
-        #[bits(30)]
-        pub tc_interrupt_mask: bool,
+    #[bits(30)]
+    pub tc_interrupt_mask: bool,
 
-        #[bits(31)]
-        pub tc_interrupt: bool,
-    }
+    #[bits(31)]
+    pub tc_interrupt: bool,
 }
+crate::mmio_reg!(SiComcsr: u32 @ 0xCC006434);
 
-impl MmioAccess<SerialInterface> for SiComcsr {
-    fn read(si: &SerialInterface) -> Self {
-        si.comcsr
+impl MmioHandler<GameCube> for SiComcsr {
+    fn read(gc: &mut GameCube) -> Self {
+        gc.si.comcsr
     }
 
-    fn write(self, si: &mut SerialInterface) {
-        let mut csr = si.comcsr;
+    fn write(self, gc: &mut GameCube, _: WriteMask) {
+        let mut csr = gc.si.comcsr;
 
         if self.tc_interrupt() {
             csr = csr.with_tc_interrupt(false);
@@ -98,61 +103,90 @@ impl MmioAccess<SerialInterface> for SiComcsr {
             .with_channel_enable(self.channel_enable())
             .with_channel_number(self.channel_number());
 
-        si.comcsr = csr;
+        gc.si.comcsr = csr;
 
         // Process SI buffer transfer when TSTART is written
         if self.tstart() {
-            si.run_si_buffer();
+            gc.si.run_si_buffer();
         }
+
+        si::refresh_interrupts(gc);
     }
 }
 
-// 0xCC006438  4  R/W  SISR - SI Status Register
-crate::mmio_register! {
-    SiStatusRegister: u32 @ 0xCC006438 {
-        // Channel 3
-        #[bits(0)]  pub unrun3: bool,
-        #[bits(1)]  pub ovrun3: bool,
-        #[bits(2)]  pub coll3: bool,
-        #[bits(3)]  pub norep3: bool,
-        #[bits(4)]  pub wrst3: bool,
-        #[bits(5)]  pub rdst3: bool,
+// 0xCC006438  4  R/W  SISR (SI Status Register)
 
-        // Channel 2
-        #[bits(8)]  pub unrun2: bool,
-        #[bits(9)]  pub ovrun2: bool,
-        #[bits(10)] pub coll2: bool,
-        #[bits(11)] pub norep2: bool,
-        #[bits(12)] pub wrst2: bool,
-        #[bits(13)] pub rdst2: bool,
+#[chapa::bitfield(u32, order = lsb0)]
+#[derive(Copy, Clone, Debug)]
+pub struct SiStatusRegister {
+    // Channel 3
+    #[bits(0)]
+    pub unrun3: bool,
+    #[bits(1)]
+    pub ovrun3: bool,
+    #[bits(2)]
+    pub coll3: bool,
+    #[bits(3)]
+    pub norep3: bool,
+    #[bits(4)]
+    pub wrst3: bool,
+    #[bits(5)]
+    pub rdst3: bool,
 
-        // Channel 1
-        #[bits(16)] pub unrun1: bool,
-        #[bits(17)] pub ovrun1: bool,
-        #[bits(18)] pub coll1: bool,
-        #[bits(19)] pub norep1: bool,
-        #[bits(20)] pub wrst1: bool,
-        #[bits(21)] pub rdst1: bool,
+    // Channel 2
+    #[bits(8)]
+    pub unrun2: bool,
+    #[bits(9)]
+    pub ovrun2: bool,
+    #[bits(10)]
+    pub coll2: bool,
+    #[bits(11)]
+    pub norep2: bool,
+    #[bits(12)]
+    pub wrst2: bool,
+    #[bits(13)]
+    pub rdst2: bool,
 
-        // Channel 0
-        #[bits(24)] pub unrun0: bool,
-        #[bits(25)] pub ovrun0: bool,
-        #[bits(26)] pub coll0: bool,
-        #[bits(27)] pub norep0: bool,
-        #[bits(28)] pub wrst0: bool,
-        #[bits(29)] pub rdst0: bool,
+    // Channel 1
+    #[bits(16)]
+    pub unrun1: bool,
+    #[bits(17)]
+    pub ovrun1: bool,
+    #[bits(18)]
+    pub coll1: bool,
+    #[bits(19)]
+    pub norep1: bool,
+    #[bits(20)]
+    pub wrst1: bool,
+    #[bits(21)]
+    pub rdst1: bool,
 
-        #[bits(31)] pub wr: bool,
-    }
+    // Channel 0
+    #[bits(24)]
+    pub unrun0: bool,
+    #[bits(25)]
+    pub ovrun0: bool,
+    #[bits(26)]
+    pub coll0: bool,
+    #[bits(27)]
+    pub norep0: bool,
+    #[bits(28)]
+    pub wrst0: bool,
+    #[bits(29)]
+    pub rdst0: bool,
+
+    #[bits(31)]
+    pub wr: bool,
 }
+crate::mmio_reg!(SiStatusRegister: u32 @ 0xCC006438);
 
-impl MmioAccess<SerialInterface> for SiStatusRegister {
-    fn read(si: &SerialInterface) -> Self {
-        si.status
+impl MmioHandler<GameCube> for SiStatusRegister {
+    fn read(gc: &mut GameCube) -> Self {
+        gc.si.status
     }
 
-    fn write(self, si: &mut SerialInterface) {
-        let mut status = si.status;
+    fn write(self, gc: &mut GameCube, _: WriteMask) {
+        let mut status = gc.si.status;
 
         if self.norep0() {
             status = status.with_norep0(false);
@@ -207,9 +241,9 @@ impl MmioAccess<SerialInterface> for SiStatusRegister {
         }
 
         if self.wr() {
-            si.status = status;
-            si.send_channel_commands();
-            status = si.status;
+            gc.si.status = status;
+            gc.si.send_channel_commands();
+            status = gc.si.status;
             status = status
                 .with_wr(false)
                 .with_wrst0(false)
@@ -218,6 +252,7 @@ impl MmioAccess<SerialInterface> for SiStatusRegister {
                 .with_wrst3(false);
         }
 
-        si.status = status;
+        gc.si.status = status;
+        si::refresh_interrupts(gc);
     }
 }
