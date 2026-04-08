@@ -1,7 +1,6 @@
 pub mod regs;
 
-use crate::mmio::constants::CP_BASE;
-use crate::mmio::traits::{MmioAccess, MmioRegister, MmioRw};
+use crate::gamecube::GameCube;
 
 pub struct CommandProcessor {
     pub status: regs::CpStatus,
@@ -44,6 +43,7 @@ impl CommandProcessor {
         }
     }
 
+    #[inline(always)]
     pub fn interrupt_active(&self) -> bool {
         (self.status.bp_interrupt() && self.control.bp_interrupt_enable())
             || (self.status.fifo_overflow() && self.control.fifo_overflow_interrupt_enable())
@@ -51,11 +51,10 @@ impl CommandProcessor {
     }
 }
 
-impl MmioRw for CommandProcessor {
-    const BASE: u32 = CP_BASE;
-    const NAME: &'static str = "CP";
-
-    crate::impl_mmio_dispatch!(
+crate::mmio_device_dispatch! {
+    read = cp_read,
+    write = cp_write,
+    registers = [
         regs::CpStatus,
         regs::CpControl,
         regs::CpClear,
@@ -73,15 +72,16 @@ impl MmioRw for CommandProcessor {
         regs::FifoWritePtrHi,
         regs::FifoReadPtrLo,
         regs::FifoReadPtrHi,
-    );
+    ],
 }
 
-impl crate::gamecube::GameCube {
-    pub fn check_cp_interrupts(&mut self) {
-        if self.cp.interrupt_active() {
-            self.pi.assert_interrupt(crate::flipper::pi::InterruptFlag::Cp);
-        } else {
-            self.pi.clear_interrupt(crate::flipper::pi::InterruptFlag::Cp);
-        }
+#[inline(always)]
+pub fn refresh_interrupts(gc: &mut GameCube) {
+    use crate::flipper::pi::InterruptFlag;
+
+    if gc.cp.interrupt_active() {
+        gc.pi.assert_interrupt(InterruptFlag::Cp);
+    } else {
+        gc.pi.clear_interrupt(InterruptFlag::Cp);
     }
 }

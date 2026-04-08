@@ -26,11 +26,13 @@ impl AudioInterface {
         }
     }
 
+    #[inline(always)]
     pub fn interrupt_active(&self) -> bool {
         self.control.interrupt() && self.control.interrupt_mask()
     }
 
     /// Compute the current sample counter based on elapsed cycles
+    #[inline(always)]
     pub fn sample_count(&self, current_cycles: u64) -> u32 {
         if self.control.playback_status() != regs::Status::Play {
             return 0;

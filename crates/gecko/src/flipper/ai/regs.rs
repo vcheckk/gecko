@@ -1,6 +1,6 @@
 use crate::flipper::ai;
 use crate::gamecube::GameCube;
-use crate::mmio::traits::{MmioHandler, WriteMask};
+use crate::mmio::traits::{MmioAccess, WriteMask};
 use chapa::BitEnum;
 
 // 0xCC006C00  4  R/W  AICR - Audio Interface Control Register
@@ -43,7 +43,7 @@ pub struct AiControl {
 }
 crate::mmio_reg!(AiControl: u32 @ 0xCC006C00);
 
-impl MmioHandler<GameCube> for AiControl {
+impl MmioAccess<GameCube> for AiControl {
     fn read(gc: &mut GameCube) -> Self {
         gc.ai.control
     }
@@ -98,7 +98,7 @@ pub struct AiSampleCounter {
 }
 crate::mmio_reg!(AiSampleCounter: u32 @ 0xCC006C08);
 
-impl MmioHandler<GameCube> for AiSampleCounter {
+impl MmioAccess<GameCube> for AiSampleCounter {
     fn read(gc: &mut GameCube) -> Self {
         let count = gc.ai.sample_count(gc.scheduler.cycles);
         AiSampleCounter::from_raw(count)
@@ -118,7 +118,7 @@ pub struct AiInterruptTiming {
 }
 crate::mmio_reg!(AiInterruptTiming: u32 @ 0xCC006C0C);
 
-impl MmioHandler<GameCube> for AiInterruptTiming {
+impl MmioAccess<GameCube> for AiInterruptTiming {
     fn read(gc: &mut GameCube) -> Self {
         gc.ai.interrupt_timing
     }

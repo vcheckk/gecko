@@ -2,7 +2,7 @@ use chapa::BitEnum;
 
 use crate::flipper::exi;
 use crate::gamecube::GameCube;
-use crate::mmio::traits::{MmioHandler, MmioRegister, WriteMask};
+use crate::mmio::traits::{MmioAccess, MmioRegister, WriteMask};
 
 pub trait ChannelStatus {
     fn exi_interrupt(&self) -> bool;
@@ -90,7 +90,7 @@ pub struct Channel0Status {
 }
 crate::mmio_reg!(Channel0Status: u32 @ 0xCC006800);
 
-impl MmioHandler<GameCube> for Channel0Status {
+impl MmioAccess<GameCube> for Channel0Status {
     fn read(gc: &mut GameCube) -> Self {
         gc.exi.ch0_csr
     }
@@ -139,7 +139,7 @@ pub struct Channel0Control {
 }
 crate::mmio_reg!(Channel0Control: u32 @ 0xCC00680C);
 
-impl MmioHandler<GameCube> for Channel0Control {
+impl MmioAccess<GameCube> for Channel0Control {
     fn read(gc: &mut GameCube) -> Self {
         gc.exi.ch0_cr
     }
@@ -193,7 +193,7 @@ pub struct Channel1Status {
 }
 crate::mmio_reg!(Channel1Status: u32 @ 0xCC006814);
 
-impl MmioHandler<GameCube> for Channel1Status {
+impl MmioAccess<GameCube> for Channel1Status {
     fn read(gc: &mut GameCube) -> Self {
         gc.exi.ch1_csr
     }
@@ -242,7 +242,7 @@ pub struct Channel1Control {
 }
 crate::mmio_reg!(Channel1Control: u32 @ 0xCC006820);
 
-impl MmioHandler<GameCube> for Channel1Control {
+impl MmioAccess<GameCube> for Channel1Control {
     fn read(gc: &mut GameCube) -> Self {
         gc.exi.ch1_cr
     }
@@ -296,7 +296,7 @@ pub struct Channel2Status {
 }
 crate::mmio_reg!(Channel2Status: u32 @ 0xCC006828);
 
-impl MmioHandler<GameCube> for Channel2Status {
+impl MmioAccess<GameCube> for Channel2Status {
     fn read(gc: &mut GameCube) -> Self {
         gc.exi.ch2_csr
     }
@@ -347,7 +347,7 @@ pub struct Channel2Control {
 }
 crate::mmio_reg!(Channel2Control: u32 @ 0xCC006834);
 
-impl MmioHandler<GameCube> for Channel2Control {
+impl MmioAccess<GameCube> for Channel2Control {
     fn read(gc: &mut GameCube) -> Self {
         gc.exi.ch2_cr
     }

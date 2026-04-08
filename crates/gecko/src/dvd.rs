@@ -41,6 +41,7 @@ impl DvdInterface {
         }
     }
 
+    #[inline(always)]
     pub fn interrupt_active(&self) -> bool {
         (self.status.break_complete() && self.status.break_complete_mask())
             || (self.status.device_error() && self.status.device_error_mask())

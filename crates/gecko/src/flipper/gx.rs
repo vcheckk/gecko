@@ -128,6 +128,6 @@ impl GameCube {
             }
         }
 
-        self.check_pe_interrupts();
+        crate::flipper::pe::refresh_interrupts(self);
     }
 }

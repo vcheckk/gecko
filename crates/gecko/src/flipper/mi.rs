@@ -1,8 +1,5 @@
 pub mod regs;
 
-use crate::mmio::constants::MI_BASE;
-use crate::mmio::traits::{MmioAccess, MmioRegister, MmioRw};
-
 pub struct MemoryInterface {
     pub interrupt_mask: regs::MiInterruptMask,
 }
@@ -15,9 +12,10 @@ impl MemoryInterface {
     }
 }
 
-impl MmioRw for MemoryInterface {
-    const BASE: u32 = MI_BASE;
-    const NAME: &'static str = "MI";
-
-    crate::impl_mmio_dispatch!(regs::MiInterruptMask,);
+crate::mmio_device_dispatch! {
+    read = mi_read,
+    write = mi_write,
+    registers = [
+        regs::MiInterruptMask,
+    ],
 }

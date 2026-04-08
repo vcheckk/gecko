@@ -1,13 +1,5 @@
 pub mod regs;
 
-use crate::mmio::constants::PI_BASE;
-use crate::mmio::traits::{MmioAccess, MmioRegister, MmioRw};
-
-// PI FIFO register offsets (from PI_BASE 0xCC003000)
-const PI_FIFO_BASE_OFFSET: u32 = 0x0C;
-const PI_FIFO_END_OFFSET: u32 = 0x10;
-const PI_FIFO_WPTR_OFFSET: u32 = 0x14;
-
 pub struct ProcessorInterface {
     pub intsr: regs::InterruptCause,
     pub intmr: regs::InterruptMask,
@@ -16,7 +8,7 @@ pub struct ProcessorInterface {
     pub fifo_base: u32,
     /// CPU FIFO end address in physical memory
     pub fifo_end: u32,
-    /// CPU FIFO write pointer (32-byte aligned)
+    /// CPU FIFO write pointer (32 byte aligned)
     pub fifo_wptr: u32,
 }
 
@@ -73,33 +65,16 @@ impl ProcessorInterface {
     }
 }
 
-impl MmioRw for ProcessorInterface {
-    const BASE: u32 = PI_BASE;
-    const NAME: &'static str = "PI";
-
-    crate::impl_mmio_dispatch!(
+crate::mmio_device_dispatch! {
+    read = pi_read,
+    write = pi_write,
+    registers = [
         regs::InterruptCause,
         regs::InterruptMask,
+        regs::FifoBase,
+        regs::FifoEnd,
+        regs::FifoWritePtr,
         regs::ResetCode,
         regs::FlipperRev,
-    );
-
-    fn mmio_write_u32(&mut self, offset: u32, val: u32) {
-        match offset {
-            PI_FIFO_BASE_OFFSET => {
-                self.fifo_base = val;
-            }
-            PI_FIFO_END_OFFSET => {
-                self.fifo_end = val;
-            }
-            PI_FIFO_WPTR_OFFSET => {
-                self.fifo_wptr = val & 0x1FFF_FFE0; // 32-byte aligned
-            }
-            _ => {
-                if !self.write_raw(PI_BASE + offset, 4, val) {
-                    tracing::error!(offset = format!("{offset:08X}"), "unhandled PI write_u32");
-                }
-            }
-        }
-    }
+    ],
 }

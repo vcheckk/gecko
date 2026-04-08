@@ -1,47 +1,10 @@
 use crate::gamecube::GameCube;
 #[cfg(feature = "hooks")]
 use crate::hooks::HookFlags;
-use crate::mmio::MmioRw;
 use crate::mmio::constants::{
     AI_BASE, AI_END, CP_BASE, CP_END, DI_BASE, DI_END, DSP_BASE, DSP_END, EXI_BASE, EXI_END, GX_FIFO_BASE, GX_FIFO_END,
-    IPL_BASE, IPL_END, MI_BASE, MI_END, PE_BASE, PE_END, PI_BASE, PI_END, RAM_END, SI_BASE, SI_END, VI_BASE, VI_END,
+    MI_BASE, MI_END, PE_BASE, PE_END, PI_BASE, PI_END, RAM_END, SI_BASE, SI_END, VI_BASE, VI_END,
 };
-
-enum BusTarget {
-    Cp,
-    Vi,
-    Pe,
-    Pi,
-    Mi,
-    Dsp,
-    Di,
-    Si,
-    Exi,
-    Ai,
-    Gx,
-    Ipl,
-    Fallback,
-}
-
-#[rustfmt::skip]
-#[inline(always)]
-fn route_mmio(phys: u32) -> (BusTarget, u32) {
-    match phys {
-        CP_BASE..=CP_END            => (BusTarget::Cp,  phys - CP_BASE),
-        PE_BASE..=PE_END            => (BusTarget::Pe,  phys - PE_BASE),
-        VI_BASE..=VI_END            => (BusTarget::Vi,  phys - VI_BASE),
-        PI_BASE..=PI_END            => (BusTarget::Pi,  phys - PI_BASE),
-        MI_BASE..=MI_END            => (BusTarget::Mi,  phys - MI_BASE),
-        DSP_BASE..=DSP_END          => (BusTarget::Dsp, phys - DSP_BASE),
-        DI_BASE..=DI_END            => (BusTarget::Di,  phys - DI_BASE),
-        SI_BASE..=SI_END            => (BusTarget::Si,  phys - SI_BASE),
-        EXI_BASE..=EXI_END          => (BusTarget::Exi, phys - EXI_BASE),
-        AI_BASE..=AI_END            => (BusTarget::Ai,  phys - AI_BASE),
-        IPL_BASE..=IPL_END          => (BusTarget::Ipl, phys),
-        GX_FIFO_BASE..=GX_FIFO_END  => (BusTarget::Gx,  phys - GX_FIFO_BASE),
-        _                           => (BusTarget::Fallback, phys),
-    }
-}
 
 macro_rules! bus_read_hooks {
     ($self:ident, $addr:ident, $phys:ident, $size:literal, $body:expr) => {{
@@ -233,126 +196,103 @@ impl GameCube {
 
     // Slow path for MMIO
 
-    #[rustfmt::skip]
     #[inline(never)]
     fn read_u8_mmio(&mut self, phys: u32, addr: u32) -> u8 {
-        let (target, offset) = route_mmio(phys);
-        match target {
-            BusTarget::Cp       => self.cp.mmio_read_u8(offset),
-            BusTarget::Vi       => {
-                if offset == 0x2E {
-                    return (self.vi.dph_value(self.scheduler.cycles) >> 8) as u8;
-                }
-                if offset == 0x2F {
-                    return self.vi.dph_value(self.scheduler.cycles) as u8;
-                }
-                self.vi.mmio_read_u8(offset)
-            }
-            BusTarget::Pe       => self.pe.mmio_read_u8(offset),
-            BusTarget::Pi       => self.pi.mmio_read_u8(offset),
-            BusTarget::Mi       => self.mi.mmio_read_u8(offset),
-            BusTarget::Dsp      => crate::flipper::dsp::dsp_read(self, phys, 1).unwrap_or(0) as u8,
-            BusTarget::Di       => crate::dvd::di_read(self, phys, 1).unwrap_or(0) as u8,
-            BusTarget::Si       => crate::flipper::si::si_read(self, phys, 1).unwrap_or(0) as u8,
-            BusTarget::Exi      => crate::flipper::exi::exi_read(self, phys, 1).unwrap_or(0) as u8,
-            BusTarget::Ai       => crate::flipper::ai::ai_read(self, phys, 1).unwrap_or(0) as u8,
-            BusTarget::Gx       => {
+        match phys {
+            CP_BASE..=CP_END => crate::flipper::cp::cp_read(self, phys, 1).unwrap_or(0) as u8,
+            PE_BASE..=PE_END => crate::flipper::pe::pe_read(self, phys, 1).unwrap_or(0) as u8,
+            VI_BASE..=VI_END => crate::flipper::vi::vi_read(self, phys, 1).unwrap_or(0) as u8,
+            PI_BASE..=PI_END => crate::flipper::pi::pi_read(self, phys, 1).unwrap_or(0) as u8,
+            MI_BASE..=MI_END => crate::flipper::mi::mi_read(self, phys, 1).unwrap_or(0) as u8,
+            DSP_BASE..=DSP_END => crate::flipper::dsp::dsp_read(self, phys, 1).unwrap_or(0) as u8,
+            DI_BASE..=DI_END => crate::dvd::di_read(self, phys, 1).unwrap_or(0) as u8,
+            SI_BASE..=SI_END => crate::flipper::si::si_read(self, phys, 1).unwrap_or(0) as u8,
+            EXI_BASE..=EXI_END => crate::flipper::exi::exi_read(self, phys, 1).unwrap_or(0) as u8,
+            AI_BASE..=AI_END => crate::flipper::ai::ai_read(self, phys, 1).unwrap_or(0) as u8,
+            GX_FIFO_BASE..=GX_FIFO_END => {
                 tracing::error!(addr = format!("{:08X}", addr), "Invalid GX FIFO read");
                 0
             }
-            BusTarget::Ipl      => self.mmio.phys_read_u8(phys),
-            BusTarget::Fallback => self.mmio.phys_read_u8(phys),
+            _ => self.mmio.phys_read_u8(phys),
         }
     }
 
-    #[rustfmt::skip]
     #[inline(never)]
     fn read_u16_mmio(&mut self, phys: u32, addr: u32) -> u16 {
-        let (target, offset) = route_mmio(phys);
-        match target {
-            BusTarget::Cp       => self.cp.mmio_read_u16(offset),
-            BusTarget::Vi       => {
-                if offset == 0x2E {
-                    return self.vi.dph_value(self.scheduler.cycles);
-                }
-                self.vi.mmio_read_u16(offset)
-            }
-            BusTarget::Pe       => self.pe.mmio_read_u16(offset),
-            BusTarget::Pi       => self.pi.mmio_read_u16(offset),
-            BusTarget::Mi       => self.mi.mmio_read_u16(offset),
-            BusTarget::Dsp      => crate::flipper::dsp::dsp_read(self, phys, 2).unwrap_or(0) as u16,
-            BusTarget::Di       => crate::dvd::di_read(self, phys, 2).unwrap_or(0) as u16,
-            BusTarget::Si       => crate::flipper::si::si_read(self, phys, 2).unwrap_or(0) as u16,
-            BusTarget::Exi      => crate::flipper::exi::exi_read(self, phys, 2).unwrap_or(0) as u16,
-            BusTarget::Ai       => crate::flipper::ai::ai_read(self, phys, 2).unwrap_or(0) as u16,
-            BusTarget::Gx       => {
+        match phys {
+            CP_BASE..=CP_END => crate::flipper::cp::cp_read(self, phys, 2).unwrap_or(0) as u16,
+            PE_BASE..=PE_END => crate::flipper::pe::pe_read(self, phys, 2).unwrap_or(0) as u16,
+            VI_BASE..=VI_END => crate::flipper::vi::vi_read(self, phys, 2).unwrap_or(0) as u16,
+            PI_BASE..=PI_END => crate::flipper::pi::pi_read(self, phys, 2).unwrap_or(0) as u16,
+            MI_BASE..=MI_END => crate::flipper::mi::mi_read(self, phys, 2).unwrap_or(0) as u16,
+            DSP_BASE..=DSP_END => crate::flipper::dsp::dsp_read(self, phys, 2).unwrap_or(0) as u16,
+            DI_BASE..=DI_END => crate::dvd::di_read(self, phys, 2).unwrap_or(0) as u16,
+            SI_BASE..=SI_END => crate::flipper::si::si_read(self, phys, 2).unwrap_or(0) as u16,
+            EXI_BASE..=EXI_END => crate::flipper::exi::exi_read(self, phys, 2).unwrap_or(0) as u16,
+            AI_BASE..=AI_END => crate::flipper::ai::ai_read(self, phys, 2).unwrap_or(0) as u16,
+            GX_FIFO_BASE..=GX_FIFO_END => {
                 tracing::error!(addr = format!("{:08X}", addr), "Invalid GX FIFO read");
                 0
             }
-            BusTarget::Ipl      => self.mmio.phys_read_u16(phys),
-            BusTarget::Fallback => self.mmio.phys_read_u16(phys),
+            _ => self.mmio.phys_read_u16(phys),
         }
     }
 
-    #[rustfmt::skip]
     #[inline(never)]
     fn read_u32_mmio(&mut self, phys: u32, addr: u32) -> u32 {
-        let (target, offset) = route_mmio(phys);
-        match target {
-            BusTarget::Cp       => self.cp.mmio_read_u32(offset),
-            BusTarget::Vi       => {
-                if offset == 0x2C {
-                    let dpv = self.vi.mmio_read_u16(0x2C) as u32;
-                    let dph = self.vi.dph_value(self.scheduler.cycles) as u32;
-                    return (dpv << 16) | dph;
-                }
-                self.vi.mmio_read_u32(offset)
-            }
-            BusTarget::Pe       => self.pe.mmio_read_u32(offset),
-            BusTarget::Pi       => self.pi.mmio_read_u32(offset),
-            BusTarget::Mi       => self.mi.mmio_read_u32(offset),
-            BusTarget::Dsp      => crate::flipper::dsp::dsp_read(self, phys, 4).unwrap_or(0),
-            BusTarget::Di       => crate::dvd::di_read(self, phys, 4).unwrap_or(0),
-            BusTarget::Si       => crate::flipper::si::si_read(self, phys, 4).unwrap_or(0),
-            BusTarget::Exi      => crate::flipper::exi::exi_read(self, phys, 4).unwrap_or(0),
-            BusTarget::Ai       => crate::flipper::ai::ai_read(self, phys, 4).unwrap_or(0),
-            BusTarget::Gx       => {
+        match phys {
+            CP_BASE..=CP_END => crate::flipper::cp::cp_read(self, phys, 4).unwrap_or(0),
+            PE_BASE..=PE_END => crate::flipper::pe::pe_read(self, phys, 4).unwrap_or(0),
+            VI_BASE..=VI_END => crate::flipper::vi::vi_read(self, phys, 4).unwrap_or(0),
+            PI_BASE..=PI_END => crate::flipper::pi::pi_read(self, phys, 4).unwrap_or(0),
+            MI_BASE..=MI_END => crate::flipper::mi::mi_read(self, phys, 4).unwrap_or(0),
+            DSP_BASE..=DSP_END => crate::flipper::dsp::dsp_read(self, phys, 4).unwrap_or(0),
+            DI_BASE..=DI_END => crate::dvd::di_read(self, phys, 4).unwrap_or(0),
+            SI_BASE..=SI_END => crate::flipper::si::si_read(self, phys, 4).unwrap_or(0),
+            EXI_BASE..=EXI_END => crate::flipper::exi::exi_read(self, phys, 4).unwrap_or(0),
+            AI_BASE..=AI_END => crate::flipper::ai::ai_read(self, phys, 4).unwrap_or(0),
+            GX_FIFO_BASE..=GX_FIFO_END => {
                 tracing::error!(addr = format!("{:08X}", addr), "Invalid GX FIFO read");
                 0
             }
-            BusTarget::Ipl      => self.mmio.phys_read_u32(phys),
-            BusTarget::Fallback => self.mmio.phys_read_u32(phys),
+            _ => self.mmio.phys_read_u32(phys),
         }
     }
 
-    #[rustfmt::skip]
     #[inline(never)]
     fn write_u8_mmio(&mut self, phys: u32, val: u8) {
-        let (target, offset) = route_mmio(phys);
-        match target {
-            BusTarget::Cp       => {
-                self.cp.mmio_write_u8(offset, val);
-                self.check_cp_interrupts();
+        match phys {
+            CP_BASE..=CP_END => {
+                crate::flipper::cp::cp_write(self, phys, 1, val as u32);
             }
-            BusTarget::Vi       => {
-                self.vi.mmio_write_u8(offset, val);
-                self.maybe_schedule_vi_half_line();
-                if (0x30..=0x3F).contains(&offset) {
-                    self.check_vi_interrupts();
-                }
+            PE_BASE..=PE_END => {
+                crate::flipper::pe::pe_write(self, phys, 1, val as u32);
             }
-            BusTarget::Pe       => {
-                self.pe.mmio_write_u8(offset, val);
-                self.check_pe_interrupts();
+            VI_BASE..=VI_END => {
+                crate::flipper::vi::vi_write(self, phys, 1, val as u32);
             }
-            BusTarget::Pi       => self.pi.mmio_write_u8(offset, val),
-            BusTarget::Mi       => self.mi.mmio_write_u8(offset, val),
-            BusTarget::Dsp      => { crate::flipper::dsp::dsp_write(self, phys, 1, val as u32); }
-            BusTarget::Di       => { crate::dvd::di_write(self, phys, 1, val as u32); }
-            BusTarget::Si       => { crate::flipper::si::si_write(self, phys, 1, val as u32); }
-            BusTarget::Exi      => { crate::flipper::exi::exi_write(self, phys, 1, val as u32); }
-            BusTarget::Ai       => { crate::flipper::ai::ai_write(self, phys, 1, val as u32); }
-            BusTarget::Gx       => {
+            PI_BASE..=PI_END => {
+                crate::flipper::pi::pi_write(self, phys, 1, val as u32);
+            }
+            MI_BASE..=MI_END => {
+                crate::flipper::mi::mi_write(self, phys, 1, val as u32);
+            }
+            DSP_BASE..=DSP_END => {
+                crate::flipper::dsp::dsp_write(self, phys, 1, val as u32);
+            }
+            DI_BASE..=DI_END => {
+                crate::dvd::di_write(self, phys, 1, val as u32);
+            }
+            SI_BASE..=SI_END => {
+                crate::flipper::si::si_write(self, phys, 1, val as u32);
+            }
+            EXI_BASE..=EXI_END => {
+                crate::flipper::exi::exi_write(self, phys, 1, val as u32);
+            }
+            AI_BASE..=AI_END => {
+                crate::flipper::ai::ai_write(self, phys, 1, val as u32);
+            }
+            GX_FIFO_BASE..=GX_FIFO_END => {
                 let wptr = self.pi.fifo_wptr as usize;
                 self.mmio.ram[wptr] = val;
                 self.pi.advance_fifo_wptr(1);
@@ -361,39 +301,44 @@ impl GameCube {
                     self.check_gx_pe_interrupts();
                 }
             }
-            BusTarget::Ipl      => self.mmio.phys_write_u8(phys, val),
-            BusTarget::Fallback => self.mmio.phys_write_u8(phys, val),
+            _ => self.mmio.phys_write_u8(phys, val),
         }
     }
 
-    #[rustfmt::skip]
     #[inline(never)]
     fn write_u16_mmio(&mut self, phys: u32, val: u16) {
-        let (target, offset) = route_mmio(phys);
-        match target {
-            BusTarget::Cp       => {
-                self.cp.mmio_write_u16(offset, val);
-                self.check_cp_interrupts();
+        match phys {
+            CP_BASE..=CP_END => {
+                crate::flipper::cp::cp_write(self, phys, 2, val as u32);
             }
-            BusTarget::Vi       => {
-                self.vi.mmio_write_u16(offset, val);
-                self.maybe_schedule_vi_half_line();
-                if (0x30..=0x3F).contains(&offset) {
-                    self.check_vi_interrupts();
-                }
+            PE_BASE..=PE_END => {
+                crate::flipper::pe::pe_write(self, phys, 2, val as u32);
             }
-            BusTarget::Pe       => {
-                self.pe.mmio_write_u16(offset, val);
-                self.check_pe_interrupts();
+            VI_BASE..=VI_END => {
+                crate::flipper::vi::vi_write(self, phys, 2, val as u32);
             }
-            BusTarget::Pi       => self.pi.mmio_write_u16(offset, val),
-            BusTarget::Mi       => self.mi.mmio_write_u16(offset, val),
-            BusTarget::Dsp      => { crate::flipper::dsp::dsp_write(self, phys, 2, val as u32); }
-            BusTarget::Di       => { crate::dvd::di_write(self, phys, 2, val as u32); }
-            BusTarget::Si       => { crate::flipper::si::si_write(self, phys, 2, val as u32); }
-            BusTarget::Exi      => { crate::flipper::exi::exi_write(self, phys, 2, val as u32); }
-            BusTarget::Ai       => { crate::flipper::ai::ai_write(self, phys, 2, val as u32); }
-            BusTarget::Gx       => {
+            PI_BASE..=PI_END => {
+                crate::flipper::pi::pi_write(self, phys, 2, val as u32);
+            }
+            MI_BASE..=MI_END => {
+                crate::flipper::mi::mi_write(self, phys, 2, val as u32);
+            }
+            DSP_BASE..=DSP_END => {
+                crate::flipper::dsp::dsp_write(self, phys, 2, val as u32);
+            }
+            DI_BASE..=DI_END => {
+                crate::dvd::di_write(self, phys, 2, val as u32);
+            }
+            SI_BASE..=SI_END => {
+                crate::flipper::si::si_write(self, phys, 2, val as u32);
+            }
+            EXI_BASE..=EXI_END => {
+                crate::flipper::exi::exi_write(self, phys, 2, val as u32);
+            }
+            AI_BASE..=AI_END => {
+                crate::flipper::ai::ai_write(self, phys, 2, val as u32);
+            }
+            GX_FIFO_BASE..=GX_FIFO_END => {
                 let wptr = self.pi.fifo_wptr as usize;
                 let bytes = val.to_be_bytes();
                 self.mmio.ram[wptr..wptr + 2].copy_from_slice(&bytes);
@@ -403,39 +348,44 @@ impl GameCube {
                     self.check_gx_pe_interrupts();
                 }
             }
-            BusTarget::Ipl      => self.mmio.phys_write_u16(phys, val),
-            BusTarget::Fallback => self.mmio.phys_write_u16(phys, val),
+            _ => self.mmio.phys_write_u16(phys, val),
         }
     }
 
-    #[rustfmt::skip]
     #[inline(never)]
     fn write_u32_mmio(&mut self, phys: u32, val: u32) {
-        let (target, offset) = route_mmio(phys);
-        match target {
-            BusTarget::Cp       => {
-                self.cp.mmio_write_u32(offset, val);
-                self.check_cp_interrupts();
+        match phys {
+            CP_BASE..=CP_END => {
+                crate::flipper::cp::cp_write(self, phys, 4, val);
             }
-            BusTarget::Vi       => {
-                self.vi.mmio_write_u32(offset, val);
-                self.maybe_schedule_vi_half_line();
-                if (0x30..=0x3F).contains(&offset) {
-                    self.check_vi_interrupts();
-                }
+            PE_BASE..=PE_END => {
+                crate::flipper::pe::pe_write(self, phys, 4, val);
             }
-            BusTarget::Pe       => {
-                self.pe.mmio_write_u32(offset, val);
-                self.check_pe_interrupts();
+            VI_BASE..=VI_END => {
+                crate::flipper::vi::vi_write(self, phys, 4, val);
             }
-            BusTarget::Pi       => self.pi.mmio_write_u32(offset, val),
-            BusTarget::Mi       => self.mi.mmio_write_u32(offset, val),
-            BusTarget::Dsp      => { crate::flipper::dsp::dsp_write(self, phys, 4, val); }
-            BusTarget::Di       => { crate::dvd::di_write(self, phys, 4, val); }
-            BusTarget::Si       => { crate::flipper::si::si_write(self, phys, 4, val); }
-            BusTarget::Exi      => { crate::flipper::exi::exi_write(self, phys, 4, val); }
-            BusTarget::Ai       => { crate::flipper::ai::ai_write(self, phys, 4, val); }
-            BusTarget::Gx       => {
+            PI_BASE..=PI_END => {
+                crate::flipper::pi::pi_write(self, phys, 4, val);
+            }
+            MI_BASE..=MI_END => {
+                crate::flipper::mi::mi_write(self, phys, 4, val);
+            }
+            DSP_BASE..=DSP_END => {
+                crate::flipper::dsp::dsp_write(self, phys, 4, val);
+            }
+            DI_BASE..=DI_END => {
+                crate::dvd::di_write(self, phys, 4, val);
+            }
+            SI_BASE..=SI_END => {
+                crate::flipper::si::si_write(self, phys, 4, val);
+            }
+            EXI_BASE..=EXI_END => {
+                crate::flipper::exi::exi_write(self, phys, 4, val);
+            }
+            AI_BASE..=AI_END => {
+                crate::flipper::ai::ai_write(self, phys, 4, val);
+            }
+            GX_FIFO_BASE..=GX_FIFO_END => {
                 let wptr = self.pi.fifo_wptr as usize;
                 let bytes = val.to_be_bytes();
                 self.mmio.ram[wptr..wptr + 4].copy_from_slice(&bytes);
@@ -445,8 +395,7 @@ impl GameCube {
                     self.check_gx_pe_interrupts();
                 }
             }
-            BusTarget::Ipl      => self.mmio.phys_write_u32(phys, val),
-            BusTarget::Fallback => self.mmio.phys_write_u32(phys, val),
+            _ => self.mmio.phys_write_u32(phys, val),
         }
     }
 }

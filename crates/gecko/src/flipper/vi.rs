@@ -1,9 +1,6 @@
 pub mod regs;
 
-use crate::flipper::pi::InterruptFlag;
 use crate::gamecube::GameCube;
-use crate::mmio::constants::VI_BASE;
-use crate::mmio::traits::{MmioAccess, MmioRegister, MmioRw};
 
 const CPU_CORE_CLOCK: u64 = 486_000_000;
 const CLOCK_FREQUENCIES: [u64; 2] = [27_000_000, 54_000_000];
@@ -123,6 +120,7 @@ impl VideoInterface {
     }
 
     /// Returns true if any DI register has both IR_INT and IR_MASK set.
+    #[inline(always)]
     pub fn vi_interrupt_active(&self) -> bool {
         (self.di0.interrupt() && self.di0.enable())
             || (self.di1.interrupt() && self.di1.enable())
@@ -196,11 +194,10 @@ impl VideoInterface {
     }
 }
 
-impl MmioRw for VideoInterface {
-    const BASE: u32 = VI_BASE;
-    const NAME: &'static str = "VI";
-
-    crate::impl_mmio_dispatch!(
+crate::mmio_device_dispatch! {
+    read = vi_read,
+    write = vi_write,
+    registers = [
         regs::VerticalTiming,
         regs::HorizontalTiming0,
         regs::HorizontalTiming1,
@@ -215,6 +212,7 @@ impl MmioRw for VideoInterface {
         regs::BottomFieldBaseRight,
         regs::DisplayPositionVertical,
         regs::DisplayPositionHorizontal,
+        regs::DisplayPositionCombined,
         regs::DisplayInterrupt0,
         regs::DisplayInterrupt1,
         regs::DisplayInterrupt2,
@@ -235,35 +233,34 @@ impl MmioRw for VideoInterface {
         regs::ViUnknown70,
         regs::BorderHbe,
         regs::BorderHbs,
-    );
+    ],
 }
 
-impl GameCube {
-    pub fn maybe_schedule_vi_half_line(&mut self) {
-        if !self.vi.half_line_scheduled {
-            let ticks_per_hl = self.vi.ticks_per_half_line();
-            if ticks_per_hl > 0 {
-                self.vi.half_line_scheduled = true;
-                self.scheduler.schedule_in(ticks_per_hl, vi_half_line_handler);
-            }
-        }
-    }
-
-    pub fn check_vi_interrupts(&mut self) {
-        if self.vi.vi_interrupt_active() {
-            self.pi.assert_interrupt(InterruptFlag::Vi);
-        } else {
-            self.pi.clear_interrupt(InterruptFlag::Vi);
+#[inline(always)]
+pub fn ensure_half_line_scheduled(gc: &mut GameCube) {
+    if !gc.vi.half_line_scheduled {
+        let ticks_per_hl = gc.vi.ticks_per_half_line();
+        if ticks_per_hl > 0 {
+            gc.vi.half_line_scheduled = true;
+            gc.scheduler.schedule_in(ticks_per_hl, |gc| {
+                gc.vi.on_half_line(gc.scheduler.cycles);
+                gc.vi.half_line_scheduled = false;
+                self::ensure_half_line_scheduled(gc);
+                self::refresh_interrupts(gc);
+            });
         }
     }
 }
 
-/// Scheduler handler: VI half-line. Reschedules the next half-line and refreshes interrupts.
-pub fn vi_half_line_handler(gc: &mut GameCube) {
-    gc.vi.on_half_line(gc.scheduler.cycles);
-    gc.vi.half_line_scheduled = false;
-    gc.maybe_schedule_vi_half_line();
-    gc.check_vi_interrupts();
+#[inline(always)]
+pub fn refresh_interrupts(gc: &mut GameCube) {
+    use crate::flipper::pi::InterruptFlag;
+
+    if gc.vi.vi_interrupt_active() {
+        gc.pi.assert_interrupt(InterruptFlag::Vi);
+    } else {
+        gc.pi.clear_interrupt(InterruptFlag::Vi);
+    }
 }
 
 impl GameCube {
@@ -276,8 +273,8 @@ impl GameCube {
         let mut pixels = vec![0u32; width * height];
         let xfb_addr = self.vi.xfb_addr();
 
-        // XFB is YUY2 (YCbCr 4:2:2): each 32-bit word = [Y0][Cb][Y1][Cr] (big-endian)
-        // One word -> two adjacent pixels sharing Cb and Cr.
+        // XFB is YUY2 (YCbCr 4:2:2): each 32 bit word = [Y0][Cb][Y1][Cr] (big endian).
+        // One word covers two adjacent pixels sharing Cb and Cr.
         let ycbcr_to_rgb = |y: f32, cb: f32, cr: f32| -> u32 {
             let r = (1.164 * y + 1.596 * cr).clamp(0.0, 255.0) as u8;
             let g = (1.164 * y - 0.813 * cr - 0.391 * cb).clamp(0.0, 255.0) as u8;

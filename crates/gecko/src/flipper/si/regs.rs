@@ -1,6 +1,6 @@
 use crate::flipper::si;
 use crate::gamecube::GameCube;
-use crate::mmio::traits::{MmioHandler, WriteMask};
+use crate::mmio::traits::{MmioAccess, WriteMask};
 use chapa::BitEnum;
 
 // 0xCC006430  4  R/W  SIPOLL (SI Poll Register)
@@ -77,7 +77,7 @@ pub struct SiComcsr {
 }
 crate::mmio_reg!(SiComcsr: u32 @ 0xCC006434);
 
-impl MmioHandler<GameCube> for SiComcsr {
+impl MmioAccess<GameCube> for SiComcsr {
     fn read(gc: &mut GameCube) -> Self {
         gc.si.comcsr
     }
@@ -180,7 +180,7 @@ pub struct SiStatusRegister {
 }
 crate::mmio_reg!(SiStatusRegister: u32 @ 0xCC006438);
 
-impl MmioHandler<GameCube> for SiStatusRegister {
+impl MmioAccess<GameCube> for SiStatusRegister {
     fn read(gc: &mut GameCube) -> Self {
         gc.si.status
     }

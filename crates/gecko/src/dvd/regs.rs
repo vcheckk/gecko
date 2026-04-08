@@ -1,6 +1,6 @@
 use crate::dvd;
 use crate::gamecube::GameCube;
-use crate::mmio::traits::{MmioHandler, WriteMask};
+use crate::mmio::traits::{MmioAccess, WriteMask};
 use chapa::BitEnum;
 
 // 0xCC006000  4  R/W  DISR - DI Status Register
@@ -31,7 +31,7 @@ pub struct DiStatusRegister {
 }
 crate::mmio_reg!(DiStatusRegister: u32 @ 0xCC006000);
 
-impl MmioHandler<GameCube> for DiStatusRegister {
+impl MmioAccess<GameCube> for DiStatusRegister {
     fn read(gc: &mut GameCube) -> Self {
         gc.di.status
     }
@@ -80,7 +80,7 @@ pub struct DiCoverRegister {
 }
 crate::mmio_reg!(DiCoverRegister: u32 @ 0xCC006004);
 
-impl MmioHandler<GameCube> for DiCoverRegister {
+impl MmioAccess<GameCube> for DiCoverRegister {
     fn read(gc: &mut GameCube) -> Self {
         gc.di.cover
     }
@@ -111,7 +111,7 @@ pub struct DiCommandBuf0 {
 }
 crate::mmio_reg!(DiCommandBuf0: u32 @ 0xCC006008);
 
-impl MmioHandler<GameCube> for DiCommandBuf0 {
+impl MmioAccess<GameCube> for DiCommandBuf0 {
     fn read(gc: &mut GameCube) -> Self {
         DiCommandBuf0::from_raw(gc.di.cmdbuf0)
     }
@@ -136,7 +136,7 @@ pub struct DiCommandBuf1 {
 }
 crate::mmio_reg!(DiCommandBuf1: u32 @ 0xCC00600C);
 
-impl MmioHandler<GameCube> for DiCommandBuf1 {
+impl MmioAccess<GameCube> for DiCommandBuf1 {
     fn read(gc: &mut GameCube) -> Self {
         DiCommandBuf1::from_raw(gc.di.cmdbuf1)
     }
@@ -155,7 +155,7 @@ pub struct DiCommandBuf2 {
 }
 crate::mmio_reg!(DiCommandBuf2: u32 @ 0xCC006010);
 
-impl MmioHandler<GameCube> for DiCommandBuf2 {
+impl MmioAccess<GameCube> for DiCommandBuf2 {
     fn read(gc: &mut GameCube) -> Self {
         DiCommandBuf2::from_raw(gc.di.cmdbuf2)
     }
@@ -216,7 +216,7 @@ pub struct DiControlRegister {
 }
 crate::mmio_reg!(DiControlRegister: u32 @ 0xCC00601C);
 
-impl MmioHandler<GameCube> for DiControlRegister {
+impl MmioAccess<GameCube> for DiControlRegister {
     fn read(gc: &mut GameCube) -> Self {
         gc.di.control
     }
@@ -245,7 +245,7 @@ pub struct DiImmBuf {
 }
 crate::mmio_reg!(DiImmBuf: u32 @ 0xCC006020);
 
-impl MmioHandler<GameCube> for DiImmBuf {
+impl MmioAccess<GameCube> for DiImmBuf {
     fn read(gc: &mut GameCube) -> Self {
         DiImmBuf::from_raw(gc.di.immbuf)
     }
@@ -271,7 +271,7 @@ impl Default for DiConfigurationRegister {
     }
 }
 
-impl MmioHandler<GameCube> for DiConfigurationRegister {
+impl MmioAccess<GameCube> for DiConfigurationRegister {
     fn read(gc: &mut GameCube) -> Self {
         gc.di.config
     }

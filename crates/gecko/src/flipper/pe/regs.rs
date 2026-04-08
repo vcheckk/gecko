@@ -1,78 +1,96 @@
-use crate::flipper::pe::PixelEngine;
-use crate::mmio::traits::{MmioAccess, MmioRegister};
+use crate::flipper::pe;
+use crate::gamecube::GameCube;
+use crate::mmio::traits::{MmioAccess, WriteMask};
 
 // 0xCC001000	2	R/W	Z Configuration
 
-crate::mmio_register! {
-    ZConfig: u16 @ 0xCC001000 => PixelEngine.zconf {}
-}
+#[chapa::bitfield(u16, order = lsb0)]
+#[derive(Copy, Clone, Debug)]
+pub struct ZConfig {}
+crate::mmio_reg!(ZConfig: u16 @ 0xCC001000);
+crate::mmio_default_access!(ZConfig => GameCube.pe.zconf);
 
 // 0xCC001002	2	R/W	Alpha Configuration
 
-crate::mmio_register! {
-    AlphaConfig: u16 @ 0xCC001002 => PixelEngine.alphaconf {}
-}
+#[chapa::bitfield(u16, order = lsb0)]
+#[derive(Copy, Clone, Debug)]
+pub struct AlphaConfig {}
+crate::mmio_reg!(AlphaConfig: u16 @ 0xCC001002);
+crate::mmio_default_access!(AlphaConfig => GameCube.pe.alphaconf);
 
 // 0xCC001004	2	R/W	Destination Alpha
 
-crate::mmio_register! {
-    DstAlphaConfig: u16 @ 0xCC001004 => PixelEngine.dst_alphaconf {}
-}
+#[chapa::bitfield(u16, order = lsb0)]
+#[derive(Copy, Clone, Debug)]
+pub struct DstAlphaConfig {}
+crate::mmio_reg!(DstAlphaConfig: u16 @ 0xCC001004);
+crate::mmio_default_access!(DstAlphaConfig => GameCube.pe.dst_alphaconf);
 
 // 0xCC001006	2	R/W	Alpha Compare Mode
 
-crate::mmio_register! {
-    AlphaMode: u16 @ 0xCC001006 => PixelEngine.alphamode {}
-}
+#[chapa::bitfield(u16, order = lsb0)]
+#[derive(Copy, Clone, Debug)]
+pub struct AlphaMode {}
+crate::mmio_reg!(AlphaMode: u16 @ 0xCC001006);
+crate::mmio_default_access!(AlphaMode => GameCube.pe.alphamode);
 
 // 0xCC001008	2	R/W	Alpha Read Mode
 
-crate::mmio_register! {
-    AlphaRead: u16 @ 0xCC001008 => PixelEngine.alpharead {}
-}
+#[chapa::bitfield(u16, order = lsb0)]
+#[derive(Copy, Clone, Debug)]
+pub struct AlphaRead {}
+crate::mmio_reg!(AlphaRead: u16 @ 0xCC001008);
+crate::mmio_default_access!(AlphaRead => GameCube.pe.alpharead);
 
 // 0xCC00100A	2	R/W	Interrupt Status
 
-crate::mmio_register! {
-    InterruptStatus: u16 @ 0xCC00100A {
-        #[bits(0)]
-        pub pe_token_enable: bool,
+#[chapa::bitfield(u16, order = lsb0)]
+#[derive(Copy, Clone, Debug)]
+pub struct InterruptStatus {
+    #[bits(0)]
+    pub pe_token_enable: bool,
 
-        #[bits(1)]
-        pub pe_finish_enable: bool,
+    #[bits(1)]
+    pub pe_finish_enable: bool,
 
-        #[bits(2)]
-        pub pe_token: bool,
+    #[bits(2)]
+    pub pe_token: bool,
 
-        #[bits(3)]
-        pub pe_finish: bool,
+    #[bits(3)]
+    pub pe_finish: bool,
+}
+crate::mmio_reg!(InterruptStatus: u16 @ 0xCC00100A);
+
+impl MmioAccess<GameCube> for InterruptStatus {
+    fn read(gc: &mut GameCube) -> Self {
+        // Status bits (token/finish) always read back as zero.
+        gc.pe.sr.with_pe_token(false).with_pe_finish(false)
+    }
+
+    fn write(self, gc: &mut GameCube, mask: WriteMask) {
+        if !mask.byte(1) {
+            return;
+        }
+
+        let mut sr = gc.pe.sr;
+        sr = sr
+            .with_pe_token_enable(self.pe_token_enable())
+            .with_pe_finish_enable(self.pe_finish_enable());
+        if self.pe_token() {
+            sr = sr.with_pe_token(false);
+        }
+        if self.pe_finish() {
+            sr = sr.with_pe_finish(false);
+        }
+        gc.pe.sr = sr;
+        pe::refresh_interrupts(gc);
     }
 }
 
-impl MmioAccess<PixelEngine> for InterruptStatus {
-    fn read(pe: &PixelEngine) -> Self {
-        // status bits (token/finish) always read back as zero
-        pe.sr.with_pe_token(false).with_pe_finish(false)
-    }
+// 0xCC00100E	2	R/W	Token
 
-    fn write(self, pe: &mut PixelEngine) {
-        Self::write_at(pe, Self::ADDR, Self::SIZE as u32, self.to_raw());
-    }
-
-    fn write_at(pe: &mut PixelEngine, addr: u32, access_size: u32, val: u32) {
-        const ENABLE_MASK: u32 = (1 << 0) | (1 << 1);
-        const STATUS_MASK: u32 = (1 << 2) | (1 << 3);
-
-        let current = pe.sr.to_raw();
-        let merged = Self::write_sub(current, addr, access_size, val);
-        let written_bits = Self::write_sub(0, addr, access_size, val);
-        let next_status = (current & STATUS_MASK) & !(written_bits & STATUS_MASK);
-        let next = (merged & ENABLE_MASK) | next_status;
-
-        pe.sr = <Self as MmioRegister>::from_raw(next);
-    }
-}
-
-crate::mmio_register! {
-    Token: u16 @ 0xCC00100E => PixelEngine.token {}
-}
+#[chapa::bitfield(u16, order = lsb0)]
+#[derive(Copy, Clone, Debug)]
+pub struct Token {}
+crate::mmio_reg!(Token: u16 @ 0xCC00100E);
+crate::mmio_default_access!(Token => GameCube.pe.token);

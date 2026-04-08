@@ -1,8 +1,7 @@
 pub mod regs;
+
 use crate::flipper::pi::InterruptFlag;
 use crate::gamecube::GameCube;
-use crate::mmio::constants::PE_BASE;
-use crate::mmio::traits::{MmioAccess, MmioRegister, MmioRw};
 
 pub struct PixelEngine {
     pub zconf: regs::ZConfig,
@@ -27,10 +26,12 @@ impl PixelEngine {
         }
     }
 
+    #[inline(always)]
     pub fn finish_interrupt_active(&self) -> bool {
         self.sr.pe_finish_enable() && self.sr.pe_finish()
     }
 
+    #[inline(always)]
     pub fn token_interrupt_active(&self) -> bool {
         self.sr.pe_token_enable() && self.sr.pe_token()
     }
@@ -49,11 +50,10 @@ impl PixelEngine {
     }
 }
 
-impl MmioRw for PixelEngine {
-    const BASE: u32 = PE_BASE;
-    const NAME: &'static str = "PE";
-
-    crate::impl_mmio_dispatch!(
+crate::mmio_device_dispatch! {
+    read = pe_read,
+    write = pe_write,
+    registers = [
         regs::ZConfig,
         regs::AlphaConfig,
         regs::DstAlphaConfig,
@@ -61,21 +61,20 @@ impl MmioRw for PixelEngine {
         regs::AlphaRead,
         regs::InterruptStatus,
         regs::Token,
-    );
+    ],
 }
 
-impl GameCube {
-    pub fn check_pe_interrupts(&mut self) {
-        if self.pe.token_interrupt_active() {
-            self.pi.assert_interrupt(InterruptFlag::PeToken);
-        } else {
-            self.pi.clear_interrupt(InterruptFlag::PeToken);
-        }
+#[inline(always)]
+pub fn refresh_interrupts(gc: &mut GameCube) {
+    if gc.pe.token_interrupt_active() {
+        gc.pi.assert_interrupt(InterruptFlag::PeToken);
+    } else {
+        gc.pi.clear_interrupt(InterruptFlag::PeToken);
+    }
 
-        if self.pe.finish_interrupt_active() {
-            self.pi.assert_interrupt(InterruptFlag::PeFinish);
-        } else {
-            self.pi.clear_interrupt(InterruptFlag::PeFinish);
-        }
+    if gc.pe.finish_interrupt_active() {
+        gc.pi.assert_interrupt(InterruptFlag::PeFinish);
+    } else {
+        gc.pi.clear_interrupt(InterruptFlag::PeFinish);
     }
 }

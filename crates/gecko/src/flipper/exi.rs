@@ -76,18 +76,21 @@ impl ExternalInterface {
         }
     }
 
+    #[inline(always)]
     pub fn interrupt_active(&self) -> bool {
         Self::channel_interrupt_active(&self.ch0_csr)
             || Self::channel_interrupt_active(&self.ch1_csr)
             || Self::channel_interrupt_active(&self.ch2_csr)
     }
 
+    #[inline(always)]
     fn channel_interrupt_active(csr: &impl regs::ChannelStatus) -> bool {
         (csr.exi_interrupt() && csr.exi_interrupt_mask())
             || (csr.tc_interrupt() && csr.tc_interrupt_mask())
             || (csr.ext_interrupt() && csr.ext_interrupt_mask())
     }
 
+    #[inline(always)]
     pub fn start_immediate_transfer<const CHANNEL: usize>(&mut self) {
         let (transfer_type, transfer_length, chip_select, mut bytes) = match CHANNEL {
             0 => (
@@ -141,6 +144,7 @@ impl ExternalInterface {
         self.finish_transfer::<CHANNEL>();
     }
 
+    #[inline(always)]
     fn set_data<const CHANNEL: usize>(&mut self, val: u32) {
         match CHANNEL {
             0 => self.ch0_data = regs::Channel0Data::from_raw(val),
@@ -150,6 +154,7 @@ impl ExternalInterface {
         }
     }
 
+    #[inline(always)]
     fn finish_transfer<const CHANNEL: usize>(&mut self) {
         match CHANNEL {
             0 => {
@@ -215,6 +220,7 @@ pub fn on_chip_select_written<const CHANNEL: usize>(gc: &mut GameCube, new_cs: u
     gc.exi.prev_cs[CHANNEL] = new_cs;
 }
 
+#[inline(always)]
 pub fn run_dma<const CHANNEL: usize>(gc: &mut GameCube) {
     let (cs, transfer_type, address, length) = match CHANNEL {
         0 => (

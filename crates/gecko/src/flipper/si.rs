@@ -47,11 +47,13 @@ impl SerialInterface {
         }
     }
 
+    #[inline(always)]
     pub fn interrupt_active(&self) -> bool {
         (self.comcsr.tc_interrupt() && self.comcsr.tc_interrupt_mask())
             || (self.comcsr.rdst_interrupt() && self.comcsr.rdst_interrupt_mask())
     }
 
+    #[inline(always)]
     fn read_channel_reg(&mut self, offset: u32) -> u32 {
         let ch = (offset / 0x0C) as usize;
         match offset % 0x0C {
@@ -68,6 +70,7 @@ impl SerialInterface {
         }
     }
 
+    #[inline(always)]
     fn write_channel_reg(&mut self, offset: u32, val: u32) {
         let ch = (offset / 0x0C) as usize;
         match offset % 0x0C {
@@ -78,6 +81,7 @@ impl SerialInterface {
         }
     }
 
+    #[inline(always)]
     fn channel_reg_raw(&self, aligned_offset: u32) -> u32 {
         let ch = (aligned_offset / 0x0C) as usize;
         match aligned_offset % 0x0C {
@@ -88,6 +92,7 @@ impl SerialInterface {
         }
     }
 
+    #[inline(always)]
     fn clear_rdst(&mut self, ch: usize) {
         match ch {
             0 => self.status = self.status.with_rdst0(false),
@@ -98,6 +103,7 @@ impl SerialInterface {
         }
     }
 
+    #[inline(always)]
     fn set_rdst(&mut self, ch: usize) {
         match ch {
             0 => self.status = self.status.with_rdst0(true),

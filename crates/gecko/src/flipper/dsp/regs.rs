@@ -1,6 +1,6 @@
 use crate::flipper::dsp;
 use crate::gamecube::GameCube;
-use crate::mmio::traits::{MmioHandler, WriteMask};
+use crate::mmio::traits::{MmioAccess, WriteMask};
 use chapa::BitEnum;
 
 // 0xCC00500A 2 [R/W] CSR - DSP Control/Status Register
@@ -64,7 +64,7 @@ impl Default for ControlStatus {
     }
 }
 
-impl MmioHandler<GameCube> for ControlStatus {
+impl MmioAccess<GameCube> for ControlStatus {
     fn read(gc: &mut GameCube) -> Self {
         gc.dsp.csr
     }
@@ -133,7 +133,7 @@ pub struct MailboxToDspHi {
 }
 crate::mmio_reg!(MailboxToDspHi: u16 @ 0xCC005000);
 
-impl MmioHandler<GameCube> for MailboxToDspHi {
+impl MmioAccess<GameCube> for MailboxToDspHi {
     fn read(gc: &mut GameCube) -> Self {
         gc.dsp.mailbox_to_dsp_hi
     }
@@ -152,7 +152,7 @@ impl MmioHandler<GameCube> for MailboxToDspHi {
 pub struct MailboxToDspLo {}
 crate::mmio_reg!(MailboxToDspLo: u16 @ 0xCC005002);
 
-impl MmioHandler<GameCube> for MailboxToDspLo {
+impl MmioAccess<GameCube> for MailboxToDspLo {
     fn read(gc: &mut GameCube) -> Self {
         gc.dsp.mailbox_to_dsp_lo
     }
@@ -181,7 +181,7 @@ pub struct MailboxToCpuHi {
 }
 crate::mmio_reg!(MailboxToCpuHi: u16 @ 0xCC005004);
 
-impl MmioHandler<GameCube> for MailboxToCpuHi {
+impl MmioAccess<GameCube> for MailboxToCpuHi {
     fn read(gc: &mut GameCube) -> Self {
         gc.dsp.mailbox_to_cpu_hi
     }
@@ -199,7 +199,7 @@ impl MmioHandler<GameCube> for MailboxToCpuHi {
 pub struct MailboxToCpuLo {}
 crate::mmio_reg!(MailboxToCpuLo: u16 @ 0xCC005006);
 
-impl MmioHandler<GameCube> for MailboxToCpuLo {
+impl MmioAccess<GameCube> for MailboxToCpuLo {
     fn read(gc: &mut GameCube) -> Self {
         let val = gc.dsp.mailbox_to_cpu_lo;
         // Reading DMBL clears DMBH.M (bit 15), signaling the CPU has consumed the mail
@@ -230,7 +230,7 @@ pub struct AramMode {
 }
 crate::mmio_reg!(AramMode: u16 @ 0xCC005016);
 
-impl MmioHandler<GameCube> for AramMode {
+impl MmioAccess<GameCube> for AramMode {
     fn read(gc: &mut GameCube) -> Self {
         gc.dsp.aram_mode.with_status(true)
     }
@@ -285,7 +285,7 @@ pub struct AudioDmaControl {
 }
 crate::mmio_reg!(AudioDmaControl: u16 @ 0xCC005036);
 
-impl MmioHandler<GameCube> for AudioDmaControl {
+impl MmioAccess<GameCube> for AudioDmaControl {
     fn read(gc: &mut GameCube) -> Self {
         gc.dsp.audio_dma_control
     }
@@ -316,7 +316,7 @@ pub struct AramDmaControl {
 }
 crate::mmio_reg!(AramDmaControl: u32 @ 0xCC005028);
 
-impl MmioHandler<GameCube> for AramDmaControl {
+impl MmioAccess<GameCube> for AramDmaControl {
     fn read(gc: &mut GameCube) -> Self {
         gc.dsp.aram_dma_control
     }
