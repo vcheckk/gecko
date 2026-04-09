@@ -39,17 +39,6 @@ pub mod reg {
     pub const AC1M: u8 = 31;
 }
 
-#[derive(Clone, Copy)]
-pub struct Snapshot {
-    pub ac0_high: u16,
-    pub ac0_mid: u16,
-    pub ac0_low: u16,
-    pub ac1_high: u16,
-    pub ac1_mid: u16,
-    pub ac1_low: u16,
-    pub status: StatusRegister,
-}
-
 #[derive(Default)]
 pub struct Registers {
     pub pc: u16,
@@ -76,31 +65,32 @@ pub struct Registers {
     pub ac1_low: u16,
     pub ac0_mid: u16,
     pub ac1_mid: u16,
+
+    /// Pre-instruction accumulator cache for extension opcodes.
+    /// [0]=AC0L, [1]=AC1L, [2]=AC0M(sat), [3]=AC1M(sat), [4]=AC0M(raw), [5]=AC1M(raw)
+    pub ext_ac_cache: [u16; 6],
 }
 
 impl Registers {
+    /// Cache the pre-instruction accumulator values that extension opcodes may read.
+    /// Must be called before the main instruction dispatch when an extension is present.
     #[inline(always)]
-    pub fn snapshot(&self) -> Snapshot {
-        Snapshot {
-            ac0_high: self.ac0_high,
-            ac0_mid: self.ac0_mid,
-            ac0_low: self.ac0_low,
-            ac1_high: self.ac1_high,
-            ac1_mid: self.ac1_mid,
-            ac1_low: self.ac1_low,
-            status: self.status,
-        }
-    }
-
-    #[inline(always)]
-    pub fn restore(&mut self, snap: &Snapshot) {
-        self.ac0_high = snap.ac0_high;
-        self.ac0_mid = snap.ac0_mid;
-        self.ac0_low = snap.ac0_low;
-        self.ac1_high = snap.ac1_high;
-        self.ac1_mid = snap.ac1_mid;
-        self.ac1_low = snap.ac1_low;
-        self.status = snap.status;
+    pub fn cache_ext_ac(&mut self) {
+        self.ext_ac_cache[0] = self.ac0_low;
+        self.ext_ac_cache[1] = self.ac1_low;
+        let sxm = self.sign_extended();
+        self.ext_ac_cache[2] = if sxm {
+            self.saturate_ac_mid(self.ac0_high, self.ac0_mid)
+        } else {
+            self.ac0_mid
+        };
+        self.ext_ac_cache[3] = if sxm {
+            self.saturate_ac_mid(self.ac1_high, self.ac1_mid)
+        } else {
+            self.ac1_mid
+        };
+        self.ext_ac_cache[4] = self.ac0_mid;
+        self.ext_ac_cache[5] = self.ac1_mid;
     }
 
     /// Increment address register by 1 with WR wrapping.

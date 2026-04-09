@@ -217,18 +217,15 @@ impl GameCube {
         let natural_nia = self.dsp.registers.cia.wrapping_add(lut::instr_size(instr) as u16);
         self.dsp.registers.nia = natural_nia;
 
-        // Save state before main instruction so extensions read pre-instruction values.
-        let pre_snap = instr.ext_opcode().map(|_| self.dsp.registers.snapshot());
+        let ext_op = instr.ext_opcode();
+        if ext_op.is_some() {
+            self.dsp.registers.cache_ext_ac();
+        }
 
         lut::dispatch(self, instr);
 
-        // Dispatch extension opcode: it reads accumulator/status from before the main instruction
-        if let Some(ext) = instr.ext_opcode() {
-            let ext = instruction::GcDspExt(ext);
-            let post_snap = self.dsp.registers.snapshot();
-            self.dsp.registers.restore(&pre_snap.unwrap());
-            lut::dispatch_gc_dsp_ext(self, ext);
-            self.dsp.registers.restore(&post_snap);
+        if let Some(ext) = ext_op {
+            lut::dispatch_gc_dsp_ext(self, instruction::GcDspExt(ext));
         }
 
         // Check if we've reached the end of a loop.
@@ -258,7 +255,7 @@ impl GameCube {
                 break;
             }
         }
-        refresh_interrupts(self);
+        self::refresh_interrupts(self);
     }
 }
 

@@ -183,7 +183,7 @@ impl GameCube {
         self.cpu.nia = self.cpu.cia.wrapping_add(4);
         let instr = Instruction(self.mmio.fetch_instruction(self.cpu.cia));
         cpu::lut::dispatch(self, instr);
-        self.scheduler.cycles += 1;
+        self.scheduler.cycles += 2; // TODO: Track properly?
 
         // CPU post-hook
         #[cfg(feature = "hooks")]

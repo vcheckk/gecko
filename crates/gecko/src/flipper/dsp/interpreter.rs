@@ -1094,7 +1094,7 @@ pub fn ext_addr<const OP: u32>(ctx: &mut GameCube, instr: GcDspExt) {
 pub fn ext_mv(ctx: &mut GameCube, instr: GcDspExt) {
     let d = instr.d_4_5();
     let s = instr.s_6_7();
-    let value = ctx.dsp.registers.read::<true>(reg::AC0L + s);
+    let value = ctx.dsp.registers.ext_ac_cache[s as usize];
     ctx.dsp.registers.write::<true>(reg::AX0L + d, value);
 }
 
@@ -1102,7 +1102,7 @@ pub fn ext_mv(ctx: &mut GameCube, instr: GcDspExt) {
 pub fn ext_store<const OP: u32>(ctx: &mut GameCube, instr: GcDspExt) {
     let d = instr.d_6_7() as usize;
     let s = instr.s_3_4();
-    let value = ctx.dsp.registers.read::<true>(reg::AC0L + s);
+    let value = ctx.dsp.registers.ext_ac_cache[s as usize];
     let addr = ctx.dsp.registers.ar[d];
     dsp::write_dmem(ctx, addr, value);
     match OP {
@@ -1148,13 +1148,13 @@ pub fn ext_load_store<const OP: u32>(ctx: &mut GameCube, instr: GcDspExt) {
             let load_addr = ctx.dsp.registers.ar[0];
             let load_value = dsp::read_dmem(ctx, load_addr);
             ctx.dsp.registers.write::<true>(reg::AX0L + d, load_value);
-            let store_value = ctx.dsp.registers.ac_mid(s as u8);
+            let store_value = ctx.dsp.registers.ext_ac_cache[4 + s];
             let store_addr = ctx.dsp.registers.ar[3];
             dsp::write_dmem(ctx, store_addr, store_value);
         }
         _ => {
             // SL: Store first, then Load
-            let store_value = ctx.dsp.registers.ac_mid(s as u8);
+            let store_value = ctx.dsp.registers.ext_ac_cache[4 + s];
             let store_addr = ctx.dsp.registers.ar[0];
             dsp::write_dmem(ctx, store_addr, store_value);
             let load_addr = ctx.dsp.registers.ar[3];
