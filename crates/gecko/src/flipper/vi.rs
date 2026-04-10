@@ -185,11 +185,24 @@ impl VideoInterface {
         check_di!(self.di3);
     }
 
+    #[inline(always)]
+    pub fn in_even_field(&self) -> bool {
+        self.half_line_count >= self.half_lines_per_odd_field()
+    }
+
     pub fn xfb_addr(&self) -> u32 {
-        if self.tfbl.page_offset() {
-            self.tfbl.xfb_addr() << 5
+        if self.dcr.interlaced() && self.in_even_field() {
+            if self.bfbl.page_offset() {
+                self.bfbl.xfb_addr() << 5
+            } else {
+                self.bfbl.xfb_addr()
+            }
         } else {
-            self.tfbl.xfb_addr()
+            if self.tfbl.page_offset() {
+                self.tfbl.xfb_addr() << 5
+            } else {
+                self.tfbl.xfb_addr()
+            }
         }
     }
 }
