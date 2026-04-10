@@ -161,7 +161,7 @@ impl GameCube {
         // Deliver external interrupt when EE=1 and any enabled PI interrupt is pending
         if self.cpu.msr.external_interrupt_enable() && self.pi.interrupt_pending() {
             self.cause_external_interrupt();
-            self.scheduler.cycles += 1;
+            self.scheduler.cycles += 2;
             return;
         }
 
