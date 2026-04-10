@@ -57,7 +57,7 @@ impl RenderState {
             .unwrap_or(surface_caps.formats[0]);
 
         let surface_config = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_DST,
             format: surface_format,
             width: size.width.max(1),
             height: size.height.max(1),
@@ -128,13 +128,7 @@ impl RenderState {
         });
 
         let (texture, bind_group) = create_xfb_texture(&device, &bind_group_layout, w, h);
-        let gx_renderer = backend_wgpu::GxRenderer::new(
-            &device,
-            &queue,
-            surface_format,
-            surface_config.width,
-            surface_config.height,
-        );
+        let gx_renderer = backend_wgpu::GxRenderer::new(&device, &queue, surface_format);
 
         let egui_ctx = egui::Context::default();
         let mut fonts = egui::FontDefinitions::default();
@@ -172,7 +166,6 @@ impl RenderState {
         self.surface_config.width = width;
         self.surface_config.height = height;
         self.surface.configure(&self.device, &self.surface_config);
-        self.gx_renderer.resize(&self.device, width, height);
     }
 
     pub fn render(&mut self, emulator: &mut GameCube, debugger_ui: &mut DebuggerUi, window: &Window) {
@@ -449,10 +442,8 @@ impl RenderState {
             &self.device,
             &self.queue,
             &emulator.gx.draw_commands,
-            &emulator.mmio.ram,
+            &mut emulator.mmio.ram,
             view,
-            self.surface_config.width,
-            self.surface_config.height,
         );
     }
 

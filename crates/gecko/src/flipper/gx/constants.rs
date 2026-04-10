@@ -130,6 +130,17 @@ pub const BP_SU_SCIS_TL: usize = 0x20;
 pub const BP_SU_SCIS_BR: usize = 0x21;
 pub const BP_SU_SCIS_OFFSET: usize = 0x59;
 
+// BP EFB copy registers
+pub const BP_PE_COPY_SRC: usize = 0x49;
+pub const BP_PE_COPY_DIMS: usize = 0x4A;
+pub const BP_PE_COPY_DST: usize = 0x4B;
+pub const BP_PE_COPY_DST_STRIDE: usize = 0x4D;
+pub const BP_PE_COPY_YSCALE: usize = 0x4E;
+pub const BP_PE_COPY_CLEAR_AR: usize = 0x4F;
+pub const BP_PE_COPY_CLEAR_GB: usize = 0x50;
+pub const BP_PE_COPY_CLEAR_Z: usize = 0x51;
+pub const BP_PE_COPY_CMD: usize = 0x52;
+
 // EFB dimensions
 pub const EFB_WIDTH: u32 = 640;
 pub const EFB_HEIGHT: u32 = 480;

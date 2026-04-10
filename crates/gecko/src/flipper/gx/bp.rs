@@ -1,8 +1,11 @@
 use super::constants::{
-    BP_GEN_MODE, BP_PE_ALPHA_COMPARE, BP_PE_CMODE0, BP_PE_DONE, BP_PE_DONE_FINISH_BIT, BP_PE_TOKEN, BP_PE_TOKEN_INT,
-    BP_PE_ZMODE, BP_RAS1_TREF_COUNT, BP_RAS1_TREF0, BP_SU_SCIS_BR, BP_SU_SCIS_OFFSET, BP_SU_SCIS_TL,
-    BP_TEV_COLOR_ENV_0, BP_TEV_REGISTERL_0, BP_TX_SETIMAGE0_I0, BP_TX_SETIMAGE0_I4, BP_TX_SETIMAGE3_I0,
-    BP_TX_SETIMAGE3_I4, BP_TX_SETMODE0_I0, BP_TX_SETMODE0_I4, EFB_HEIGHT, EFB_WIDTH,
+    BP_GEN_MODE, BP_PE_ALPHA_COMPARE, BP_PE_CMODE0, BP_PE_COPY_CLEAR_AR, BP_PE_COPY_CLEAR_GB, BP_PE_COPY_CLEAR_Z,
+    BP_PE_COPY_CMD, BP_PE_COPY_DIMS, BP_PE_COPY_DST, BP_PE_COPY_DST_STRIDE, BP_PE_COPY_SRC, BP_PE_DONE,
+    BP_PE_DONE_FINISH_BIT, BP_PE_TOKEN, BP_PE_TOKEN_INT, BP_PE_ZMODE, BP_RAS1_TREF_COUNT, BP_RAS1_TREF0,
+    BP_SU_SCIS_BR, BP_SU_SCIS_OFFSET, BP_SU_SCIS_TL, BP_TEV_COLOR_ENV_0, BP_TEV_KSEL_0, BP_TEV_REGISTERL_0,
+    BP_TX_SETIMAGE0_I0,
+    BP_TX_SETIMAGE0_I4, BP_TX_SETIMAGE3_I0, BP_TX_SETIMAGE3_I4, BP_TX_SETMODE0_I0, BP_TX_SETMODE0_I4, EFB_HEIGHT,
+    EFB_WIDTH,
 };
 use super::regs::{
     AlphaCompare, BlendMode, GenMode, TevAlphaEnv, TevColorEnv, TevOrder, TevRegType, TevRegisterH, TevRegisterL,
@@ -69,6 +72,16 @@ impl GraphicsProcessor {
             self.resolve_konst_colors();
         }
 
+        // TEV KSEL (constant color selection) registers: recalculate konst colors
+        if idx >= BP_TEV_KSEL_0 && idx <= BP_TEV_KSEL_0 + 7 {
+            self.resolve_konst_colors();
+        }
+
+        // TEV color register writes also affect konst colors
+        if idx >= BP_TEV_REGISTERL_0 && idx <= BP_TEV_REGISTERL_0 + 7 {
+            self.resolve_konst_colors();
+        }
+
         // PE finish
         if idx == BP_PE_DONE && (val & BP_PE_DONE_FINISH_BIT) != 0 {
             self.raise_interrupt = true;
@@ -91,6 +104,11 @@ impl GraphicsProcessor {
         // Scissor registers (BP 0x20, 0x21, 0x59)
         if idx == BP_SU_SCIS_TL || idx == BP_SU_SCIS_BR || idx == BP_SU_SCIS_OFFSET {
             self.recompute_scissor();
+        }
+
+        // EFB copy trigger (BP 0x52)
+        if idx == BP_PE_COPY_CMD {
+            self.efb_copy(val);
         }
     }
 
@@ -202,6 +220,64 @@ impl GraphicsProcessor {
                 TevRegType::Constant => self.cur_tev_const_regs_hi[reg_idx] = reg,
             }
         }
+    }
+
+    fn efb_copy(&mut self, trigger: u32) {
+        // Decode source rect from BP 0x49/0x4A
+        let src_reg = self.bp_regs[BP_PE_COPY_SRC];
+        let dims_reg = self.bp_regs[BP_PE_COPY_DIMS];
+        let src_x = (src_reg >> 10) & 0x3FF;
+        let src_y = src_reg & 0x3FF;
+        let src_w = ((dims_reg >> 10) & 0x3FF) + 1;
+        let src_h = (dims_reg & 0x3FF) + 1;
+
+        // Destination address (BP 0x4B, shifted left by 5)
+        let dest_addr = (self.bp_regs[BP_PE_COPY_DST] & 0x00FFFFFF) << 5;
+        let dest_stride = self.bp_regs[BP_PE_COPY_DST_STRIDE] & 0x3FF;
+
+        // Trigger word bits
+        let copy_to_xfb = (trigger >> 14) & 1 != 0;
+        let clear = (trigger >> 11) & 1 != 0;
+        let half = (trigger >> 9) & 1 != 0;
+
+        // Clear color from BP 0x4F/0x50
+        let clear_ar = self.bp_regs[BP_PE_COPY_CLEAR_AR];
+        let clear_gb = self.bp_regs[BP_PE_COPY_CLEAR_GB];
+        let a = ((clear_ar >> 8) & 0xFF) as f32 / 255.0;
+        let r = (clear_ar & 0xFF) as f32 / 255.0;
+        let g = ((clear_gb >> 8) & 0xFF) as f32 / 255.0;
+        let b = (clear_gb & 0xFF) as f32 / 255.0;
+
+        // Clear Z from BP 0x51
+        let clear_z_raw = self.bp_regs[BP_PE_COPY_CLEAR_Z] & 0x00FFFFFF;
+        let clear_z = clear_z_raw as f32 / 16777215.0;
+
+        tracing::debug!(
+            src_x,
+            src_y,
+            src_w,
+            src_h,
+            dest_addr = format!("{dest_addr:#010X}"),
+            copy_to_xfb,
+            clear,
+            half,
+            "EFB copy triggered"
+        );
+
+        // Snapshot all copy state at enqueue time
+        self.draw_commands.commands.push(draw::GxCommand::CopyEfb(draw::EfbCopyCmd {
+            src_x,
+            src_y,
+            src_w,
+            src_h,
+            dest_addr,
+            dest_stride,
+            copy_to_xfb,
+            clear,
+            clear_color: [r, g, b, a],
+            clear_z,
+            half,
+        }));
     }
 
     fn recompute_scissor(&mut self) {

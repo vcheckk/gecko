@@ -71,7 +71,7 @@ impl State {
             .unwrap_or(surface_caps.formats[0]);
 
         let surface_config = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_DST,
             format: surface_format,
             width: size.width.max(1),
             height: size.height.max(1),
@@ -142,13 +142,7 @@ impl State {
         });
 
         let (texture, bind_group) = create_xfb_texture(&device, &bind_group_layout, w, h);
-        let gx_renderer = backend_wgpu::GxRenderer::new(
-            &device,
-            &queue,
-            surface_format,
-            surface_config.width,
-            surface_config.height,
-        );
+        let gx_renderer = backend_wgpu::GxRenderer::new(&device, &queue, surface_format);
 
         let egui_ctx = egui::Context::default();
         let egui_renderer = egui_wgpu::Renderer::new(&device, surface_format, egui_wgpu::RendererOptions::default());
@@ -183,7 +177,6 @@ impl State {
         self.surface_config.width = width;
         self.surface_config.height = height;
         self.surface.configure(&self.device, &self.surface_config);
-        self.gx_renderer.resize(&self.device, width, height);
     }
 
     fn render(&mut self, frame_rx: &Receiver<FrameMessage>, window: &Window) {
@@ -192,7 +185,7 @@ impl State {
             msg = Some(newer); // drain
         }
 
-        let msg = match msg {
+        let mut msg = match msg {
             Some(m) => m,
             None => return,
         };
@@ -219,7 +212,7 @@ impl State {
         let view = frame.texture.create_view(&Default::default());
 
         // Render emulator output
-        match &msg.data {
+        match &mut msg.data {
             FrameData::Gx { commands, ram } => {
                 self.render_gx(commands, ram, &view);
             }
@@ -309,16 +302,9 @@ impl State {
         frame.present();
     }
 
-    fn render_gx(&mut self, commands: &DrawCommands, ram: &[u8], view: &wgpu::TextureView) {
-        self.gx_renderer.render(
-            &self.device,
-            &self.queue,
-            commands,
-            ram,
-            view,
-            self.surface_config.width,
-            self.surface_config.height,
-        );
+    fn render_gx(&mut self, commands: &DrawCommands, ram: &mut [u8], view: &wgpu::TextureView) {
+        self.gx_renderer
+            .render(&self.device, &self.queue, commands, ram, view);
     }
 
     fn render_xfb(&mut self, pixels: &[u32], w: u32, h: u32, view: &wgpu::TextureView) {
@@ -490,3 +476,4 @@ impl ApplicationHandler for App {
         }
     }
 }
+

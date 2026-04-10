@@ -13,27 +13,34 @@ impl GxRenderer {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         commands: &DrawCommands,
-        ram: &[u8],
+        ram: &mut [u8],
         target: &wgpu::TextureView,
-        target_width: u32,
-        target_height: u32,
     ) {
-        self.ensure_depth_texture(device, target_width, target_height);
-
         if commands.commands.is_empty() {
             return;
         }
 
         self.prepare_resources(device, queue, commands, ram);
 
+        // Render all draws into EFB in one pass, then process copies (readback to RAM + clear).
+        // The caller displays from the XFB data written to RAM, not from the EFB directly.
         let (frame_uniform_bytes, draw_call_indices) = self.aggregate_draw_data(device, commands);
 
-        if self.scratch_draws.is_empty() {
-            return;
+        if !self.scratch_draws.is_empty() {
+            self.upload_buffers(device, queue, &frame_uniform_bytes);
+            let num_draws = self.scratch_draws.len();
+            self.execute_render_pass_range(device, queue, commands, &draw_call_indices, 0, num_draws);
         }
 
-        self.upload_buffers(device, queue, &frame_uniform_bytes);
-        self.execute_render_pass(device, queue, commands, target, target_width, target_height, &draw_call_indices);
+        // Blit EFB to screen
+        self.blit_efb_to_target(device, queue, target);
+
+        // Process copies (readback EFB to RAM as YUV422 + clear EFB for next frame)
+        for cmd in &commands.commands {
+            if let GxCommand::CopyEfb(copy) = cmd {
+                self.execute_efb_copy(device, queue, copy, ram);
+            }
+        }
     }
 
     fn prepare_resources(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, commands: &DrawCommands, ram: &[u8]) {
@@ -177,16 +184,17 @@ impl GxRenderer {
         queue.write_buffer(&self.vertex_buffer, 0, bytemuck::cast_slice(&self.scratch_vertices));
     }
 
-    fn execute_render_pass(
+    fn execute_render_pass_range(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         commands: &DrawCommands,
-        target: &wgpu::TextureView,
-        target_width: u32,
-        target_height: u32,
         draw_call_indices: &[usize],
+        scratch_start: usize,
+        scratch_end: usize,
     ) {
+        let target_width = crate::EFB_WIDTH;
+        let target_height = crate::EFB_HEIGHT;
         let fallback_sampler_key = (WrapMode::Clamp, WrapMode::Clamp, MagFilter::Linear, MinFilter::Linear);
         let frame_stride = align_up(
             FrameUniforms::min_size().get(),
@@ -255,21 +263,35 @@ impl GxRenderer {
 
         let mut encoder = device.create_command_encoder(&Default::default());
         {
+            // TODO: lol?
+            let needs_initial_clear = self.efb_needs_clear;
+            self.efb_needs_clear = false;
+            let color_load = if needs_initial_clear {
+                wgpu::LoadOp::Clear(wgpu::Color::BLACK)
+            } else {
+                wgpu::LoadOp::Load
+            };
+            let depth_load = if needs_initial_clear {
+                wgpu::LoadOp::Clear(1.0)
+            } else {
+                wgpu::LoadOp::Load
+            };
+
             let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("gx_render_pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: target,
+                    view: &self.efb_view,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        load: color_load,
                         store: wgpu::StoreOp::Store,
                     },
                     depth_slice: None,
                 })],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &self.depth_view,
+                    view: &self.efb_depth_view,
                     depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(1.0),
+                        load: depth_load,
                         store: wgpu::StoreOp::Store,
                     }),
                     stencil_ops: None,
@@ -280,7 +302,7 @@ impl GxRenderer {
             });
             rpass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
 
-            for (index, (first_vertex, vertex_count)) in self.scratch_draws.iter().copied().enumerate() {
+            for (index, (first_vertex, vertex_count)) in self.scratch_draws.iter().copied().enumerate().skip(scratch_start).take(scratch_end - scratch_start) {
                 let GxCommand::Draw(dc) = &commands.commands[draw_call_indices[index]] else {
                     continue;
                 };
@@ -324,6 +346,140 @@ impl GxRenderer {
         queue.submit([encoder.finish()]);
     }
 
+    fn execute_efb_copy(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        copy: &gecko::flipper::gx::draw::EfbCopyCmd,
+        ram: &mut [u8],
+    ) {
+        let x = copy.src_x.min(crate::EFB_WIDTH);
+        let y = copy.src_y.min(crate::EFB_HEIGHT);
+        let w = copy.src_w.min(crate::EFB_WIDTH.saturating_sub(x));
+        let h = copy.src_h.min(crate::EFB_HEIGHT.saturating_sub(y));
+
+        if w > 0 && h > 0 {
+            let bytes_per_row = align_up(w as u64 * 4, wgpu::COPY_BYTES_PER_ROW_ALIGNMENT as u64) as u32;
+            let buffer_size = bytes_per_row as u64 * h as u64;
+
+            let staging = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("efb_copy_staging"),
+                size: buffer_size,
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            });
+
+            let mut encoder = device.create_command_encoder(&Default::default());
+            encoder.copy_texture_to_buffer(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &self.efb_texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d { x, y, z: 0 },
+                    aspect: wgpu::TextureAspect::default(),
+                },
+                wgpu::TexelCopyBufferInfo {
+                    buffer: &staging,
+                    layout: wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(bytes_per_row),
+                        rows_per_image: Some(h),
+                    },
+                },
+                wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            );
+            queue.submit([encoder.finish()]);
+
+            let slice = staging.slice(..);
+            slice.map_async(wgpu::MapMode::Read, |_| {});
+            let _ = device.poll(wgpu::PollType::wait_indefinitely());
+
+            {
+                let data = slice.get_mapped_range();
+                if copy.copy_to_xfb {
+                    let is_bgra = matches!(
+                        self.surface_format,
+                        wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb
+                    );
+                    self::encode_xfb_yuv422(&data, bytes_per_row, w, h, ram, copy.dest_addr as usize, is_bgra);
+                }
+                // TODO: tiled texture encode for CopyTex
+                drop(data);
+            }
+            staging.unmap();
+        }
+
+        if copy.clear {
+            // Clear the entire EFB with the game's clear color.
+            // TODO: scoped clear (only the copied region) for proper multi-pass support.
+            let mut encoder = device.create_command_encoder(&Default::default());
+            {
+                let _rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("efb_clear_after_copy"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &self.efb_view,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color {
+                                r: copy.clear_color[0] as f64,
+                                g: copy.clear_color[1] as f64,
+                                b: copy.clear_color[2] as f64,
+                                a: copy.clear_color[3] as f64,
+                            }),
+                            store: wgpu::StoreOp::Store,
+                        },
+                        depth_slice: None,
+                    })],
+                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                        view: &self.efb_depth_view,
+                        depth_ops: Some(wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(copy.clear_z),
+                            store: wgpu::StoreOp::Store,
+                        }),
+                        stencil_ops: None,
+                    }),
+                    occlusion_query_set: None,
+                    timestamp_writes: None,
+                    multiview_mask: None,
+                });
+            }
+            queue.submit([encoder.finish()]);
+        }
+    }
+
+    fn blit_efb_to_target(
+        &self,
+        _device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        target: &wgpu::TextureView,
+    ) {
+        let mut encoder = _device.create_command_encoder(&Default::default());
+        let target_size = target.texture().size();
+        let copy_w = crate::EFB_WIDTH.min(target_size.width);
+        let copy_h = crate::EFB_HEIGHT.min(target_size.height);
+
+        encoder.copy_texture_to_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &self.efb_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::default(),
+            },
+            wgpu::TexelCopyTextureInfo {
+                texture: target.texture(),
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::default(),
+            },
+            wgpu::Extent3d {
+                width: copy_w,
+                height: copy_h,
+                depth_or_array_layers: 1,
+            },
+        );
+
+        queue.submit([encoder.finish()]);
+    }
+
     fn ensure_draw_capacity(&mut self, device: &wgpu::Device, count: usize) {
         if count <= self.draw_uniform_capacity {
             return;
@@ -347,4 +503,50 @@ fn pack_u32x16_to_uvec4x4(data: &[u32; 16]) -> [UVec4; 4] {
         UVec4::new(data[8], data[9], data[10], data[11]),
         UVec4::new(data[12], data[13], data[14], data[15]),
     ]
+}
+
+/// Encode EFB readback pixels as YUV422 into guest RAM (XFB format).
+/// Pixel data may be RGBA or BGRA depending on the surface format.
+fn encode_xfb_yuv422(
+    pixels: &[u8],
+    bytes_per_row: u32,
+    width: u32,
+    height: u32,
+    ram: &mut [u8],
+    dest: usize,
+    is_bgra: bool,
+) {
+    let row_bytes = width as usize * 2;
+    for y in 0..height as usize {
+        let src_row = &pixels[y * bytes_per_row as usize..];
+        let dst_row_off = dest + y * row_bytes;
+        for px_pair in 0..(width as usize / 2) {
+            let x = px_pair * 2;
+            let s0 = x * 4;
+            let s1 = (x + 1) * 4;
+            let (r1, g1, b1) = if is_bgra {
+                (src_row[s0 + 2] as i32, src_row[s0 + 1] as i32, src_row[s0] as i32)
+            } else {
+                (src_row[s0] as i32, src_row[s0 + 1] as i32, src_row[s0 + 2] as i32)
+            };
+            let (r2, g2, b2) = if is_bgra {
+                (src_row[s1 + 2] as i32, src_row[s1 + 1] as i32, src_row[s1] as i32)
+            } else {
+                (src_row[s1] as i32, src_row[s1 + 1] as i32, src_row[s1 + 2] as i32)
+            };
+
+            let y1 = ((77 * r1 + 150 * g1 + 29 * b1) / 256).clamp(0, 255) as u8;
+            let y2 = ((77 * r2 + 150 * g2 + 29 * b2) / 256).clamp(0, 255) as u8;
+            let cb = ((112 * (b1 + b2) - 74 * (g1 + g2) - 38 * (r1 + r2)) / 512 + 128).clamp(0, 255) as u8;
+            let cr = ((112 * (r1 + r2) - 94 * (g1 + g2) - 18 * (b1 + b2)) / 512 + 128).clamp(0, 255) as u8;
+
+            let off = dst_row_off + px_pair * 4;
+            if off + 3 < ram.len() {
+                ram[off] = y1;
+                ram[off + 1] = cb;
+                ram[off + 2] = y2;
+                ram[off + 3] = cr;
+            }
+        }
+    }
 }

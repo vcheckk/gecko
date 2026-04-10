@@ -88,7 +88,7 @@ impl State {
 
         let max_dim = adapter.limits().max_texture_dimension_2d;
         let surface_config = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_DST,
             format: surface_format,
             width: size.width.max(1).min(max_dim),
             height: size.height.max(1).min(max_dim),
@@ -159,13 +159,7 @@ impl State {
         });
 
         let (texture, bind_group) = create_xfb_texture(&device, &bind_group_layout, w, h);
-        let gx_renderer = backend_wgpu::GxRenderer::new(
-            &device,
-            &queue,
-            surface_format,
-            surface_config.width,
-            surface_config.height,
-        );
+        let gx_renderer = backend_wgpu::GxRenderer::new(&device, &queue, surface_format);
 
         let egui_ctx = egui::Context::default();
         #[cfg(feature = "debug")]
@@ -327,10 +321,8 @@ impl State {
             &self.device,
             &self.queue,
             &emulator.gx.draw_commands,
-            &emulator.mmio.ram,
+            &mut emulator.mmio.ram,
             view,
-            self.surface_config.width,
-            self.surface_config.height,
         );
     }
 

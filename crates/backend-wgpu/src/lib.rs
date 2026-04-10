@@ -51,6 +51,9 @@ pub(crate) struct DrawUniforms {
 
 const SHADER: &str = wesl::include_wesl!("gx_shader");
 
+pub const EFB_WIDTH: u32 = 640;
+pub const EFB_HEIGHT: u32 = 480;
+
 pub struct GxRenderer {
     pub(crate) pipeline_cache: HashMap<PipelineKey, wgpu::RenderPipeline>,
     pub(crate) shader: wgpu::ShaderModule,
@@ -63,10 +66,11 @@ pub struct GxRenderer {
     pub(crate) draw_uniform_capacity: usize,
     pub(crate) vertex_buffer: wgpu::Buffer,
     pub(crate) vertex_capacity: usize,
-    pub(crate) depth_texture: wgpu::Texture,
-    pub(crate) depth_view: wgpu::TextureView,
-    pub(crate) depth_width: u32,
-    pub(crate) depth_height: u32,
+    pub(crate) efb_texture: wgpu::Texture,
+    pub(crate) efb_view: wgpu::TextureView,
+    pub(crate) efb_depth_texture: wgpu::Texture,
+    pub(crate) efb_depth_view: wgpu::TextureView,
+    pub(crate) efb_needs_clear: bool,
     pub(crate) sampler_cache: HashMap<(WrapMode, WrapMode, MagFilter, MinFilter), wgpu::Sampler>,
     pub(crate) texture_cache: HashMap<(usize, u32, u32, TextureFormat), (wgpu::Texture, wgpu::TextureView)>,
     pub(crate) fallback_view: wgpu::TextureView,
@@ -81,8 +85,6 @@ impl GxRenderer {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         surface_format: wgpu::TextureFormat,
-        width: u32,
-        height: u32,
     ) -> Self {
         let frame_uniform_size = FrameUniforms::min_size().get();
         let draw_uniform_size = DrawUniforms::min_size().get();
@@ -211,9 +213,41 @@ impl GxRenderer {
             mapped_at_creation: false,
         });
 
-        let depth_width = width.max(1);
-        let depth_height = height.max(1);
-        let (depth_texture, depth_view) = create_depth_texture(device, depth_width, depth_height);
+        // Create fixed-size EFB
+        let efb_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("efb_color"),
+            size: wgpu::Extent3d {
+                width: EFB_WIDTH,
+                height: EFB_HEIGHT,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: surface_format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::COPY_DST
+                | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let efb_view = efb_texture.create_view(&Default::default());
+
+        let efb_depth_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("efb_depth"),
+            size: wgpu::Extent3d {
+                width: EFB_WIDTH,
+                height: EFB_HEIGHT,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Depth24Plus,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        let efb_depth_view = efb_depth_texture.create_view(&Default::default());
 
         GxRenderer {
             pipeline_cache: HashMap::new(),
@@ -227,10 +261,11 @@ impl GxRenderer {
             draw_uniform_capacity: 1,
             vertex_buffer,
             vertex_capacity: initial_capacity,
-            depth_texture,
-            depth_view,
-            depth_width,
-            depth_height,
+            efb_texture,
+            efb_view,
+            efb_depth_texture,
+            efb_depth_view,
+            efb_needs_clear: true,
             sampler_cache: HashMap::from([(
                 (WrapMode::Clamp, WrapMode::Clamp, MagFilter::Linear, MinFilter::Linear),
                 sampler,
@@ -244,39 +279,4 @@ impl GxRenderer {
         }
     }
 
-    pub fn resize(&mut self, device: &wgpu::Device, width: u32, height: u32) {
-        self.ensure_depth_texture(device, width, height);
-    }
-
-    pub(crate) fn ensure_depth_texture(&mut self, device: &wgpu::Device, width: u32, height: u32) {
-        let width = width.max(1);
-        let height = height.max(1);
-        if (width, height) == (self.depth_width, self.depth_height) {
-            return;
-        }
-        let (tex, view) = create_depth_texture(device, width, height);
-        self.depth_texture = tex;
-        self.depth_view = view;
-        self.depth_width = width;
-        self.depth_height = height;
-    }
-}
-
-fn create_depth_texture(device: &wgpu::Device, w: u32, h: u32) -> (wgpu::Texture, wgpu::TextureView) {
-    let tex = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("gx_depth"),
-        size: wgpu::Extent3d {
-            width: w.max(1),
-            height: h.max(1),
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Depth24Plus,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-        view_formats: &[],
-    });
-    let view = tex.create_view(&Default::default());
-    (tex, view)
 }

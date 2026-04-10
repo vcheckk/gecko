@@ -169,16 +169,7 @@ impl GxRenderer {
                 targets: &[Some(wgpu::ColorTargetState {
                     format: self.surface_format,
                     blend,
-                    write_mask: {
-                        let mut mask = wgpu::ColorWrites::empty();
-                        if key.color_update {
-                            mask |= wgpu::ColorWrites::RED | wgpu::ColorWrites::GREEN | wgpu::ColorWrites::BLUE;
-                        }
-                        if key.alpha_update {
-                            mask |= wgpu::ColorWrites::ALPHA;
-                        }
-                        mask
-                    },
+                    write_mask: wgpu::ColorWrites::ALL, // TODO: re-enable color_update/alpha_update masking
                 })],
                 compilation_options: Default::default(),
             }),
