@@ -1,5 +1,4 @@
-use std::cell::RefCell;
-use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 
 use gecko::gamecube::GameCube;
 use gecko::hooks::{AddressFilter, BusAddressFilter, HookFilters, HookFlags, HookState, Host};
@@ -23,12 +22,12 @@ struct DspTestState {
 }
 
 struct DspTestHarness {
-    state: Rc<RefCell<DspTestState>>,
+    state: Arc<Mutex<DspTestState>>,
     hook_state: HookState,
 }
 
 impl DspTestHarness {
-    fn new(state: Rc<RefCell<DspTestState>>) -> Self {
+    fn new(state: Arc<Mutex<DspTestState>>) -> Self {
         let mut flags = HookFlags::empty();
         flags |= HookFlags::BUS_WRITE_POST;
         flags |= HookFlags::BUS_READ_PRE;
@@ -61,7 +60,7 @@ impl Host for DspTestHarness {
 
     fn on_bus_read_pre(&mut self, _emu: &mut GameCube, _virt_addr: u32, phys_addr: u32, _size: u8) -> Option<u32> {
         if phys_addr == CONFIG_ADDR {
-            Some(self.state.borrow().config_param)
+            Some(self.state.lock().unwrap().config_param)
         } else {
             None
         }
@@ -71,7 +70,7 @@ impl Host for DspTestHarness {
     fn on_bus_write_pre(&mut self, _emu: &mut GameCube, _virt_addr: u32, _phys_addr: u32, _size: u8, value: u32) -> u32 { value }
 
     fn on_bus_write_post(&mut self, _emu: &mut GameCube, _virt_addr: u32, phys_addr: u32, _size: u8, value: u32) {
-        let mut state = self.state.borrow_mut();
+        let mut state = self.state.lock().unwrap();
         match phys_addr {
             STDOUT_ADDR => {
                 let ch = (value & 0xFF) as u8;
@@ -111,7 +110,7 @@ fn main() {
     let mut gamecube = GameCube::with_image(&dol);
     gamecube.dsp.load_irom(DSP_IROM);
 
-    let state = Rc::new(RefCell::new(DspTestState {
+    let state = Arc::new(Mutex::new(DspTestState {
         stdout_buf: String::new(),
         finished: false,
         fail_count: 0,
@@ -121,10 +120,10 @@ fn main() {
     let harness = DspTestHarness::new(state.clone());
     gamecube.set_hook_host(Box::new(harness));
 
-    while !state.borrow().finished {
+    while !state.lock().unwrap().finished {
         gamecube.run_until_vsync();
     }
 
-    let results = state.borrow();
+    let results = state.lock().unwrap();
     println!("Passed: {}, Failed: {}", results.pass_count, results.fail_count);
 }
