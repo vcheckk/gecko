@@ -41,6 +41,8 @@ pub struct GraphicsProcessor {
     pub cur_zmode: ZMode,
     pub cur_blend_mode: BlendMode,
     pub cur_alpha_compare: AlphaCompare,
+    pub cur_viewport: draw::Viewport,
+    pub cur_scissor: draw::Scissor,
 }
 
 impl GraphicsProcessor {
@@ -68,6 +70,8 @@ impl GraphicsProcessor {
             cur_zmode: Default::default(),
             cur_blend_mode: BlendMode::from_raw(0).with_color_update(true).with_alpha_update(true),
             cur_alpha_compare: Default::default(),
+            cur_viewport: Default::default(),
+            cur_scissor: Default::default(),
         }
     }
 

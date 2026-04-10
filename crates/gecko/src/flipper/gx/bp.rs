@@ -1,7 +1,8 @@
 use super::constants::{
     BP_GEN_MODE, BP_PE_ALPHA_COMPARE, BP_PE_CMODE0, BP_PE_DONE, BP_PE_DONE_FINISH_BIT, BP_PE_TOKEN, BP_PE_TOKEN_INT,
-    BP_PE_ZMODE, BP_RAS1_TREF_COUNT, BP_RAS1_TREF0, BP_TEV_COLOR_ENV_0, BP_TEV_REGISTERL_0, BP_TX_SETIMAGE0_I0,
-    BP_TX_SETIMAGE0_I4, BP_TX_SETIMAGE3_I0, BP_TX_SETIMAGE3_I4, BP_TX_SETMODE0_I0, BP_TX_SETMODE0_I4,
+    BP_PE_ZMODE, BP_RAS1_TREF_COUNT, BP_RAS1_TREF0, BP_SU_SCIS_BR, BP_SU_SCIS_OFFSET, BP_SU_SCIS_TL,
+    BP_TEV_COLOR_ENV_0, BP_TEV_REGISTERL_0, BP_TX_SETIMAGE0_I0, BP_TX_SETIMAGE0_I4, BP_TX_SETIMAGE3_I0,
+    BP_TX_SETIMAGE3_I4, BP_TX_SETMODE0_I0, BP_TX_SETMODE0_I4, EFB_HEIGHT, EFB_WIDTH,
 };
 use super::regs::{
     AlphaCompare, BlendMode, GenMode, TevAlphaEnv, TevColorEnv, TevOrder, TevRegType, TevRegisterH, TevRegisterL,
@@ -85,6 +86,11 @@ impl GraphicsProcessor {
             self.pending_token = (val & 0xFFFF) as u16;
             self.token_dirty = true;
             self.raise_token_interrupt = true;
+        }
+
+        // Scissor registers (BP 0x20, 0x21, 0x59)
+        if idx == BP_SU_SCIS_TL || idx == BP_SU_SCIS_BR || idx == BP_SU_SCIS_OFFSET {
+            self.recompute_scissor();
         }
     }
 
@@ -196,5 +202,27 @@ impl GraphicsProcessor {
                 TevRegType::Constant => self.cur_tev_const_regs_hi[reg_idx] = reg,
             }
         }
+    }
+
+    fn recompute_scissor(&mut self) {
+        let tl = self.bp_regs[BP_SU_SCIS_TL];
+        let br = self.bp_regs[BP_SU_SCIS_BR];
+
+        let tl_y = (tl & 0x7FF) as i32 - 342;
+        let tl_x = ((tl >> 12) & 0x7FF) as i32 - 342;
+        let br_y = (br & 0x7FF) as i32 - 342 + 1; // BR is inclusive
+        let br_x = ((br >> 12) & 0x7FF) as i32 - 342 + 1;
+
+        let x = tl_x.max(0) as u32;
+        let y = tl_y.max(0) as u32;
+        let x2 = (br_x.max(0) as u32).min(EFB_WIDTH);
+        let y2 = (br_y.max(0) as u32).min(EFB_HEIGHT);
+
+        self.cur_scissor = draw::Scissor {
+            x,
+            y,
+            w: x2.saturating_sub(x),
+            h: y2.saturating_sub(y),
+        };
     }
 }

@@ -71,10 +71,54 @@ pub struct TextureDescriptor {
     pub min_filter: MinFilter,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct Viewport {
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+    pub min_depth: f32,
+    pub max_depth: f32,
+}
+
+impl Default for Viewport {
+    fn default() -> Self {
+        Viewport {
+            x: 0.0,
+            y: 0.0,
+            w: super::constants::EFB_WIDTH as f32,
+            h: super::constants::EFB_HEIGHT as f32,
+            min_depth: 0.0,
+            max_depth: 1.0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct Scissor {
+    pub x: u32,
+    pub y: u32,
+    pub w: u32,
+    pub h: u32,
+}
+
+impl Default for Scissor {
+    fn default() -> Self {
+        Scissor {
+            x: 0,
+            y: 0,
+            w: super::constants::EFB_WIDTH,
+            h: super::constants::EFB_HEIGHT,
+        }
+    }
+}
+
 pub struct DrawCall {
     pub primitive: Primitive,
     pub vertices: Vec<Vertex>,
     pub modelview: Matrix4,
+    pub viewport: Viewport,
+    pub scissor: Scissor,
 
     // Textures bound at draw time
     pub textures: [Option<TextureDescriptor>; 8],

@@ -33,7 +33,7 @@ impl GxRenderer {
         }
 
         self.upload_buffers(device, queue, &frame_uniform_bytes);
-        self.execute_render_pass(device, queue, commands, target, &draw_call_indices);
+        self.execute_render_pass(device, queue, commands, target, target_width, target_height, &draw_call_indices);
     }
 
     fn prepare_resources(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, commands: &DrawCommands, ram: &[u8]) {
@@ -181,6 +181,8 @@ impl GxRenderer {
         queue: &wgpu::Queue,
         commands: &DrawCommands,
         target: &wgpu::TextureView,
+        target_width: u32,
+        target_height: u32,
         draw_call_indices: &[usize],
     ) {
         let fallback_sampler_key = (WrapMode::Clamp, WrapMode::Clamp, MagFilter::Linear, MinFilter::Linear);
@@ -297,6 +299,20 @@ impl GxRenderer {
                 let frame_offset = (index * frame_stride) as u32;
                 let draw_offset = (index as u64 * self.draw_uniform_stride) as u32;
                 rpass.set_bind_group(0, bind_group, &[frame_offset, draw_offset]);
+
+                // Apply per-draw viewport and scissor, clamped to render target bounds
+                let vp = &dc.viewport;
+                let vp_x = vp.x.max(0.0);
+                let vp_y = vp.y.max(0.0);
+                let vp_w = vp.w.max(1.0).min(target_width as f32 - vp_x);
+                let vp_h = vp.h.max(1.0).min(target_height as f32 - vp_y);
+                rpass.set_viewport(vp_x, vp_y, vp_w, vp_h, vp.min_depth, vp.max_depth);
+
+                let sc = &dc.scissor;
+                let sc_w = sc.w.max(1).min(target_width.saturating_sub(sc.x));
+                let sc_h = sc.h.max(1).min(target_height.saturating_sub(sc.y));
+                rpass.set_scissor_rect(sc.x, sc.y, sc_w, sc_h);
+
                 rpass.draw(first_vertex..first_vertex + vertex_count, 0..1);
             }
         }

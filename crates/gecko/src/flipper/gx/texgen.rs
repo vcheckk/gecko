@@ -100,30 +100,30 @@ impl GraphicsProcessor {
         match tg.projection() {
             super::regs::TexGenProjection::St => {
                 // 2x4 matrix -> (s, t)
-                let s = self.xf_f32(tex_mtx_base) * input[0]
-                    + self.xf_f32(tex_mtx_base + 1) * input[1]
-                    + self.xf_f32(tex_mtx_base + 2) * input[2]
-                    + self.xf_f32(tex_mtx_base + 3) * input[3];
-                let t = self.xf_f32(tex_mtx_base + 4) * input[0]
-                    + self.xf_f32(tex_mtx_base + 5) * input[1]
-                    + self.xf_f32(tex_mtx_base + 6) * input[2]
-                    + self.xf_f32(tex_mtx_base + 7) * input[3];
+                let s = f32::from_bits(self.xf_mem[tex_mtx_base]) * input[0]
+                    + f32::from_bits(self.xf_mem[tex_mtx_base + 1]) * input[1]
+                    + f32::from_bits(self.xf_mem[tex_mtx_base + 2]) * input[2]
+                    + f32::from_bits(self.xf_mem[tex_mtx_base + 3]) * input[3];
+                let t = f32::from_bits(self.xf_mem[tex_mtx_base + 4]) * input[0]
+                    + f32::from_bits(self.xf_mem[tex_mtx_base + 5]) * input[1]
+                    + f32::from_bits(self.xf_mem[tex_mtx_base + 6]) * input[2]
+                    + f32::from_bits(self.xf_mem[tex_mtx_base + 7]) * input[3];
                 (s, t, 1.0)
             }
             super::regs::TexGenProjection::Stq => {
                 // 3x4 matrix -> (s, t, q)
-                let s = self.xf_f32(tex_mtx_base) * input[0]
-                    + self.xf_f32(tex_mtx_base + 1) * input[1]
-                    + self.xf_f32(tex_mtx_base + 2) * input[2]
-                    + self.xf_f32(tex_mtx_base + 3) * input[3];
-                let t = self.xf_f32(tex_mtx_base + 4) * input[0]
-                    + self.xf_f32(tex_mtx_base + 5) * input[1]
-                    + self.xf_f32(tex_mtx_base + 6) * input[2]
-                    + self.xf_f32(tex_mtx_base + 7) * input[3];
-                let q = self.xf_f32(tex_mtx_base + 8) * input[0]
-                    + self.xf_f32(tex_mtx_base + 9) * input[1]
-                    + self.xf_f32(tex_mtx_base + 10) * input[2]
-                    + self.xf_f32(tex_mtx_base + 11) * input[3];
+                let s = f32::from_bits(self.xf_mem[tex_mtx_base]) * input[0]
+                    + f32::from_bits(self.xf_mem[tex_mtx_base + 1]) * input[1]
+                    + f32::from_bits(self.xf_mem[tex_mtx_base + 2]) * input[2]
+                    + f32::from_bits(self.xf_mem[tex_mtx_base + 3]) * input[3];
+                let t = f32::from_bits(self.xf_mem[tex_mtx_base + 4]) * input[0]
+                    + f32::from_bits(self.xf_mem[tex_mtx_base + 5]) * input[1]
+                    + f32::from_bits(self.xf_mem[tex_mtx_base + 6]) * input[2]
+                    + f32::from_bits(self.xf_mem[tex_mtx_base + 7]) * input[3];
+                let q = f32::from_bits(self.xf_mem[tex_mtx_base + 8]) * input[0]
+                    + f32::from_bits(self.xf_mem[tex_mtx_base + 9]) * input[1]
+                    + f32::from_bits(self.xf_mem[tex_mtx_base + 10]) * input[2]
+                    + f32::from_bits(self.xf_mem[tex_mtx_base + 11]) * input[3];
                 (s, t, q)
             }
         }
@@ -144,18 +144,18 @@ impl GraphicsProcessor {
             (s, t, q)
         };
         // Post-transform: 3x4 matrix multiply on (ns, nt, nq)
-        let ps = self.xf_f32(post_base) * ns
-            + self.xf_f32(post_base + 1) * nt
-            + self.xf_f32(post_base + 2) * nq
-            + self.xf_f32(post_base + 3);
-        let pt = self.xf_f32(post_base + 4) * ns
-            + self.xf_f32(post_base + 5) * nt
-            + self.xf_f32(post_base + 6) * nq
-            + self.xf_f32(post_base + 7);
-        let pq = self.xf_f32(post_base + 8) * ns
-            + self.xf_f32(post_base + 9) * nt
-            + self.xf_f32(post_base + 10) * nq
-            + self.xf_f32(post_base + 11);
+        let ps = f32::from_bits(self.xf_mem[post_base]) * ns
+            + f32::from_bits(self.xf_mem[post_base + 1]) * nt
+            + f32::from_bits(self.xf_mem[post_base + 2]) * nq
+            + f32::from_bits(self.xf_mem[post_base + 3]);
+        let pt = f32::from_bits(self.xf_mem[post_base + 4]) * ns
+            + f32::from_bits(self.xf_mem[post_base + 5]) * nt
+            + f32::from_bits(self.xf_mem[post_base + 6]) * nq
+            + f32::from_bits(self.xf_mem[post_base + 7]);
+        let pq = f32::from_bits(self.xf_mem[post_base + 8]) * ns
+            + f32::from_bits(self.xf_mem[post_base + 9]) * nt
+            + f32::from_bits(self.xf_mem[post_base + 10]) * nq
+            + f32::from_bits(self.xf_mem[post_base + 11]);
         (ps, pt, pq)
     }
 }

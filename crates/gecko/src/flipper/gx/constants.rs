@@ -114,3 +114,25 @@ pub const BP_TEV_REGISTERH_0: usize = 0xE1;
 
 // BP TEV KSEL (Konst Selection) registers
 pub const BP_TEV_KSEL_0: usize = 0xF6; // 0xF6-0xFD, 8 registers covering 16 stages
+
+// XF viewport registers
+pub const XF_VIEWPORT_SCALE_X: usize = 0x101A;
+pub const XF_VIEWPORT_SCALE_Y: usize = 0x101B;
+pub const XF_VIEWPORT_SCALE_Z: usize = 0x101C;
+pub const XF_VIEWPORT_OFFSET_X: usize = 0x101D;
+pub const XF_VIEWPORT_OFFSET_Y: usize = 0x101E;
+pub const XF_VIEWPORT_OFFSET_Z: usize = 0x101F;
+pub const XF_VIEWPORT_BASE: usize = 0x101A;
+pub const XF_VIEWPORT_END: usize = 0x101F;
+
+// BP scissor registers
+pub const BP_SU_SCIS_TL: usize = 0x20;
+pub const BP_SU_SCIS_BR: usize = 0x21;
+pub const BP_SU_SCIS_OFFSET: usize = 0x59;
+
+// EFB dimensions
+pub const EFB_WIDTH: u32 = 640;
+pub const EFB_HEIGHT: u32 = 480;
+
+// Depth max for 24-bit Z
+pub const DEPTH_24_BIT_MAX: f32 = 16777215.0; // (1 << 24) - 1

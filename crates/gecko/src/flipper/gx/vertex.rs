@@ -84,6 +84,8 @@ impl GraphicsProcessor {
             primitive,
             vertices,
             modelview,
+            viewport: self.cur_viewport,
+            scissor: self.cur_scissor,
             textures: self.cur_textures,
             tev_orders: self.resolve_tev_orders(),
             tev_color_env: self.cur_tev_color_env,
@@ -261,7 +263,7 @@ impl GraphicsProcessor {
         let pos_mtx_base = pos_mtx_idx as usize * XF_POS_MTX_STRIDE;
         let nrm_mtx_idx = (pos_mtx_idx as usize) & 31;
         let nrm_mtx_base = XF_NRM_MTX_BASE + nrm_mtx_idx * 3;
-        let nrm_mtx: [f32; 9] = std::array::from_fn(|i| self.xf_f32(nrm_mtx_base + i));
+        let nrm_mtx: [f32; 9] = std::array::from_fn(|i| f32::from_bits(self.xf_mem[nrm_mtx_base + i]));
 
         // Read position
         let position = if vf.pos_attr == AttributeType::Direct {
@@ -385,27 +387,27 @@ impl GraphicsProcessor {
         let default_mtx_base = pos_mtx_idx as usize * XF_POS_MTX_STRIDE;
         draw::Matrix4([
             [
-                self.xf_f32(default_mtx_base),
-                self.xf_f32(default_mtx_base + 4),
-                self.xf_f32(default_mtx_base + 8),
+                f32::from_bits(self.xf_mem[default_mtx_base]),
+                f32::from_bits(self.xf_mem[default_mtx_base + 4]),
+                f32::from_bits(self.xf_mem[default_mtx_base + 8]),
                 0.0,
             ],
             [
-                self.xf_f32(default_mtx_base + 1),
-                self.xf_f32(default_mtx_base + 5),
-                self.xf_f32(default_mtx_base + 9),
+                f32::from_bits(self.xf_mem[default_mtx_base + 1]),
+                f32::from_bits(self.xf_mem[default_mtx_base + 5]),
+                f32::from_bits(self.xf_mem[default_mtx_base + 9]),
                 0.0,
             ],
             [
-                self.xf_f32(default_mtx_base + 2),
-                self.xf_f32(default_mtx_base + 6),
-                self.xf_f32(default_mtx_base + 10),
+                f32::from_bits(self.xf_mem[default_mtx_base + 2]),
+                f32::from_bits(self.xf_mem[default_mtx_base + 6]),
+                f32::from_bits(self.xf_mem[default_mtx_base + 10]),
                 0.0,
             ],
             [
-                self.xf_f32(default_mtx_base + 3),
-                self.xf_f32(default_mtx_base + 7),
-                self.xf_f32(default_mtx_base + 11),
+                f32::from_bits(self.xf_mem[default_mtx_base + 3]),
+                f32::from_bits(self.xf_mem[default_mtx_base + 7]),
+                f32::from_bits(self.xf_mem[default_mtx_base + 11]),
                 1.0,
             ],
         ])
@@ -419,7 +421,7 @@ impl GraphicsProcessor {
                 unpack_rgba(self.xf_mem[base])
             } else {
                 // Float vec3, w = 0
-                [self.xf_f32(base), self.xf_f32(base + 1), self.xf_f32(base + 2), 0.0]
+                [f32::from_bits(self.xf_mem[base]), f32::from_bits(self.xf_mem[base + 1]), f32::from_bits(self.xf_mem[base + 2]), 0.0]
             }
         })
     }
