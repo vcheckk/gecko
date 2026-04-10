@@ -66,7 +66,7 @@ impl GraphicsProcessor {
             cur_num_tev_stages: 0,
             cur_tev_konst_colors: [[0.0; 4]; 16],
             cur_zmode: Default::default(),
-            cur_blend_mode: Default::default(),
+            cur_blend_mode: BlendMode::from_raw(0).with_color_update(true).with_alpha_update(true),
             cur_alpha_compare: Default::default(),
         }
     }

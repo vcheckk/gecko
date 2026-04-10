@@ -12,6 +12,8 @@ pub(crate) struct PipelineKey {
     pub z_enable: bool,
     pub z_func: CompareFunc,
     pub z_write: bool,
+    pub color_update: bool,
+    pub alpha_update: bool,
 }
 
 impl PipelineKey {
@@ -26,6 +28,8 @@ impl PipelineKey {
             z_enable: zmode.enable(),
             z_func: zmode.func(),
             z_write: zmode.update_enable(),
+            color_update: blend.color_update(),
+            alpha_update: blend.alpha_update(),
         }
     }
 }
@@ -165,7 +169,16 @@ impl GxRenderer {
                 targets: &[Some(wgpu::ColorTargetState {
                     format: self.surface_format,
                     blend,
-                    write_mask: wgpu::ColorWrites::ALL,
+                    write_mask: {
+                        let mut mask = wgpu::ColorWrites::empty();
+                        if key.color_update {
+                            mask |= wgpu::ColorWrites::RED | wgpu::ColorWrites::GREEN | wgpu::ColorWrites::BLUE;
+                        }
+                        if key.alpha_update {
+                            mask |= wgpu::ColorWrites::ALPHA;
+                        }
+                        mask
+                    },
                 })],
                 compilation_options: Default::default(),
             }),
