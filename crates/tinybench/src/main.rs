@@ -71,7 +71,6 @@ fn run_bench(emulator: &mut GameCube, args: &Args) {
         let frame_start = Instant::now();
 
         emulator.run_until_vsync();
-        emulator.gx.draw_commands.recycle();
 
         let frame_time = frame_start.elapsed().as_secs_f64();
         frame_count += 1;

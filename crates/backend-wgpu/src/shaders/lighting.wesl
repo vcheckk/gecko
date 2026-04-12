@@ -44,20 +44,15 @@ fn compute_light_factor(ctrl: u32, light_idx: u32, normal: vec3<f32>, pos: vec3<
         attn = safe_div(angle_attn, distatt.x + distatt.y * dist + distatt.z * dist * dist);
     } else {
         // AttnFn::Spec
-        ldir = normalize(ldir);
-        let half_dot = dot(ldir, normal);
-        if half_dot < 0.0 {
+        let half_angle = normalize(light_pos);
+        let norm_dot_half = dot(normal, half_angle);
+        if norm_dot_half <= 0.0 {
             return 0.0;
         }
         let s = max(dot(normal, light_dir), 0.0);
         let att_len = vec3(1.0, s, s * s);
-        var da: vec3<f32>;
-        if diff_fn != 0u {
-            da = normalize(distatt);
-        } else {
-            da = distatt;
-        }
-        attn = safe_div(max(dot(att_len, cosatt), 0.0), dot(att_len, da));
+        attn = safe_div(max(dot(att_len, cosatt), 0.0), dot(att_len, distatt));
+        ldir = half_angle;
     }
 
     let dif_attn = dot(ldir, normal);

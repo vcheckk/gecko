@@ -4,6 +4,7 @@ use super::constants::{
 };
 use super::math::Vec3;
 use super::{GraphicsProcessor, draw};
+use crate::host::{GxAction, RenderSink};
 
 impl GraphicsProcessor {
     pub fn xf_transform_3x4(&self, base: usize, v: [f32; 3]) -> Vec3 {
@@ -38,6 +39,12 @@ impl GraphicsProcessor {
         let x = offset_x - 342.0 - scale_x;
         let y = offset_y - 342.0 + scale_y; // +scale_y because scale_y is negative
 
+        // Apply BP_SU_SCIS_OFFSET: it shifts both the scissor rect and the
+        // viewport origin in the EFB, so games can tile-render without
+        // touching their projection matrix.
+        let x = x - self.cur_scissor_offset_x as f32;
+        let y = y - self.cur_scissor_offset_y as f32;
+
         let far = offset_z / DEPTH_24_BIT_MAX;
         let near = far - scale_z / DEPTH_24_BIT_MAX;
 
@@ -60,7 +67,7 @@ impl GraphicsProcessor {
         let pm6 = f32::from_bits(self.xf_mem[XF_PROJECTION_BASE + 5]);
         let proj_type = self.xf_mem[XF_PROJECTION_END];
 
-        self.draw_commands.projection = if proj_type == 0 {
+        self.projection = if proj_type == 0 {
             // Perspective
             draw::Matrix4([
                 [pm1, 0.0, 0.0, 0.0],
@@ -91,7 +98,7 @@ impl GraphicsProcessor {
         );
     }
 
-    pub fn load_xf(&mut self, data: &[u8]) {
+    pub fn load_xf(&mut self, renderer: &mut dyn RenderSink, data: &[u8]) {
         let length = u16::from_be_bytes([data[0], data[1]]) as usize;
         let addr = u16::from_be_bytes([data[2], data[3]]) as usize;
         let n = length + 1;
@@ -113,14 +120,18 @@ impl GraphicsProcessor {
         }
 
         // Rebuild projection if the write touched its address range
-        // (modelview is resolved lazily at draw call time from the current position matrix slot)
         if addr <= XF_PROJECTION_END && end > XF_PROJECTION_BASE {
             self.rebuild_projection();
+            renderer.exec(GxAction::SetProjection {
+                matrix: self.projection.0,
+                is_perspective: self.xf_mem[XF_PROJECTION_END] == 0,
+            });
         }
 
         // Rebuild viewport if the write touched its address range
         if addr <= XF_VIEWPORT_END && end > XF_VIEWPORT_BASE {
             self.rebuild_viewport();
+            renderer.exec(GxAction::SetViewport(self.cur_viewport));
         }
     }
 }

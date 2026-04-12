@@ -11,11 +11,15 @@ fn vs_main(in: VsIn) -> VsOut {
     // Remap depth: GameCube/OpenGL uses [-1,1], wgpu uses [0,1]
     out.clip_pos.z = out.clip_pos.z * 0.5 + out.clip_pos.w * 0.5;
     out.color = compute_channel_lighting(
-        frame.color_ctrl, frame.alpha_ctrl,
-        frame.ambient_color, frame.material_color,
+        frame.color_ctrl0, frame.alpha_ctrl0,
+        frame.ambient_color0, frame.material_color0,
         in.color, in.normal, in.pos_view,
     );
-    out.color1 = in.color1;
+    out.color1 = compute_channel_lighting(
+        frame.color_ctrl1, frame.alpha_ctrl1,
+        frame.ambient_color1, frame.material_color1,
+        in.color1, in.normal, in.pos_view,
+    );
     out.uv0 = in.tex0;
     out.uv1 = in.tex1;
     out.uv2 = in.tex2;

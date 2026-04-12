@@ -101,10 +101,10 @@ fn main() {
         ..PadStatus::default()
     });
 
-    let initial_frame_size = {
-        let (w, h) = emulator.frame_size();
-        (w as u32, h as u32)
-    };
+    // Create the action-stream channel and install the renderer sink on the
+    // emulator so GX actions flow through automatically.
+    let (renderer, action_rx) = backend_wgpu::sink::channel();
+    emulator.render_sink = Box::new(renderer);
 
     let input = Arc::new(Mutex::new(*emulator.primary_controller_mut()));
 
@@ -120,11 +120,11 @@ fn main() {
         .expect("failed to spawn emulator thread");
     let mut app = app::App {
         frame_rx,
+        action_rx: Some(action_rx),
         input,
         window: None,
         state: None,
         present_mode,
-        initial_frame_size,
     };
     event_loop.run_app(&mut app).unwrap();
 }

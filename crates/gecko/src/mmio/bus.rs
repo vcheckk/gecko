@@ -297,7 +297,7 @@ impl GameCube {
                 self.mmio.ram[wptr] = val;
                 self.pi.advance_fifo_wptr(1);
                 if self.cp.control.gp_link_enable() {
-                    self.gx.mmio_write_u8(&mut self.mmio, val);
+                    self.gx.mmio_write_u8(&mut self.mmio, self.render_sink.as_mut(), val);
                     self.check_gx_pe_interrupts();
                 }
             }
@@ -344,7 +344,7 @@ impl GameCube {
                 self.mmio.ram[wptr..wptr + 2].copy_from_slice(&bytes);
                 self.pi.advance_fifo_wptr(2);
                 if self.cp.control.gp_link_enable() {
-                    self.gx.mmio_write_u16(&mut self.mmio, val);
+                    self.gx.mmio_write_u16(&mut self.mmio, self.render_sink.as_mut(), val);
                     self.check_gx_pe_interrupts();
                 }
             }
@@ -391,7 +391,7 @@ impl GameCube {
                 self.mmio.ram[wptr..wptr + 4].copy_from_slice(&bytes);
                 self.pi.advance_fifo_wptr(4);
                 if self.cp.control.gp_link_enable() {
-                    self.gx.mmio_write_u32(&mut self.mmio, val);
+                    self.gx.mmio_write_u32(&mut self.mmio, self.render_sink.as_mut(), val);
                     self.check_gx_pe_interrupts();
                 }
             }

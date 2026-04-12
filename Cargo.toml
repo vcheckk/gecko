@@ -9,14 +9,11 @@ members = [
     "crates/image",
     "crates/tinyapp",
     "crates/backend-wgpu",
-    "crates/dbglib",
-    "crates/debugger",
     "crates/scripting",
     "crates/dspemu",
-    
+
     # Stuff we rarely use
     "crates/dsptestrunner",
-    "crates/web",
 ]
 default-members = [
     "crates/gctool",
@@ -27,10 +24,19 @@ default-members = [
     "crates/image",
     "crates/tinyapp",
     "crates/backend-wgpu",
-    "crates/dbglib",
-    "crates/debugger",
     "crates/scripting",
     "crates/dspemu",
+]
+
+# TODO: DO THESE BEFORE MASTER MERGE
+exclude = [
+    # Web targets WebGL; the new renderer uses wgpu features that GLES
+    # does not expose. Needs a separate fallback renderer.
+    "crates/web",
+
+    # Temporarily excluded. These need a egui/dbglib rewrite.
+    "crates/dbglib",
+    "crates/debugger",
 ]
 
 [patch.crates-io]

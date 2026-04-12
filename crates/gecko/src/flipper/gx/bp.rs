@@ -1,9 +1,8 @@
 use super::constants::{
     BP_GEN_MODE, BP_PE_ALPHA_COMPARE, BP_PE_CMODE0, BP_PE_COPY_CLEAR_AR, BP_PE_COPY_CLEAR_GB, BP_PE_COPY_CLEAR_Z,
     BP_PE_COPY_CMD, BP_PE_COPY_DIMS, BP_PE_COPY_DST, BP_PE_COPY_DST_STRIDE, BP_PE_COPY_SRC, BP_PE_DONE,
-    BP_PE_DONE_FINISH_BIT, BP_PE_TOKEN, BP_PE_TOKEN_INT, BP_PE_ZMODE, BP_RAS1_TREF_COUNT, BP_RAS1_TREF0,
-    BP_SU_SCIS_BR, BP_SU_SCIS_OFFSET, BP_SU_SCIS_TL, BP_TEV_COLOR_ENV_0, BP_TEV_KSEL_0, BP_TEV_REGISTERL_0,
-    BP_TX_SETIMAGE0_I0,
+    BP_PE_DONE_FINISH_BIT, BP_PE_TOKEN, BP_PE_TOKEN_INT, BP_PE_ZMODE, BP_RAS1_TREF_COUNT, BP_RAS1_TREF0, BP_SU_SCIS_BR,
+    BP_SU_SCIS_OFFSET, BP_SU_SCIS_TL, BP_TEV_COLOR_ENV_0, BP_TEV_KSEL_0, BP_TEV_REGISTERL_0, BP_TX_SETIMAGE0_I0,
     BP_TX_SETIMAGE0_I4, BP_TX_SETIMAGE3_I0, BP_TX_SETIMAGE3_I4, BP_TX_SETMODE0_I0, BP_TX_SETMODE0_I4, EFB_HEIGHT,
     EFB_WIDTH,
 };
@@ -12,9 +11,10 @@ use super::regs::{
     TxSetImage0, TxSetImage3, TxSetMode0, ZMode,
 };
 use super::{GraphicsProcessor, draw};
+use crate::host::{GxAction, RenderSink};
 
 impl GraphicsProcessor {
-    pub fn load_bp(&mut self, data: &[u8]) {
+    pub fn load_bp(&mut self, renderer: &mut dyn RenderSink, data: &[u8]) {
         let idx = data[0] as usize;
         let val = u32::from_be_bytes([0, data[1], data[2], data[3]]);
         self.bp_regs[idx] = val;
@@ -36,14 +36,23 @@ impl GraphicsProcessor {
         };
 
         if let Some(slot) = texture_slot {
-            self.snapshot_texture(slot, val);
+            self.snapshot_texture(renderer, slot, val);
         }
 
         // Forward PE render state
         match idx {
-            BP_PE_ZMODE => self.cur_zmode = ZMode::from_raw(val),
-            BP_PE_CMODE0 => self.cur_blend_mode = BlendMode::from_raw(val),
-            BP_PE_ALPHA_COMPARE => self.cur_alpha_compare = AlphaCompare::from_raw(val),
+            BP_PE_ZMODE => {
+                self.cur_zmode = ZMode::from_raw(val);
+                renderer.exec(GxAction::SetDepthMode(self.cur_zmode));
+            }
+            BP_PE_CMODE0 => {
+                self.cur_blend_mode = BlendMode::from_raw(val);
+                renderer.exec(GxAction::SetBlendMode(self.cur_blend_mode));
+            }
+            BP_PE_ALPHA_COMPARE => {
+                self.cur_alpha_compare = AlphaCompare::from_raw(val);
+                renderer.exec(GxAction::SetAlphaCompare(self.cur_alpha_compare));
+            }
             _ => {}
         }
 
@@ -101,18 +110,27 @@ impl GraphicsProcessor {
             self.raise_token_interrupt = true;
         }
 
-        // Scissor registers (BP 0x20, 0x21, 0x59)
-        if idx == BP_SU_SCIS_TL || idx == BP_SU_SCIS_BR || idx == BP_SU_SCIS_OFFSET {
+        // Scissor registers (BP 0x20 = TL, 0x21 = BR, 0x59 = OFFSET).
+        // An offset change also affects the effective viewport, so we refresh
+        // both when the offset register is written.
+        if idx == BP_SU_SCIS_TL || idx == BP_SU_SCIS_BR {
             self.recompute_scissor();
+            renderer.exec(GxAction::SetScissor(self.cur_scissor));
+        } else if idx == BP_SU_SCIS_OFFSET {
+            self.recompute_scissor_offset();
+            self.recompute_scissor();
+            self.rebuild_viewport();
+            renderer.exec(GxAction::SetScissor(self.cur_scissor));
+            renderer.exec(GxAction::SetViewport(self.cur_viewport));
         }
 
         // EFB copy trigger (BP 0x52)
         if idx == BP_PE_COPY_CMD {
-            self.efb_copy(val);
+            self.efb_copy(renderer, val);
         }
     }
 
-    fn snapshot_texture(&mut self, slot: usize, image3_val: u32) {
+    fn snapshot_texture(&mut self, renderer: &mut dyn RenderSink, slot: usize, image3_val: u32) {
         let image0_reg = if slot < 4 {
             BP_TX_SETIMAGE0_I0 + slot
         } else {
@@ -153,6 +171,11 @@ impl GraphicsProcessor {
             wrap_t: mode0.wrap_t(),
             mag_filter: mode0.mag_filter(),
             min_filter: mode0.min_filter(),
+        });
+
+        renderer.exec(GxAction::SetTexture {
+            slot,
+            descriptor: self.cur_textures[slot].unwrap(),
         });
     }
 
@@ -222,20 +245,28 @@ impl GraphicsProcessor {
         }
     }
 
-    fn efb_copy(&mut self, trigger: u32) {
-        // Decode source rect from BP 0x49/0x4A
+    fn efb_copy(&mut self, renderer: &mut dyn RenderSink, trigger: u32) {
+        // Decode source rect from BP 0x49/0x4A.
+        // BPMEM_EFB_TL (0x49): x in bits 0..10, y in bits 10..20.
+        // BPMEM_EFB_BR (0x4A): width-1 in bits 0..10, height-1 in bits 10..20.
         let src_reg = self.bp_regs[BP_PE_COPY_SRC];
         let dims_reg = self.bp_regs[BP_PE_COPY_DIMS];
-        let src_x = (src_reg >> 10) & 0x3FF;
-        let src_y = src_reg & 0x3FF;
-        let src_w = ((dims_reg >> 10) & 0x3FF) + 1;
-        let src_h = (dims_reg & 0x3FF) + 1;
+        let src_x = src_reg & 0x3FF;
+        let src_y = (src_reg >> 10) & 0x3FF;
+        let src_w = (dims_reg & 0x3FF) + 1;
+        let src_h = ((dims_reg >> 10) & 0x3FF) + 1;
 
         // Destination address (BP 0x4B, shifted left by 5)
         let dest_addr = (self.bp_regs[BP_PE_COPY_DST] & 0x00FFFFFF) << 5;
         let dest_stride = self.bp_regs[BP_PE_COPY_DST_STRIDE] & 0x3FF;
 
-        // Trigger word bits
+        // Trigger word bits (PE_COPY_EXECUTE, BP 0x52):
+        //   bit 0-1: clamp
+        //   bit 9: half (1/2 vertical scale)
+        //   bit 10: scale_invert
+        //   bit 11: clear EFB after copy
+        //   bit 12-13: frame-to-field (interlacing)
+        //   bit 14: copy-to-xfb (0 = copy-to-texture)
         let copy_to_xfb = (trigger >> 14) & 1 != 0;
         let clear = (trigger >> 11) & 1 != 0;
         let half = (trigger >> 9) & 1 != 0;
@@ -264,20 +295,42 @@ impl GraphicsProcessor {
             "EFB copy triggered"
         );
 
-        // Snapshot all copy state at enqueue time
-        self.draw_commands.commands.push(draw::GxCommand::CopyEfb(draw::EfbCopyCmd {
-            src_x,
-            src_y,
-            src_w,
-            src_h,
-            dest_addr,
-            dest_stride,
-            copy_to_xfb,
-            clear,
-            clear_color: [r, g, b, a],
-            clear_z,
-            half,
-        }));
+        if copy_to_xfb {
+            // XFB copy: queue the copy for present_xfb() to compose at vblank,
+            // and tell the renderer to snapshot the EFB region now.
+            let id = self.xfb_copies.len() as u32;
+            self.xfb_copies.push(super::XfbCopy {
+                dest_addr,
+                dest_stride,
+                src_h,
+            });
+            renderer.exec(GxAction::CopyXfb {
+                id,
+                src_x,
+                src_y,
+                src_w,
+                src_h,
+                clear,
+                clear_color: [r, g, b, a],
+                clear_z,
+            });
+        } else {
+            // Texture copy (non-XFB).
+            let efb_cmd = draw::EfbCopyCmd {
+                src_x,
+                src_y,
+                src_w,
+                src_h,
+                dest_addr,
+                dest_stride,
+                copy_to_xfb: false,
+                clear,
+                clear_color: [r, g, b, a],
+                clear_z,
+                half,
+            };
+            renderer.exec(GxAction::CopyEfb(efb_cmd));
+        }
     }
 
     fn recompute_scissor(&mut self) {
@@ -289,10 +342,18 @@ impl GraphicsProcessor {
         let br_y = (br & 0x7FF) as i32 - 342 + 1; // BR is inclusive
         let br_x = ((br >> 12) & 0x7FF) as i32 - 342 + 1;
 
-        let x = tl_x.max(0) as u32;
-        let y = tl_y.max(0) as u32;
-        let x2 = (br_x.max(0) as u32).min(EFB_WIDTH);
-        let y2 = (br_y.max(0) as u32).min(EFB_HEIGHT);
+        // BP_SU_SCIS_OFFSET shifts the scissor (and viewport) origin in the
+        // EFB. Games use it for tiled rendering: the logical scissor stays
+        // the same, but the offset moves where that rectangle lands.
+        let eff_tl_x = tl_x - self.cur_scissor_offset_x;
+        let eff_tl_y = tl_y - self.cur_scissor_offset_y;
+        let eff_br_x = br_x - self.cur_scissor_offset_x;
+        let eff_br_y = br_y - self.cur_scissor_offset_y;
+
+        let x = eff_tl_x.max(0) as u32;
+        let y = eff_tl_y.max(0) as u32;
+        let x2 = (eff_br_x.max(0) as u32).min(EFB_WIDTH);
+        let y2 = (eff_br_y.max(0) as u32).min(EFB_HEIGHT);
 
         self.cur_scissor = draw::Scissor {
             x,
@@ -300,5 +361,16 @@ impl GraphicsProcessor {
             w: x2.saturating_sub(x),
             h: y2.saturating_sub(y),
         };
+    }
+
+    fn recompute_scissor_offset(&mut self) {
+        // BP_SU_SCIS_OFFSET layout:
+        //   bits 0..10: (x + 342) / 2
+        //   bits 10..20: (y + 342) / 2
+        let raw = self.bp_regs[BP_SU_SCIS_OFFSET];
+        let raw_x = (raw & 0x3FF) as i32;
+        let raw_y = ((raw >> 10) & 0x3FF) as i32;
+        self.cur_scissor_offset_x = raw_x * 2 - 342;
+        self.cur_scissor_offset_y = raw_y * 2 - 342;
     }
 }

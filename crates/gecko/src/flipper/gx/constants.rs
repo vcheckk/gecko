@@ -65,7 +65,9 @@ pub const XF_LIGHT_NZ: usize = 15;
 
 // XF channel configuration
 pub const XF_AMBIENT_COLOR0: usize = 0x100A;
+pub const XF_AMBIENT_COLOR1: usize = 0x100B;
 pub const XF_MATERIAL_COLOR0: usize = 0x100C;
+pub const XF_MATERIAL_COLOR1: usize = 0x100D;
 pub const XF_COLOR_CTRL0: usize = 0x100E; // COLOR0 channel control
 pub const XF_COLOR_CTRL1: usize = 0x100F; // COLOR1 channel control
 pub const XF_ALPHA_CTRL0: usize = 0x1010; // ALPHA0 channel control
@@ -143,7 +145,7 @@ pub const BP_PE_COPY_CMD: usize = 0x52;
 
 // EFB dimensions
 pub const EFB_WIDTH: u32 = 640;
-pub const EFB_HEIGHT: u32 = 480;
+pub const EFB_HEIGHT: u32 = 528;
 
 // Depth max for 24-bit Z
 pub const DEPTH_24_BIT_MAX: f32 = 16777215.0; // (1 << 24) - 1

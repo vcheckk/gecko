@@ -1,9 +1,7 @@
-use super::regs::{
-    AlphaCompare, BlendMode, ChanCtrl, MagFilter, MinFilter, TevAlphaEnv, TevColorEnv, TevStageOrder, WrapMode, ZMode,
-};
+use super::regs::{MagFilter, MinFilter, WrapMode};
 use chapa::BitEnum;
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum Primitive {
     Quads,
     Triangles,
@@ -113,45 +111,19 @@ impl Default for Scissor {
     }
 }
 
-pub struct DrawCall {
-    pub primitive: Primitive,
-    pub vertices: Vec<Vertex>,
-    pub modelview: Matrix4,
-    pub viewport: Viewport,
-    pub scissor: Scissor,
-
-    // Textures bound at draw time
-    pub textures: [Option<TextureDescriptor>; 8],
-
-    // Per-TEV-stage order (resolved from paired TevOrder registers)
-    pub tev_orders: [TevStageOrder; 16],
-
-    // TEV state snapshot
-    pub tev_color_env: [TevColorEnv; 16],
-    pub tev_alpha_env: [TevAlphaEnv; 16],
-    pub tev_color_regs: [[f32; 4]; 4],
-    pub tev_konst_colors: [[f32; 4]; 16],
-    pub num_tev_stages: u8,
-
-    // BP state snapshot
-    pub bp_zmode: ZMode,
-    pub bp_blend_mode: BlendMode,
-    pub bp_alpha_compare: AlphaCompare,
-
-    // Lighting state snapshot (XF)
-    pub light_colors: [[f32; 4]; 8],
-    pub light_cosatt: [[f32; 4]; 8],
-    pub light_distatt: [[f32; 4]; 8],
-    pub light_pos: [[f32; 4]; 8],
-    pub light_dir: [[f32; 4]; 8],
-    pub color_ctrl: ChanCtrl,
-    pub alpha_ctrl: ChanCtrl,
-    pub ambient_color: [f32; 4],
-    pub material_color: [f32; 4],
-}
-
 #[derive(Debug, Clone, Copy)]
 pub struct Matrix4(pub [[f32; 4]; 4]);
+
+impl Matrix4 {
+    /// Flatten the 4x4 column-major matrix into a 16-element array.
+    pub fn to_col_array(&self) -> [f32; 16] {
+        let m = &self.0;
+        [
+            m[0][0], m[0][1], m[0][2], m[0][3], m[1][0], m[1][1], m[1][2], m[1][3], m[2][0], m[2][1], m[2][2], m[2][3],
+            m[3][0], m[3][1], m[3][2], m[3][3],
+        ]
+    }
+}
 
 impl Default for Matrix4 {
     fn default() -> Self {
@@ -175,11 +147,7 @@ impl std::ops::Mul for Matrix4 {
     }
 }
 
-pub enum GxCommand {
-    Draw(DrawCall),
-    CopyEfb(EfbCopyCmd),
-}
-
+#[derive(Debug, Clone)]
 pub struct EfbCopyCmd {
     pub src_x: u32,
     pub src_y: u32,
@@ -192,46 +160,4 @@ pub struct EfbCopyCmd {
     pub clear_color: [f32; 4],
     pub clear_z: f32,
     pub half: bool,
-}
-
-#[derive(Default)]
-pub struct DrawCommands {
-    pub projection: Matrix4,
-    pub commands: Vec<GxCommand>,
-    vertex_pool: Vec<Vec<Vertex>>,
-}
-
-impl DrawCommands {
-    pub fn recycle(&mut self) {
-        for cmd in self.commands.drain(..) {
-            if let GxCommand::Draw(dc) = cmd {
-                let mut buf = dc.vertices;
-                buf.clear();
-                self.vertex_pool.push(buf);
-            }
-        }
-    }
-
-    /// Extract draw data for cross-thread rendering.
-    ///
-    /// Moves the accumulated `commands` into a new `DrawCommands` (along with
-    /// a copy(!) of the current projection matrix) while preserving the
-    /// projection matrix and vertex-buffer pool on `self` so the emulator can
-    /// reuse them for the next frame.
-    pub fn take_for_render(&mut self) -> DrawCommands {
-        DrawCommands {
-            projection: self.projection,
-            commands: std::mem::take(&mut self.commands),
-            vertex_pool: Vec::new(),
-        }
-    }
-
-    pub fn take_vertex_buf(&mut self, capacity: usize) -> Vec<Vertex> {
-        if let Some(mut buf) = self.vertex_pool.pop() {
-            buf.reserve(capacity.saturating_sub(buf.capacity()));
-            buf
-        } else {
-            Vec::with_capacity(capacity)
-        }
-    }
 }

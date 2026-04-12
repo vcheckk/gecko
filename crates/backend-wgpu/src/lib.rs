@@ -1,15 +1,40 @@
+mod action;
+mod clear;
 mod helpers;
 mod pipeline;
 mod render;
+pub mod sink;
 pub mod texture;
-mod triangulate;
 
 use encase::ShaderType as _;
 use gecko::flipper::gx::draw::TextureFormat;
-use gecko::flipper::gx::regs::{MagFilter, MinFilter, WrapMode};
+use gecko::flipper::gx::draw::{Scissor, TextureDescriptor, Viewport};
+use gecko::flipper::gx::regs::{AlphaCompare, BlendMode, CompareFunc, MagFilter, MinFilter, WrapMode, ZMode};
+use glam::Mat4;
 use pipeline::PipelineKey;
 use std::collections::HashMap;
-use triangulate::{GpuVertex, align_up};
+
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+pub(crate) struct GpuVertex {
+    pub position: [f32; 3],
+    pub color: [f32; 4],
+    pub color1: [f32; 4],
+    pub normal: [f32; 3],
+    pub pos_view: [f32; 3],
+    pub tex0: [f32; 2],
+    pub tex1: [f32; 2],
+    pub tex2: [f32; 2],
+    pub tex3: [f32; 2],
+    pub tex4: [f32; 2],
+    pub tex5: [f32; 2],
+    pub tex6: [f32; 2],
+    pub tex7: [f32; 2],
+}
+
+pub(crate) fn align_up(value: u64, alignment: u64) -> u64 {
+    (value + alignment - 1) & !(alignment - 1)
+}
 
 type TexKey = (usize, u32, u32, TextureFormat);
 type SamplerKey = (WrapMode, WrapMode, MagFilter, MinFilter);
@@ -38,10 +63,14 @@ pub(crate) struct FrameUniforms {
     light_distatt: [glam::Vec4; 8],
     light_pos: [glam::Vec4; 8],
     light_dir: [glam::Vec4; 8],
-    color_ctrl: u32,
-    alpha_ctrl: u32,
-    ambient_color: glam::Vec4,
-    material_color: glam::Vec4,
+    color_ctrl0: u32,
+    alpha_ctrl0: u32,
+    color_ctrl1: u32,
+    alpha_ctrl1: u32,
+    ambient_color0: glam::Vec4,
+    ambient_color1: glam::Vec4,
+    material_color0: glam::Vec4,
+    material_color1: glam::Vec4,
 }
 
 #[derive(encase::ShaderType)]
@@ -52,7 +81,8 @@ pub(crate) struct DrawUniforms {
 const SHADER: &str = wesl::include_wesl!("gx_shader");
 
 pub const EFB_WIDTH: u32 = 640;
-pub const EFB_HEIGHT: u32 = 480;
+pub const EFB_HEIGHT: u32 = 528;
+pub const EFB_SAMPLE_COUNT: u32 = 4;
 
 pub struct GxRenderer {
     pub(crate) pipeline_cache: HashMap<PipelineKey, wgpu::RenderPipeline>,
@@ -66,9 +96,13 @@ pub struct GxRenderer {
     pub(crate) draw_uniform_capacity: usize,
     pub(crate) vertex_buffer: wgpu::Buffer,
     pub(crate) vertex_capacity: usize,
+    // EFB: resolved (1x) color used for CopyXfb reads + texture binding.
     pub(crate) efb_texture: wgpu::Texture,
     pub(crate) efb_view: wgpu::TextureView,
-    pub(crate) efb_depth_texture: wgpu::Texture,
+    // EFB: multisampled (4x) color, actual render target for draws.
+    pub(crate) _efb_msaa_texture: wgpu::Texture,
+    pub(crate) efb_msaa_view: wgpu::TextureView,
+    // EFB: multisampled (4x) depth.
     pub(crate) efb_depth_view: wgpu::TextureView,
     pub(crate) efb_needs_clear: bool,
     pub(crate) sampler_cache: HashMap<(WrapMode, WrapMode, MagFilter, MinFilter), wgpu::Sampler>,
@@ -78,14 +112,30 @@ pub struct GxRenderer {
     pub(crate) scratch_draws: Vec<(u32, u32)>,
     pub(crate) scratch_uniform_bytes: Vec<u8>,
     pub(crate) bind_group_cache: HashMap<BindGroupCacheKey, wgpu::BindGroup>,
+    // Tracked GX state (updated by state-change actions)
+    pub(crate) current_projection: Mat4,
+    pub(crate) current_viewport: Viewport,
+    pub(crate) current_scissor: Scissor,
+    pub(crate) current_zmode: ZMode,
+    pub(crate) current_blend_mode: BlendMode,
+    pub(crate) current_alpha_compare: AlphaCompare,
+    pub(crate) current_textures: [Option<TextureDescriptor>; 8],
+    // Blit pipeline (EFB -> swapchain)
+    pub(crate) blit_pipeline: wgpu::RenderPipeline,
+    pub(crate) blit_bind_group_layout: wgpu::BindGroupLayout,
+    pub(crate) blit_sampler: wgpu::Sampler,
+    // XFB output texture: composited from per-copy snapshots by PresentXfb.
+    pub(crate) xfb_texture: wgpu::Texture,
+    pub(crate) xfb_view: wgpu::TextureView,
+    pub(crate) xfb_has_content: bool,
+    // Per-copy temporary textures stored by CopyXfb, composited by PresentXfb.
+    pub(crate) xfb_copies: HashMap<u32, (wgpu::Texture, wgpu::TextureView)>,
+    // Region-scoped EFB clear.
+    pub(crate) efb_clear: clear::EfbClear,
 }
 
 impl GxRenderer {
-    pub fn new(
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        surface_format: wgpu::TextureFormat,
-    ) -> Self {
+    pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, surface_format: wgpu::TextureFormat) -> Self {
         let frame_uniform_size = FrameUniforms::min_size().get();
         let draw_uniform_size = DrawUniforms::min_size().get();
         let draw_uniform_stride = align_up(
@@ -185,7 +235,7 @@ impl GxRenderer {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            format: wgpu::TextureFormat::Rgba8Unorm,
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
@@ -213,9 +263,10 @@ impl GxRenderer {
             mapped_at_creation: false,
         });
 
-        // Create fixed-size EFB
+        // Create fixed-size EFB with 4x MSAA.
+        // Resolved (1x) color: CopyXfb reads from here.
         let efb_texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("efb_color"),
+            label: Some("efb_color_resolved"),
             size: wgpu::Extent3d {
                 width: EFB_WIDTH,
                 height: EFB_HEIGHT,
@@ -227,12 +278,29 @@ impl GxRenderer {
             format: surface_format,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT
                 | wgpu::TextureUsages::COPY_SRC
-                | wgpu::TextureUsages::COPY_DST
                 | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         });
         let efb_view = efb_texture.create_view(&Default::default());
 
+        // Multisampled (4x) color: actual render target for draws.
+        let efb_msaa_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("efb_color_msaa"),
+            size: wgpu::Extent3d {
+                width: EFB_WIDTH,
+                height: EFB_HEIGHT,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: EFB_SAMPLE_COUNT,
+            dimension: wgpu::TextureDimension::D2,
+            format: surface_format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        let efb_msaa_view = efb_msaa_texture.create_view(&Default::default());
+
+        // Multisampled (4x) depth.
         let efb_depth_texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("efb_depth"),
             size: wgpu::Extent3d {
@@ -241,13 +309,106 @@ impl GxRenderer {
                 depth_or_array_layers: 1,
             },
             mip_level_count: 1,
-            sample_count: 1,
+            sample_count: EFB_SAMPLE_COUNT,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Depth24Plus,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             view_formats: &[],
         });
         let efb_depth_view = efb_depth_texture.create_view(&Default::default());
+
+        // XFB accumulation texture. Holds the composited output of all
+        // CopyEfb(copy_to_xfb) ops for the current frame.
+        let xfb_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("xfb_accum"),
+            size: wgpu::Extent3d {
+                width: EFB_WIDTH,
+                height: EFB_HEIGHT,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: surface_format,
+            usage: wgpu::TextureUsages::COPY_DST
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        let xfb_view = xfb_texture.create_view(&Default::default());
+
+        // Blit pipeline EFB -> swapchain shit
+        let blit_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("efb_blit_shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/efb_blit.wgsl").into()),
+        });
+        let blit_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("efb_blit_bg_layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+        let blit_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: None,
+            bind_group_layouts: &[&blit_bind_group_layout],
+            immediate_size: 0,
+        });
+        let blit_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("efb_blit_pipeline"),
+            layout: Some(&blit_layout),
+            vertex: wgpu::VertexState {
+                module: &blit_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &blit_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: surface_format,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                ..Default::default()
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        });
+        let blit_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("efb_blit_sampler"),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+
+        let efb_clear = clear::EfbClear::new(
+            device,
+            surface_format,
+            wgpu::TextureFormat::Depth24Plus,
+            EFB_SAMPLE_COUNT,
+        );
 
         GxRenderer {
             pipeline_cache: HashMap::new(),
@@ -263,7 +424,8 @@ impl GxRenderer {
             vertex_capacity: initial_capacity,
             efb_texture,
             efb_view,
-            efb_depth_texture,
+            _efb_msaa_texture: efb_msaa_texture,
+            efb_msaa_view,
             efb_depth_view,
             efb_needs_clear: true,
             sampler_cache: HashMap::from([(
@@ -276,7 +438,23 @@ impl GxRenderer {
             scratch_draws: Vec::new(),
             scratch_uniform_bytes: Vec::new(),
             bind_group_cache: HashMap::new(),
+            current_projection: Mat4::IDENTITY,
+            current_viewport: Viewport::default(),
+            current_scissor: Scissor::default(),
+            current_zmode: ZMode::default(),
+            current_blend_mode: BlendMode::from_raw(0).with_color_update(true).with_alpha_update(true),
+            current_alpha_compare: AlphaCompare::from_raw(0)
+                .with_comp0(CompareFunc::Always)
+                .with_comp1(CompareFunc::Always),
+            current_textures: Default::default(),
+            blit_pipeline,
+            blit_bind_group_layout,
+            blit_sampler,
+            xfb_texture,
+            xfb_view,
+            xfb_has_content: false,
+            xfb_copies: HashMap::new(),
+            efb_clear,
         }
     }
-
 }

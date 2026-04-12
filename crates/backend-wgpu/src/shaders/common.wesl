@@ -19,10 +19,14 @@ struct FrameUniforms {
     light_distatt: array<vec4<f32>, 8>,
     light_pos: array<vec4<f32>, 8>,
     light_dir: array<vec4<f32>, 8>,
-    color_ctrl: u32,
-    alpha_ctrl: u32,
-    ambient_color: vec4<f32>,
-    material_color: vec4<f32>,
+    color_ctrl0: u32,
+    alpha_ctrl0: u32,
+    color_ctrl1: u32,
+    alpha_ctrl1: u32,
+    ambient_color0: vec4<f32>,
+    ambient_color1: vec4<f32>,
+    material_color0: vec4<f32>,
+    material_color1: vec4<f32>,
 };
 
 struct DrawUniforms {

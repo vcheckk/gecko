@@ -14,6 +14,7 @@ use crate::flipper::si::{SerialInterface, pad};
 use crate::flipper::vi::VideoInterface;
 #[cfg(feature = "hooks")]
 use crate::hooks::{HookFilters, HookFlags, HookState, Host};
+use crate::host::{EmptyRenderSink, RenderSink};
 #[cfg(feature = "idle-skip")]
 use crate::idle::{IDLE_LOOP_MAX_INSTRS, IdleCheck, IdleDetector};
 use crate::mmio::Mmio;
@@ -36,6 +37,10 @@ pub struct GameCube {
     pub si: SerialInterface,
     pub ai: AudioInterface,
     pub mi: MemoryInterface,
+
+    /// GX dispatches actions here.
+    pub render_sink: Box<dyn RenderSink>,
+
     #[cfg(feature = "idle-skip")]
     idle: IdleDetector,
 
@@ -86,6 +91,9 @@ impl GameCube {
             si: SerialInterface::new(),
             ai: AudioInterface::new(),
             mi: MemoryInterface::new(),
+
+            render_sink: Box::new(EmptyRenderSink),
+
             #[cfg(feature = "idle-skip")]
             idle: IdleDetector::new(),
 

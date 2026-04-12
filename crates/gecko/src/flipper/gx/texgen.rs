@@ -1,9 +1,6 @@
 use super::GraphicsProcessor;
-use super::constants::{
-    XF_DUAL_TEX_ENABLE, XF_DUALTEX_BASE, XF_MATRIX_INDEX_A, XF_MATRIX_INDEX_B, XF_POS_MTX_STRIDE, XF_POST_MTX_BASE,
-    XF_TEXGEN_BASE,
-};
-use super::regs::{DualTexGenReg, MatrixIndex0, MatrixIndex1, TexGenReg};
+use super::constants::{XF_DUAL_TEX_ENABLE, XF_DUALTEX_BASE, XF_POS_MTX_STRIDE, XF_POST_MTX_BASE, XF_TEXGEN_BASE};
+use super::regs::{DualTexGenReg, TexGenReg};
 
 impl GraphicsProcessor {
     pub fn compute_texgen(
@@ -12,6 +9,7 @@ impl GraphicsProcessor {
         position: [f32; 3],
         normal: [f32; 3],
         raw_texcoords: &[Option<[f32; 2]>; 8],
+        tex_mtx_indices: &[u8; 8],
     ) -> [f32; 2] {
         let tg = TexGenReg::from_raw(self.xf_mem[XF_TEXGEN_BASE + texgen_idx]);
         let dt = DualTexGenReg::from_raw(self.xf_mem[XF_DUALTEX_BASE + texgen_idx]);
@@ -25,15 +23,8 @@ impl GraphicsProcessor {
             super::regs::TexGenInputForm::Abc1 => [src[0], src[1], src[2], 1.0],
         };
 
-        // Texture matrix base from MatrixIndex register
-        let tex_mtx_idx = if texgen_idx < 4 {
-            let mtx_index_a = MatrixIndex0::from_raw(self.xf_mem[XF_MATRIX_INDEX_A]);
-            mtx_index_a.tex_mtx_idx(texgen_idx) as usize
-        } else {
-            let mtx_index_b = MatrixIndex1::from_raw(self.xf_mem[XF_MATRIX_INDEX_B]);
-            mtx_index_b.tex_mtx_idx(texgen_idx) as usize
-        };
-        let tex_mtx_base = tex_mtx_idx * XF_POS_MTX_STRIDE;
+        // Texture matrix base from per-vertex index
+        let tex_mtx_base = tex_mtx_indices[texgen_idx] as usize * XF_POS_MTX_STRIDE;
 
         // Multiply input by texture matrix (2x4 or 3x4 depending on projection)
         let (s, t, q) = self.apply_tex_matrix(&tg, tex_mtx_base, &input);

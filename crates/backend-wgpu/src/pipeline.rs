@@ -1,6 +1,5 @@
-use crate::triangulate::GpuVertex;
+use crate::GpuVertex;
 use crate::{GxRenderer, helpers};
-use gecko::flipper::gx::draw::DrawCall;
 use gecko::flipper::gx::regs::{BlendFactor, CompareFunc};
 
 #[derive(Clone, Copy, Hash, PartialEq, Eq)]
@@ -14,24 +13,6 @@ pub(crate) struct PipelineKey {
     pub z_write: bool,
     pub color_update: bool,
     pub alpha_update: bool,
-}
-
-impl PipelineKey {
-    pub fn from_draw_call(dc: &DrawCall) -> Self {
-        let blend = dc.bp_blend_mode;
-        let zmode = dc.bp_zmode;
-        PipelineKey {
-            blend_enable: blend.blend_enable(),
-            src_factor: blend.src_factor(),
-            dst_factor: blend.dst_factor(),
-            subtract: blend.subtract(),
-            z_enable: zmode.enable(),
-            z_func: zmode.func(),
-            z_write: zmode.update_enable(),
-            color_update: blend.color_update(),
-            alpha_update: blend.alpha_update(),
-        }
-    }
 }
 
 impl GxRenderer {
@@ -180,7 +161,11 @@ impl GxRenderer {
                 ..Default::default()
             },
             depth_stencil,
-            multisample: wgpu::MultisampleState::default(),
+            multisample: wgpu::MultisampleState {
+                count: crate::EFB_SAMPLE_COUNT,
+                mask: !0,
+                alpha_to_coverage_enabled: false,
+            },
             multiview_mask: None,
             cache: None,
         })

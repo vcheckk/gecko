@@ -1,12 +1,16 @@
 use super::constants::{
     ARRAY_BASE_REG, ARRAY_CLR0, ARRAY_CLR1, ARRAY_NRM, ARRAY_POS, ARRAY_STRIDE_REG, ARRAY_TEX0, VATA_REG, VATB_REG,
-    VATC_REG, VCD_HI_REG, VCD_LO_REG, XF_ALPHA_CTRL0, XF_AMBIENT_COLOR0, XF_COLOR_CTRL0, XF_LIGHT_A0, XF_LIGHT_BASE,
-    XF_LIGHT_COLOR, XF_LIGHT_K0, XF_LIGHT_NX, XF_LIGHT_PX, XF_LIGHT_STRIDE, XF_MATERIAL_COLOR0, XF_MATRIX_INDEX_A,
-    XF_NRM_MTX_BASE, XF_NUM_TEXGENS, XF_POS_MTX_STRIDE,
+    VATC_REG, VCD_HI_REG, VCD_LO_REG, XF_ALPHA_CTRL0, XF_ALPHA_CTRL1, XF_AMBIENT_COLOR0, XF_AMBIENT_COLOR1,
+    XF_COLOR_CTRL0, XF_COLOR_CTRL1, XF_LIGHT_A0, XF_LIGHT_BASE, XF_LIGHT_COLOR, XF_LIGHT_K0, XF_LIGHT_NX, XF_LIGHT_PX,
+    XF_LIGHT_STRIDE, XF_MATERIAL_COLOR0, XF_MATERIAL_COLOR1, XF_MATRIX_INDEX_A, XF_MATRIX_INDEX_B, XF_NRM_MTX_BASE,
+    XF_NUM_TEXGENS, XF_POS_MTX_STRIDE,
 };
 use super::math::{Vec3, unpack_rgba};
-use super::regs::{self, AttributeType, ComponentFormat, MatrixIndex0, TexCount, VatA, VatB, VatC, VcdHi, VcdLo};
+use super::regs::{
+    self, AttributeType, ComponentFormat, MatrixIndex0, MatrixIndex1, TexCount, VatA, VatB, VatC, VcdHi, VcdLo,
+};
 use super::{GraphicsProcessor, draw};
+use crate::host::{DrawData, DrawVertex, GxAction, LightData, RenderSink};
 use crate::mmio::Mmio;
 use std::io::{Cursor, Read};
 
@@ -28,8 +32,9 @@ struct VertexFormat {
     tex_strides: [usize; 8],
     vertex_stride: usize,
     has_pnmtxidx: bool,
-    tex_mtx_idx_size: usize,
+    has_tex_mtx_idx: [bool; 8],
     default_pos_mtx_idx: u8,
+    default_tex_mtx_idx: [u8; 8],
     pos_attr: AttributeType,
     nrm_attr: AttributeType,
     clr0_attr: AttributeType,
@@ -43,7 +48,7 @@ struct VertexFormat {
 }
 
 impl GraphicsProcessor {
-    pub fn create_draw_call(&mut self, mmio: &mut Mmio, cmd: u8, data: Vec<u8>) {
+    pub fn create_draw_call(&mut self, mmio: &mut Mmio, renderer: &mut dyn RenderSink, cmd: u8, data: Vec<u8>) {
         let Some(primitive) = draw::Primitive::from_cmd(cmd) else {
             tracing::error!(cmd, "goofy draw command");
             return;
@@ -58,7 +63,7 @@ impl GraphicsProcessor {
 
         let vertex_count = data.len() / vf.vertex_stride;
 
-        let mut vertices = self.draw_commands.take_vertex_buf(vertex_count);
+        let mut vertices: Vec<draw::Vertex> = Vec::with_capacity(vertex_count);
         let mut cur = Cursor::new(&data);
 
         for i in 0..vertex_count {
@@ -73,38 +78,74 @@ impl GraphicsProcessor {
             vertices = format!("{:?}", vertices),
             pos_mtx_idx = vf.default_pos_mtx_idx,
             modelview = format!("{:?}", modelview),
-            projection = format!("{:?}", self.draw_commands.projection),
+            projection = format!("{:?}", self.projection),
             "draw call created"
         );
 
         // Resolve TEV color registers to f32 arrays for the snapshot
         let tev_color_regs = self.resolve_tev_color_regs();
+        let tev_orders = self.resolve_tev_orders();
 
-        self.draw_commands.commands.push(draw::GxCommand::Draw(draw::DrawCall {
+        // Snapshot light data for the action stream
+        let light_colors = self.snapshot_light_field(XF_LIGHT_COLOR);
+        let light_cosatt = self.snapshot_light_field(XF_LIGHT_A0);
+        let light_distatt = self.snapshot_light_field(XF_LIGHT_K0);
+        let light_pos = self.snapshot_light_field(XF_LIGHT_PX);
+        let light_dir = self.snapshot_light_field(XF_LIGHT_NX);
+
+        let color_ctrl = [
+            regs::ChanCtrl::from_raw(self.xf_mem[XF_COLOR_CTRL0]),
+            regs::ChanCtrl::from_raw(self.xf_mem[XF_COLOR_CTRL1]),
+        ];
+        let alpha_ctrl = [
+            regs::ChanCtrl::from_raw(self.xf_mem[XF_ALPHA_CTRL0]),
+            regs::ChanCtrl::from_raw(self.xf_mem[XF_ALPHA_CTRL1]),
+        ];
+        let ambient_color = [
+            unpack_rgba(self.xf_mem[XF_AMBIENT_COLOR0]),
+            unpack_rgba(self.xf_mem[XF_AMBIENT_COLOR1]),
+        ];
+        let material_color = [
+            unpack_rgba(self.xf_mem[XF_MATERIAL_COLOR0]),
+            unpack_rgba(self.xf_mem[XF_MATERIAL_COLOR1]),
+        ];
+
+        // Emit action to the render sink
+        let draw_vertices: Vec<DrawVertex> = vertices
+            .iter()
+            .map(|v| DrawVertex {
+                position: v.position,
+                normal: v.normal,
+                color0: v.color0,
+                color1: v.color1,
+                pos_view: v.pos_view,
+                texcoords: std::array::from_fn(|i| v.texcoords[i].unwrap_or([0.0, 0.0])),
+            })
+            .collect();
+
+        let lights: [LightData; 8] = std::array::from_fn(|i| LightData {
+            color: light_colors[i],
+            cosatt: light_cosatt[i],
+            distatt: light_distatt[i],
+            position: light_pos[i],
+            direction: light_dir[i],
+        });
+
+        renderer.exec(GxAction::Draw(DrawData {
             primitive,
-            vertices,
-            modelview,
-            viewport: self.cur_viewport,
-            scissor: self.cur_scissor,
-            textures: self.cur_textures,
-            tev_orders: self.resolve_tev_orders(),
-            tev_color_env: self.cur_tev_color_env,
-            tev_alpha_env: self.cur_tev_alpha_env,
+            vertices: draw_vertices,
+            modelview: modelview.0,
+            tev_color_env: self.cur_tev_color_env.iter().map(|e| e.raw()).collect(),
+            tev_alpha_env: self.cur_tev_alpha_env.iter().map(|e| e.raw()).collect(),
+            tev_orders: tev_orders.iter().map(|o| o.raw()).collect(),
             tev_color_regs,
             tev_konst_colors: self.cur_tev_konst_colors,
             num_tev_stages: self.cur_num_tev_stages,
-            bp_zmode: self.cur_zmode,
-            bp_blend_mode: self.cur_blend_mode,
-            bp_alpha_compare: self.cur_alpha_compare,
-            light_colors: self.snapshot_light_field(XF_LIGHT_COLOR),
-            light_cosatt: self.snapshot_light_field(XF_LIGHT_A0),
-            light_distatt: self.snapshot_light_field(XF_LIGHT_K0),
-            light_pos: self.snapshot_light_field(XF_LIGHT_PX),
-            light_dir: self.snapshot_light_field(XF_LIGHT_NX),
-            color_ctrl: regs::ChanCtrl::from_raw(self.xf_mem[XF_COLOR_CTRL0]),
-            alpha_ctrl: regs::ChanCtrl::from_raw(self.xf_mem[XF_ALPHA_CTRL0]),
-            ambient_color: unpack_rgba(self.xf_mem[XF_AMBIENT_COLOR0]),
-            material_color: unpack_rgba(self.xf_mem[XF_MATERIAL_COLOR0]),
+            color_ctrl,
+            alpha_ctrl,
+            ambient_color,
+            material_color,
+            lights,
         }));
     }
 
@@ -195,10 +236,30 @@ impl GraphicsProcessor {
         let tex_strides: [usize; 8] = std::array::from_fn(|i| self.cp_regs[ARRAY_STRIDE_REG + ARRAY_TEX0 + i] as usize);
 
         let has_pnmtxidx = vcd_lo.pos_nrm_mtx_idx();
-        let tex_mtx_idx_size = mtx_idx_size - has_pnmtxidx as usize;
+        let has_tex_mtx_idx = [
+            vcd_lo.tex0_mtx_idx(),
+            vcd_lo.tex1_mtx_idx(),
+            vcd_lo.tex2_mtx_idx(),
+            vcd_lo.tex3_mtx_idx(),
+            vcd_lo.tex4_mtx_idx(),
+            vcd_lo.tex5_mtx_idx(),
+            vcd_lo.tex6_mtx_idx(),
+            vcd_lo.tex7_mtx_idx(),
+        ];
 
         let mtx_index_a = MatrixIndex0::from_raw(self.xf_mem[XF_MATRIX_INDEX_A]);
+        let mtx_index_b = MatrixIndex1::from_raw(self.xf_mem[XF_MATRIX_INDEX_B]);
         let default_pos_mtx_idx = mtx_index_a.pos_mtx_idx();
+        let default_tex_mtx_idx = [
+            mtx_index_a.tex_mtx_idx(0),
+            mtx_index_a.tex_mtx_idx(1),
+            mtx_index_a.tex_mtx_idx(2),
+            mtx_index_a.tex_mtx_idx(3),
+            mtx_index_b.tex_mtx_idx(4),
+            mtx_index_b.tex_mtx_idx(5),
+            mtx_index_b.tex_mtx_idx(6),
+            mtx_index_b.tex_mtx_idx(7),
+        ];
 
         let vertex_stride = mtx_idx_size
             + pos_stream_size
@@ -227,8 +288,9 @@ impl GraphicsProcessor {
             tex_strides,
             vertex_stride,
             has_pnmtxidx,
-            tex_mtx_idx_size,
+            has_tex_mtx_idx,
             default_pos_mtx_idx,
+            default_tex_mtx_idx,
             pos_attr,
             nrm_attr,
             clr0_attr,
@@ -256,8 +318,15 @@ impl GraphicsProcessor {
             vf.default_pos_mtx_idx
         };
 
-        // Skip remaining tex matrix index bytes (not yet used)
-        cur.set_position(cur.position() + vf.tex_mtx_idx_size as u64);
+        // Read per-vertex texture matrix indices, or use register defaults
+        let mut tex_mtx_idx = vf.default_tex_mtx_idx;
+        for i in 0..8 {
+            if vf.has_tex_mtx_idx[i] {
+                let mut buf = [0u8; 1];
+                cur.read_exact(&mut buf).unwrap();
+                tex_mtx_idx[i] = buf[0];
+            }
+        }
 
         // Derive per-vertex position and normal matrix bases
         let pos_mtx_base = pos_mtx_idx as usize * XF_POS_MTX_STRIDE;
@@ -302,11 +371,19 @@ impl GraphicsProcessor {
         } else if vf.clr0_attr == AttributeType::Direct {
             let start = cur.position() as usize;
             cur.set_position(cur.position() + vf.clr0_data_size as u64);
-            decode_color(&data[start..start + vf.clr0_data_size], vf.vat_a.clr0_fmt(), vf.vat_a.clr0_cnt())
+            decode_color(
+                &data[start..start + vf.clr0_data_size],
+                vf.vat_a.clr0_fmt(),
+                vf.vat_a.clr0_cnt(),
+            )
         } else {
             let clr0_index = read_index(cur, vf.clr0_attr);
             let clr0_addr = vf.clr0_base + clr0_index * vf.clr0_stride;
-            decode_color(&ram[clr0_addr..clr0_addr + vf.clr0_data_size], vf.vat_a.clr0_fmt(), vf.vat_a.clr0_cnt())
+            decode_color(
+                &ram[clr0_addr..clr0_addr + vf.clr0_data_size],
+                vf.vat_a.clr0_fmt(),
+                vf.vat_a.clr0_cnt(),
+            )
         };
 
         // Read color1
@@ -315,11 +392,19 @@ impl GraphicsProcessor {
         } else if vf.clr1_attr == AttributeType::Direct {
             let start = cur.position() as usize;
             cur.set_position(cur.position() + vf.clr1_data_size as u64);
-            decode_color(&data[start..start + vf.clr1_data_size], vf.vat_a.clr1_fmt(), vf.vat_a.clr1_cnt())
+            decode_color(
+                &data[start..start + vf.clr1_data_size],
+                vf.vat_a.clr1_fmt(),
+                vf.vat_a.clr1_cnt(),
+            )
         } else {
             let clr1_index = read_index(cur, vf.clr1_attr);
             let clr1_addr = vf.clr1_base + clr1_index * vf.clr1_stride;
-            decode_color(&ram[clr1_addr..clr1_addr + vf.clr1_data_size], vf.vat_a.clr1_fmt(), vf.vat_a.clr1_cnt())
+            decode_color(
+                &ram[clr1_addr..clr1_addr + vf.clr1_data_size],
+                vf.vat_a.clr1_fmt(),
+                vf.vat_a.clr1_cnt(),
+            )
         };
 
         // Read all texcoords (tex0-tex7)
@@ -359,7 +444,7 @@ impl GraphicsProcessor {
         let num_texgens = (self.xf_mem[XF_NUM_TEXGENS] as usize).min(8);
         let mut texcoords: [Option<[f32; 2]>; 8] = [None; 8];
         for tg_idx in 0..num_texgens {
-            texcoords[tg_idx] = Some(self.compute_texgen(tg_idx, position, normal, &raw_texcoords));
+            texcoords[tg_idx] = Some(self.compute_texgen(tg_idx, position, normal, &raw_texcoords, &tex_mtx_idx));
         }
         // For texcoords beyond num_texgens, pass through raw values
         for tg_idx in num_texgens..8 {
@@ -421,7 +506,12 @@ impl GraphicsProcessor {
                 unpack_rgba(self.xf_mem[base])
             } else {
                 // Float vec3, w = 0
-                [f32::from_bits(self.xf_mem[base]), f32::from_bits(self.xf_mem[base + 1]), f32::from_bits(self.xf_mem[base + 2]), 0.0]
+                [
+                    f32::from_bits(self.xf_mem[base]),
+                    f32::from_bits(self.xf_mem[base + 1]),
+                    f32::from_bits(self.xf_mem[base + 2]),
+                    0.0,
+                ]
             }
         })
     }
@@ -514,7 +604,7 @@ fn decode_color(data: &[u8], fmt: regs::ColorFormat, cnt: regs::ColorCount) -> [
             let r = ((raw >> 12) & 0xF) as f32 / 15.0;
             let g = ((raw >> 8) & 0xF) as f32 / 15.0;
             let b = ((raw >> 4) & 0xF) as f32 / 15.0;
-            let a = (raw & 0xF) as f32 / 15.0;
+            let a = if has_alpha { (raw & 0xF) as f32 / 15.0 } else { 1.0 };
             [r, g, b, a]
         }
         regs::ColorFormat::Rgba6 => {
@@ -522,7 +612,7 @@ fn decode_color(data: &[u8], fmt: regs::ColorFormat, cnt: regs::ColorCount) -> [
             let r = ((raw >> 18) & 0x3F) as f32 / 63.0;
             let g = ((raw >> 12) & 0x3F) as f32 / 63.0;
             let b = ((raw >> 6) & 0x3F) as f32 / 63.0;
-            let a = (raw & 0x3F) as f32 / 63.0;
+            let a = if has_alpha { (raw & 0x3F) as f32 / 63.0 } else { 1.0 };
             [r, g, b, a]
         }
         regs::ColorFormat::Rgba8 => {
@@ -541,25 +631,29 @@ fn decode_normal(data: &[u8], vat: &VatA) -> [f32; 3] {
     let mut result = [0.0f32; 3];
     let mut off = 0;
 
+    // Hardware uses fixed-point: 6 fractional bits for byte types, 14 for word types.
+    const SHIFT_BYTE: f32 = (1u32 << 6) as f32; // 64.0
+    const SHIFT_WORD: f32 = (1u32 << 14) as f32; // 16384.0
+
     for i in 0..cnt {
         result[i] = match fmt {
             ComponentFormat::U8 => {
-                let v = data[off] as f32 / 255.0;
+                let v = data[off] as f32 / SHIFT_BYTE;
                 off += 1;
                 v
             }
             ComponentFormat::S8 => {
-                let v = data[off] as i8 as f32 / 127.0;
+                let v = data[off] as i8 as f32 / SHIFT_BYTE;
                 off += 1;
                 v
             }
             ComponentFormat::U16 => {
-                let v = u16::from_be_bytes([data[off], data[off + 1]]) as f32 / 65535.0;
+                let v = u16::from_be_bytes([data[off], data[off + 1]]) as f32 / SHIFT_WORD;
                 off += 2;
                 v
             }
             ComponentFormat::S16 => {
-                let v = i16::from_be_bytes([data[off], data[off + 1]]) as f32 / 32767.0;
+                let v = i16::from_be_bytes([data[off], data[off + 1]]) as f32 / SHIFT_WORD;
                 off += 2;
                 v
             }

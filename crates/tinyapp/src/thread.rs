@@ -1,20 +1,15 @@
 use crossbeam_channel::Sender;
 use gecko::{
-    flipper::{gx::draw::DrawCommands, si::pad::PadStatus, vi::regs::RefreshRate},
+    flipper::{si::pad::PadStatus, vi::regs::RefreshRate},
     gamecube::GameCube,
 };
 use std::sync::{Arc, Mutex};
 use winit::event_loop::EventLoopProxy;
 
-pub enum FrameData {
-    Gx { commands: DrawCommands, ram: Vec<u8> },
-    Xfb { pixels: Vec<u32> },
-}
-
 pub struct FrameMessage {
-    pub data: FrameData,
-    pub width: u32,
-    pub height: u32,
+    /// Guest RAM snapshot so the renderer can upload textures referenced by
+    /// the actions in the channel.
+    pub ram: Vec<u8>,
     pub native_hz: f64,
 }
 
@@ -33,25 +28,9 @@ pub fn emu_thread(
             RefreshRate::Hz50 => 50.0,
         };
 
-        let (w, h) = emulator.frame_size();
-        let (width, height) = (w as u32, h as u32);
-
-        let data = if !emulator.gx.draw_commands.commands.is_empty() {
-            FrameData::Gx {
-                commands: emulator.gx.draw_commands.take_for_render(),
-                ram: emulator.mmio.ram.clone(),
-            }
-        } else {
-            FrameData::Xfb {
-                pixels: emulator.render_xfb(),
-            }
-        };
-
         if frame_tx
             .send(FrameMessage {
-                data,
-                width,
-                height,
+                ram: emulator.mmio.ram.clone(),
                 native_hz,
             })
             .is_err()

@@ -190,6 +190,21 @@ impl VideoInterface {
         self.half_line_count >= self.half_lines_per_odd_field()
     }
 
+    pub fn frame_dimensions(&self) -> (u32, u32) {
+        let hsw_raw = self.hsw.raw();
+        let width = (((hsw_raw >> 8) & 0x7F) * 16) as u32;
+        let active_lines = self.vtr.active_video() as u32;
+        let interlaced = self.dcr.interlaced();
+        let height = if active_lines == 0 {
+            480
+        } else if interlaced {
+            active_lines.saturating_mul(2)
+        } else {
+            active_lines
+        };
+        (if width == 0 { 640 } else { width }, height)
+    }
+
     pub fn xfb_addr(&self) -> u32 {
         if self.dcr.interlaced() && self.in_even_field() {
             if self.bfbl.page_offset() {
@@ -256,8 +271,18 @@ pub fn ensure_half_line_scheduled(gc: &mut GameCube) {
         if ticks_per_hl > 0 {
             gc.vi.half_line_scheduled = true;
             gc.scheduler.schedule_in(ticks_per_hl, |gc| {
+                let prev_hl = gc.vi.half_line_count;
                 gc.vi.on_half_line(gc.scheduler.cycles);
                 gc.vi.half_line_scheduled = false;
+
+                let curr_hl = gc.vi.half_line_count;
+                let total_hl = gc.vi.total_half_lines();
+                let odd_field_start = 0u32;
+                let even_field_start = gc.vi.half_lines_per_odd_field();
+                if total_hl > 0 && (curr_hl == odd_field_start || curr_hl == even_field_start) && curr_hl != prev_hl {
+                    crate::flipper::gx::present_xfb(gc);
+                }
+
                 self::ensure_half_line_scheduled(gc);
                 self::refresh_interrupts(gc);
             });
