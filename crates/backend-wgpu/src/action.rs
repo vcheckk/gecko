@@ -141,6 +141,7 @@ impl GxRenderer {
                 triangulate_draw_data(draw, &mut self.scratch_vertices);
                 let added = self.scratch_vertices.len() - prev_len;
                 if added == 0 {
+                    tracing::warn!("draw call produced zero triangulated vertices, skipping");
                     return;
                 }
 
@@ -375,6 +376,8 @@ impl GxRenderer {
                 let vp_h = vp.h.clamp(1.0, max_dim);
                 if vp.x.is_finite() && vp.y.is_finite() && vp_w.is_finite() && vp_h.is_finite() {
                     rpass.set_viewport(vp.x, vp.y, vp_w, vp_h, vp.min_depth, vp.max_depth);
+                } else {
+                    tracing::warn!(x = vp.x, y = vp.y, w = vp_w, h = vp_h, "non-finite viewport, skipping set_viewport");
                 }
 
                 let sc = &self.draw_scissors[index];
@@ -433,6 +436,7 @@ fn triangulate_draw_data(draw: &DrawData, out: &mut Vec<GpuVertex>) {
         Primitive::Quads => {
             for quad in verts.chunks(4) {
                 if quad.len() < 4 {
+                    tracing::error!(count = quad.len(), "quad primitive with less than 4 vertices, skipping");
                     continue;
                 }
                 out.push(to_gpu(&quad[0]));

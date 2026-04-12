@@ -152,6 +152,7 @@ pub fn present_xfb(gc: &mut GameCube) {
     let stride = gc.gx.xfb_copies[0].dest_stride as u32;
     let bytes_per_row = stride as u64 * 32;
     if bytes_per_row == 0 {
+        tracing::warn!("present_xfb: zero bytes_per_row, dropping XFB copies");
         gc.gx.xfb_copies.clear();
         return;
     }
@@ -196,6 +197,7 @@ pub fn present_xfb(gc: &mut GameCube) {
     };
 
     if parts.is_empty() {
+        tracing::warn!("present_xfb: no XFB copies matched the frame buffer region");
         gc.gx.xfb_copies.clear();
         return;
     }

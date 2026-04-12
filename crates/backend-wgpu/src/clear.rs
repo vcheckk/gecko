@@ -127,6 +127,7 @@ impl EfbClear {
         depth: f32,
     ) {
         if w == 0 || h == 0 {
+            tracing::warn!(x, y, w, h, "clear: zero-area clear region, skipping");
             return;
         }
         let x = x.min(target_width);
@@ -134,6 +135,7 @@ impl EfbClear {
         let w = w.min(target_width.saturating_sub(x));
         let h = h.min(target_height.saturating_sub(y));
         if w == 0 || h == 0 {
+            tracing::warn!(x, y, w, h, "clear: zero-area after clamping to target, skipping");
             return;
         }
 

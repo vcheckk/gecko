@@ -398,6 +398,7 @@ fn texture_data_changed(
 ) -> bool {
     let size = texture::raw_data_size(width, height, format);
     let Some(slice) = ram.get(addr..addr + size) else {
+        tracing::warn!(addr, size, "texture_changed: RAM slice OOB, assuming changed");
         return true;
     };
     let hash = twox_hash::xxhash3_64::Hasher::oneshot(slice);

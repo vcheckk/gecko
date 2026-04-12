@@ -49,6 +49,7 @@ fn decode_i4(ram: &[u8], desc: &TextureDescriptor, rgba: &mut [u8], w: usize, h:
     let bcx = w.div_ceil(BW);
     let bcy = h.div_ceil(BH);
     if desc.ram_addr + bcx * bcy * BB > ram.len() {
+        tracing::warn!(addr = desc.ram_addr, w, h, "decode_i4: texture OOB, skipping");
         return;
     }
 
@@ -85,6 +86,7 @@ fn decode_i8(ram: &[u8], desc: &TextureDescriptor, rgba: &mut [u8], w: usize, h:
     let bcx = w.div_ceil(BW);
     let bcy = h.div_ceil(BH);
     if desc.ram_addr + bcx * bcy * BB > ram.len() {
+        tracing::warn!(addr = desc.ram_addr, w, h, "decode_i8: texture OOB, skipping");
         return;
     }
 
@@ -119,6 +121,7 @@ fn decode_ia4(ram: &[u8], desc: &TextureDescriptor, rgba: &mut [u8], w: usize, h
     let bcx = w.div_ceil(BW);
     let bcy = h.div_ceil(BH);
     if desc.ram_addr + bcx * bcy * BB > ram.len() {
+        tracing::warn!(addr = desc.ram_addr, w, h, "decode_ia4: texture OOB, skipping");
         return;
     }
 
@@ -156,6 +159,7 @@ fn decode_ia8(ram: &[u8], desc: &TextureDescriptor, rgba: &mut [u8], w: usize, h
     let bcy = h.div_ceil(BH);
 
     if desc.ram_addr + bcx * bcy * BB > ram.len() {
+        tracing::warn!(addr = desc.ram_addr, w, h, "decode_ia8: texture OOB, skipping");
         return;
     }
 
@@ -192,6 +196,7 @@ fn decode_rgb565(ram: &[u8], desc: &TextureDescriptor, rgba: &mut [u8], w: usize
     let bcx = w.div_ceil(BW);
     let bcy = h.div_ceil(BH);
     if desc.ram_addr + bcx * bcy * BB > ram.len() {
+        tracing::warn!(addr = desc.ram_addr, w, h, "decode_rgb565: texture OOB, skipping");
         return;
     }
 
@@ -227,6 +232,7 @@ fn decode_rgb5a3(ram: &[u8], desc: &TextureDescriptor, rgba: &mut [u8], w: usize
     let bcx = w.div_ceil(BW);
     let bcy = h.div_ceil(BH);
     if desc.ram_addr + bcx * bcy * BB > ram.len() {
+        tracing::warn!(addr = desc.ram_addr, w, h, "decode_rgb5a3: texture OOB, skipping");
         return;
     }
 
@@ -273,6 +279,7 @@ fn decode_rgba8(ram: &[u8], desc: &TextureDescriptor, rgba: &mut [u8], w: usize,
     let bcx = w.div_ceil(BW);
     let bcy = h.div_ceil(BH);
     if desc.ram_addr + bcx * bcy * BB > ram.len() {
+        tracing::warn!(addr = desc.ram_addr, w, h, "decode_rgba8: texture OOB, skipping");
         return;
     }
 
@@ -314,6 +321,7 @@ fn decode_cmpr(ram: &[u8], desc: &TextureDescriptor, rgba: &mut [u8], w: usize, 
     let bcx = w.div_ceil(MW);
     let bcy = h.div_ceil(MH);
     if desc.ram_addr + bcx * bcy * MB > ram.len() {
+        tracing::warn!(addr = desc.ram_addr, w, h, "decode_cmpr: texture OOB, skipping");
         return;
     }
 

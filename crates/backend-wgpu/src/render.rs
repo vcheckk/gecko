@@ -75,10 +75,9 @@ impl GxRenderer {
         let width = src_w.min(crate::EFB_WIDTH.saturating_sub(src_x));
         let height = src_h.min(crate::EFB_HEIGHT.saturating_sub(src_y));
         if width == 0 || height == 0 {
+            tracing::warn!(src_x, src_y, src_w, src_h, "efb_copy: zero-area region after clamping, skipping");
             return;
         }
-
-        // Create (or reuse) the temp texture for this copy id.
         let entry = self.xfb_copies.entry(id).or_insert_with(|| {
             let tex = device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("xfb_copy_tmp"),
@@ -208,12 +207,14 @@ impl GxRenderer {
 
         for part in parts {
             let Some((tex, _)) = self.xfb_copies.get(&part.id) else {
+                tracing::warn!(id = part.id, "present_xfb: XFB copy not found in cache, skipping part");
                 continue;
             };
             let src_size = tex.size();
             let width = src_size.width.min(xfb_size.width.saturating_sub(part.offset_x));
             let height = src_size.height.min(xfb_size.height.saturating_sub(part.offset_y));
             if width == 0 || height == 0 {
+                tracing::warn!(id = part.id, "present_xfb: zero-area XFB part after clamping, skipping");
                 continue;
             }
             encoder.copy_texture_to_texture(
