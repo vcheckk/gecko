@@ -1,6 +1,6 @@
 use crate::GpuVertex;
 use crate::{GxRenderer, helpers};
-use gecko::flipper::gx::regs::{BlendFactor, CompareFunc};
+use gecko::flipper::gx::regs::{BlendFactor, CompareFunc, CullMode};
 
 #[derive(Clone, Copy, Hash, PartialEq, Eq)]
 pub(crate) struct PipelineKey {
@@ -13,6 +13,7 @@ pub(crate) struct PipelineKey {
     pub z_write: bool,
     pub color_update: bool,
     pub alpha_update: bool,
+    pub cull_mode: CullMode,
 }
 
 impl GxRenderer {
@@ -157,7 +158,11 @@ impl GxRenderer {
             primitive: wgpu::PrimitiveState {
                 topology: wgpu::PrimitiveTopology::TriangleList,
                 front_face: wgpu::FrontFace::Cw,
-                cull_mode: None,
+                cull_mode: match key.cull_mode {
+                    CullMode::Back => Some(wgpu::Face::Back),
+                    CullMode::Front => Some(wgpu::Face::Front),
+                    CullMode::None | CullMode::All => None,
+                },
                 ..Default::default()
             },
             depth_stencil,

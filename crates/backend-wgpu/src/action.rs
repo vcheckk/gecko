@@ -31,6 +31,7 @@ impl GxRenderer {
             z_write: zmode.update_enable(),
             color_update: blend.color_update(),
             alpha_update: blend.alpha_update(),
+            cull_mode: self.current_cull_mode,
         }
     }
 
@@ -93,6 +94,9 @@ impl GxRenderer {
                 }
                 GxAction::SetTexture { slot, descriptor } => {
                     self.current_textures[*slot] = Some(*descriptor);
+                }
+                GxAction::SetCullMode(mode) => {
+                    self.current_cull_mode = *mode;
                 }
 
                 GxAction::Draw(draw) => {

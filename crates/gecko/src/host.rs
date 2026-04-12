@@ -1,5 +1,5 @@
 use crate::flipper::gx::draw::{EfbCopyCmd, Primitive, Scissor, TextureDescriptor, Viewport};
-use crate::flipper::gx::regs::{AlphaCompare, BlendMode, ChanCtrl, ZMode};
+use crate::flipper::gx::regs::{AlphaCompare, BlendMode, ChanCtrl, CullMode, ZMode};
 
 #[derive(Debug)]
 pub enum GxAction {
@@ -15,6 +15,7 @@ pub enum GxAction {
     SetDepthMode(ZMode),
     SetBlendMode(BlendMode),
     SetAlphaCompare(AlphaCompare),
+    SetCullMode(CullMode),
     SetTexture {
         slot: usize,
         descriptor: TextureDescriptor,

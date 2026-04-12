@@ -19,5 +19,6 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> VsOut {
 
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
-    return textureSample(efb_tex, efb_samp, in.uv);
+    let color = textureSample(efb_tex, efb_samp, in.uv);
+    return vec4<f32>(color.rgb, 1.0);
 }

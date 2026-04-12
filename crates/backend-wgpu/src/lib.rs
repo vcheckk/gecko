@@ -9,7 +9,7 @@ pub mod texture;
 use encase::ShaderType as _;
 use gecko::flipper::gx::draw::TextureFormat;
 use gecko::flipper::gx::draw::{Scissor, TextureDescriptor, Viewport};
-use gecko::flipper::gx::regs::{AlphaCompare, BlendMode, CompareFunc, MagFilter, MinFilter, WrapMode, ZMode};
+use gecko::flipper::gx::regs::{AlphaCompare, BlendMode, CompareFunc, CullMode, MagFilter, MinFilter, WrapMode, ZMode};
 use glam::Mat4;
 use pipeline::PipelineKey;
 use std::collections::HashMap;
@@ -119,6 +119,7 @@ pub struct GxRenderer {
     pub(crate) current_zmode: ZMode,
     pub(crate) current_blend_mode: BlendMode,
     pub(crate) current_alpha_compare: AlphaCompare,
+    pub(crate) current_cull_mode: CullMode,
     pub(crate) current_textures: [Option<TextureDescriptor>; 8],
     // Blit pipeline (EFB -> swapchain)
     pub(crate) blit_pipeline: wgpu::RenderPipeline,
@@ -443,6 +444,7 @@ impl GxRenderer {
             current_scissor: Scissor::default(),
             current_zmode: ZMode::default(),
             current_blend_mode: BlendMode::from_raw(0).with_color_update(true).with_alpha_update(true),
+            current_cull_mode: CullMode::None,
             current_alpha_compare: AlphaCompare::from_raw(0)
                 .with_comp0(CompareFunc::Always)
                 .with_comp1(CompareFunc::Always),

@@ -1,6 +1,5 @@
-use chapa::BitEnum;
-
 use crate::flipper::gx::draw::TextureFormat;
+use chapa::BitEnum;
 
 // GX compare function (shared by Z-mode and alpha compare)
 #[derive(Debug, PartialEq, BitEnum, Hash, Eq)]
@@ -855,6 +854,16 @@ pub struct TevRegisterH {
 pub struct GenMode {
     #[bits(10..=13)]
     pub num_tev_stages: u8, // num stages - 1
+    #[bits(14..=15)]
+    pub cull_mode: CullMode,
+}
+
+#[derive(BitEnum, Debug, PartialEq, Eq, Hash)]
+pub enum CullMode {
+    None = 0,
+    Back = 1,
+    Front = 2,
+    All = 3,
 }
 
 // XF 0x1018 Matrix Index A (position/tex0-3 matrix indices)
@@ -1048,4 +1057,124 @@ pub struct DualTexGenReg {
 
     #[bits(6)]
     pub normalize: bool,
+}
+
+// BP 0x49 BPMEM_EFB_TL (EFB copy source top-left)
+#[chapa::bitfield(u32, order = lsb0)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct EfbCopySrc {
+    #[bits(0..=9)]
+    pub left: u16,
+
+    #[bits(10..=19)]
+    pub top: u16,
+}
+
+// BP 0x4A BPMEM_EFB_WH (EFB copy source dimensions, stored as size-1)
+#[chapa::bitfield(u32, order = lsb0)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct EfbCopyDims {
+    #[bits(0..=9)]
+    pub width_minus1: u16,
+
+    #[bits(10..=19)]
+    pub height_minus1: u16,
+}
+
+// BP 0x4B BPMEM_EFB_ADDR (EFB copy destination base address)
+#[chapa::bitfield(u32, order = lsb0)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct EfbCopyDst {
+    #[bits(0..=23)]
+    pub addr_base: u32,
+}
+
+impl EfbCopyDst {
+    /// Physical RAM address (addr_base << 5).
+    pub fn addr(&self) -> u32 {
+        self.addr_base() << 5
+    }
+}
+
+// BP 0x4D BPMEM_EFB_STRIDE (EFB copy destination stride)
+#[chapa::bitfield(u32, order = lsb0)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct EfbCopyDstStride {
+    #[bits(0..=9)]
+    pub stride: u16,
+}
+
+// BP 0x52 BPMEM_TRIGGER_EFB_COPY (PE copy execute/trigger)
+#[chapa::bitfield(u32, order = lsb0)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PeCopyCmd {
+    #[bits(0..=1)]
+    pub clamp: u8,
+
+    #[bits(9)]
+    pub half: bool,
+
+    #[bits(10)]
+    pub scale_invert: bool,
+
+    #[bits(11)]
+    pub clear: bool,
+
+    #[bits(12..=13)]
+    pub frame_to_field: u8,
+
+    #[bits(14)]
+    pub copy_to_xfb: bool,
+}
+
+// BP 0x4F BPMEM_CLEAR_AR (PE clear alpha/red)
+#[chapa::bitfield(u32, order = lsb0)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PeClearAr {
+    #[bits(0..=7)]
+    pub red: u8,
+
+    #[bits(8..=15)]
+    pub alpha: u8,
+}
+
+// BP 0x50 BPMEM_CLEAR_GB (PE clear green/blue)
+#[chapa::bitfield(u32, order = lsb0)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PeClearGb {
+    #[bits(0..=7)]
+    pub blue: u8,
+
+    #[bits(8..=15)]
+    pub green: u8,
+}
+
+// BP 0x51 BPMEM_CLEAR_Z (PE clear depth)
+#[chapa::bitfield(u32, order = lsb0)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PeClearZ {
+    #[bits(0..=23)]
+    pub z: u32,
+}
+
+// BP 0x20/0x21 SU_SCIS_TL / SU_SCIS_BR (scissor rect corner)
+#[chapa::bitfield(u32, order = lsb0)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SuScisRect {
+    #[bits(0..=10)]
+    pub y: u16,
+
+    #[bits(12..=22)]
+    pub x: u16,
+}
+
+// BP 0x59 SU_SCIS_OFFSET (scissor offset, encoded as (val + 342) / 2)
+#[chapa::bitfield(u32, order = lsb0)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SuScisOffset {
+    #[bits(0..=9)]
+    pub x: u16,
+
+    #[bits(10..=19)]
+    pub y: u16,
 }

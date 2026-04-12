@@ -7,8 +7,9 @@ use super::constants::{
     EFB_WIDTH,
 };
 use super::regs::{
-    AlphaCompare, BlendMode, GenMode, TevAlphaEnv, TevColorEnv, TevOrder, TevRegType, TevRegisterH, TevRegisterL,
-    TxSetImage0, TxSetImage3, TxSetMode0, ZMode,
+    AlphaCompare, BlendMode, EfbCopyDims, EfbCopyDst, EfbCopyDstStride, EfbCopySrc, GenMode, PeClearAr, PeClearGb,
+    PeClearZ, PeCopyCmd, SuScisOffset, SuScisRect, TevAlphaEnv, TevColorEnv, TevOrder, TevRegType, TevRegisterH,
+    TevRegisterL, TxSetImage0, TxSetImage3, TxSetMode0, ZMode,
 };
 use super::{GraphicsProcessor, draw};
 use crate::host::{GxAction, RenderSink};
@@ -72,13 +73,14 @@ impl GraphicsProcessor {
             self.load_tev_register(idx, val);
         }
 
-        // GEN_MODE, extract num TEV stages
+        // GEN_MODE, extract num TEV stages + cull mode
         if idx == BP_GEN_MODE {
             let gen_mode = GenMode::from_raw(val);
             let stages = gen_mode.num_tev_stages() + 1;
             tracing::debug!(num_tev_stages = stages, "GEN_MODE");
             self.cur_num_tev_stages = stages;
             self.resolve_konst_colors();
+            renderer.exec(GxAction::SetCullMode(gen_mode.cull_mode()));
         }
 
         // TEV KSEL (constant color selection) registers: recalculate konst colors
@@ -246,42 +248,29 @@ impl GraphicsProcessor {
     }
 
     fn efb_copy(&mut self, renderer: &mut dyn RenderSink, trigger: u32) {
-        // Decode source rect from BP 0x49/0x4A.
-        // BPMEM_EFB_TL (0x49): x in bits 0..10, y in bits 10..20.
-        // BPMEM_EFB_BR (0x4A): width-1 in bits 0..10, height-1 in bits 10..20.
-        let src_reg = self.bp_regs[BP_PE_COPY_SRC];
-        let dims_reg = self.bp_regs[BP_PE_COPY_DIMS];
-        let src_x = src_reg & 0x3FF;
-        let src_y = (src_reg >> 10) & 0x3FF;
-        let src_w = (dims_reg & 0x3FF) + 1;
-        let src_h = ((dims_reg >> 10) & 0x3FF) + 1;
+        let src = EfbCopySrc::from_raw(self.bp_regs[BP_PE_COPY_SRC]);
+        let dims = EfbCopyDims::from_raw(self.bp_regs[BP_PE_COPY_DIMS]);
+        let src_x = src.left() as u32;
+        let src_y = src.top() as u32;
+        let src_w = dims.width_minus1() as u32 + 1;
+        let src_h = dims.height_minus1() as u32 + 1;
 
-        // Destination address (BP 0x4B, shifted left by 5)
-        let dest_addr = (self.bp_regs[BP_PE_COPY_DST] & 0x00FFFFFF) << 5;
-        let dest_stride = self.bp_regs[BP_PE_COPY_DST_STRIDE] & 0x3FF;
+        let dest_addr = EfbCopyDst::from_raw(self.bp_regs[BP_PE_COPY_DST]).addr();
+        let dest_stride = EfbCopyDstStride::from_raw(self.bp_regs[BP_PE_COPY_DST_STRIDE]).stride() as u32;
 
-        // Trigger word bits (PE_COPY_EXECUTE, BP 0x52):
-        //   bit 0-1: clamp
-        //   bit 9: half (1/2 vertical scale)
-        //   bit 10: scale_invert
-        //   bit 11: clear EFB after copy
-        //   bit 12-13: frame-to-field (interlacing)
-        //   bit 14: copy-to-xfb (0 = copy-to-texture)
-        let copy_to_xfb = (trigger >> 14) & 1 != 0;
-        let clear = (trigger >> 11) & 1 != 0;
-        let half = (trigger >> 9) & 1 != 0;
+        let cmd = PeCopyCmd::from_raw(trigger);
+        let copy_to_xfb = cmd.copy_to_xfb();
+        let clear = cmd.clear();
+        let half = cmd.half();
 
-        // Clear color from BP 0x4F/0x50
-        let clear_ar = self.bp_regs[BP_PE_COPY_CLEAR_AR];
-        let clear_gb = self.bp_regs[BP_PE_COPY_CLEAR_GB];
-        let a = ((clear_ar >> 8) & 0xFF) as f32 / 255.0;
-        let r = (clear_ar & 0xFF) as f32 / 255.0;
-        let g = ((clear_gb >> 8) & 0xFF) as f32 / 255.0;
-        let b = (clear_gb & 0xFF) as f32 / 255.0;
+        let clear_ar = PeClearAr::from_raw(self.bp_regs[BP_PE_COPY_CLEAR_AR]);
+        let clear_gb = PeClearGb::from_raw(self.bp_regs[BP_PE_COPY_CLEAR_GB]);
+        let a = clear_ar.alpha() as f32 / 255.0;
+        let r = clear_ar.red() as f32 / 255.0;
+        let g = clear_gb.green() as f32 / 255.0;
+        let b = clear_gb.blue() as f32 / 255.0;
 
-        // Clear Z from BP 0x51
-        let clear_z_raw = self.bp_regs[BP_PE_COPY_CLEAR_Z] & 0x00FFFFFF;
-        let clear_z = clear_z_raw as f32 / 16777215.0;
+        let clear_z = PeClearZ::from_raw(self.bp_regs[BP_PE_COPY_CLEAR_Z]).z() as f32 / 16777215.0;
 
         tracing::debug!(
             src_x,
@@ -334,13 +323,13 @@ impl GraphicsProcessor {
     }
 
     fn recompute_scissor(&mut self) {
-        let tl = self.bp_regs[BP_SU_SCIS_TL];
-        let br = self.bp_regs[BP_SU_SCIS_BR];
+        let tl = SuScisRect::from_raw(self.bp_regs[BP_SU_SCIS_TL]);
+        let br = SuScisRect::from_raw(self.bp_regs[BP_SU_SCIS_BR]);
 
-        let tl_y = (tl & 0x7FF) as i32 - 342;
-        let tl_x = ((tl >> 12) & 0x7FF) as i32 - 342;
-        let br_y = (br & 0x7FF) as i32 - 342 + 1; // BR is inclusive
-        let br_x = ((br >> 12) & 0x7FF) as i32 - 342 + 1;
+        let tl_x = tl.x() as i32 - 342;
+        let tl_y = tl.y() as i32 - 342;
+        let br_x = br.x() as i32 - 342 + 1; // BR is inclusive
+        let br_y = br.y() as i32 - 342 + 1;
 
         // BP_SU_SCIS_OFFSET shifts the scissor (and viewport) origin in the
         // EFB. Games use it for tiled rendering: the logical scissor stays
@@ -364,13 +353,8 @@ impl GraphicsProcessor {
     }
 
     fn recompute_scissor_offset(&mut self) {
-        // BP_SU_SCIS_OFFSET layout:
-        //   bits 0..10: (x + 342) / 2
-        //   bits 10..20: (y + 342) / 2
-        let raw = self.bp_regs[BP_SU_SCIS_OFFSET];
-        let raw_x = (raw & 0x3FF) as i32;
-        let raw_y = ((raw >> 10) & 0x3FF) as i32;
-        self.cur_scissor_offset_x = raw_x * 2 - 342;
-        self.cur_scissor_offset_y = raw_y * 2 - 342;
+        let reg = SuScisOffset::from_raw(self.bp_regs[BP_SU_SCIS_OFFSET]);
+        self.cur_scissor_offset_x = reg.x() as i32 * 2 - 342;
+        self.cur_scissor_offset_y = reg.y() as i32 * 2 - 342;
     }
 }
