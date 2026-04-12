@@ -110,6 +110,15 @@ pub struct GxRenderer {
     pub(crate) scratch_draws: Vec<(u32, u32)>,
     pub(crate) scratch_uniform_bytes: Vec<u8>,
     pub(crate) bind_group_cache: HashMap<BindGroupCacheKey, wgpu::BindGroup>,
+    // Per-frame draw accumulation (persists across process_action calls,
+    // flushed by flush_pending_draws).
+    pub(crate) frame_uniform_bytes: Vec<u8>,
+    pub(crate) draw_pipeline_keys: Vec<PipelineKey>,
+    pub(crate) draw_bg_keys: Vec<BindGroupCacheKey>,
+    pub(crate) draw_viewports: Vec<Viewport>,
+    pub(crate) draw_scissors: Vec<Scissor>,
+    pub(crate) frame_stride: usize,
+    pub(crate) frame_encase_size: usize,
     // Tracked GX state (updated by state-change actions)
     pub(crate) current_projection: Mat4,
     pub(crate) current_viewport: Viewport,
@@ -120,10 +129,6 @@ pub struct GxRenderer {
     pub(crate) current_cull_mode: CullMode,
     pub(crate) current_texture_ids: [Option<TextureId>; 8],
     pub(crate) current_sampler_keys: [Option<SamplerKey>; 8],
-    // Blit pipeline (EFB -> swapchain)
-    pub(crate) blit_pipeline: wgpu::RenderPipeline,
-    pub(crate) blit_bind_group_layout: wgpu::BindGroupLayout,
-    pub(crate) blit_sampler: wgpu::Sampler,
     // XFB output texture: composited from per-copy snapshots by PresentXfb.
     pub(crate) xfb_texture: wgpu::Texture,
     pub(crate) xfb_view: wgpu::TextureView,
@@ -337,72 +342,6 @@ impl GxRenderer {
         });
         let xfb_view = xfb_texture.create_view(&Default::default());
 
-        // Blit pipeline EFB -> swapchain shit
-        let blit_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("efb_blit_shader"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/efb_blit.wgsl").into()),
-        });
-        let blit_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("efb_blit_bg_layout"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                    count: None,
-                },
-            ],
-        });
-        let blit_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: None,
-            bind_group_layouts: &[&blit_bind_group_layout],
-            immediate_size: 0,
-        });
-        let blit_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("efb_blit_pipeline"),
-            layout: Some(&blit_layout),
-            vertex: wgpu::VertexState {
-                module: &blit_shader,
-                entry_point: Some("vs_main"),
-                buffers: &[],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &blit_shader,
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: surface_format,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                ..Default::default()
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
-        });
-        let blit_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("efb_blit_sampler"),
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            ..Default::default()
-        });
-
         let efb_clear = clear::EfbClear::new(
             device,
             surface_format,
@@ -438,6 +377,16 @@ impl GxRenderer {
             scratch_draws: Vec::new(),
             scratch_uniform_bytes: Vec::new(),
             bind_group_cache: HashMap::new(),
+            frame_uniform_bytes: Vec::new(),
+            draw_pipeline_keys: Vec::new(),
+            draw_bg_keys: Vec::new(),
+            draw_viewports: Vec::new(),
+            draw_scissors: Vec::new(),
+            frame_stride: align_up(
+                FrameUniforms::min_size().get(),
+                device.limits().min_uniform_buffer_offset_alignment as u64,
+            ) as usize,
+            frame_encase_size: FrameUniforms::min_size().get() as usize,
             current_projection: Mat4::IDENTITY,
             current_viewport: Viewport::default(),
             current_scissor: Scissor::default(),
@@ -449,9 +398,6 @@ impl GxRenderer {
                 .with_comp1(CompareFunc::Always),
             current_texture_ids: Default::default(),
             current_sampler_keys: Default::default(),
-            blit_pipeline,
-            blit_bind_group_layout,
-            blit_sampler,
             xfb_texture,
             xfb_view,
             xfb_has_content: false,

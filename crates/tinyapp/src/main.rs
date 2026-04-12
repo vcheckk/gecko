@@ -101,10 +101,28 @@ fn main() {
         ..PadStatus::default()
     });
 
-    // Create the action-stream channel and install the renderer sink on the
-    // emulator so GX actions flow through automatically.
-    let (renderer, action_rx) = backend_wgpu::sink::channel();
-    emulator.render_sink = Box::new(renderer);
+    let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+        backends: wgpu::Backends::all(),
+        ..Default::default()
+    });
+
+    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+        power_preference: wgpu::PowerPreference::default(),
+        compatible_surface: None,
+        force_fallback_adapter: false,
+    }))
+    .expect("no compatible wgpu adapter");
+
+    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
+        .expect("failed to acquire wgpu device");
+
+    let surface_format = wgpu::TextureFormat::Bgra8Unorm;
+
+    // Create the renderer (spawns the worker thread internally).
+    let renderer = backend_wgpu::sink::Renderer::new(device.clone(), queue.clone(), surface_format);
+
+    // Install the renderer as the emulator's render sink.
+    emulator.render_sink = Box::new(renderer.clone());
 
     let input = Arc::new(Mutex::new(*emulator.primary_controller_mut()));
 
@@ -118,13 +136,21 @@ fn main() {
         .name("emu".into())
         .spawn(move || thread::emu_thread(emulator, frame_tx, emu_input, proxy))
         .expect("failed to spawn emulator thread");
+
     let mut app = app::App {
         frame_rx,
-        action_rx: Some(action_rx),
         input,
         window: None,
         state: None,
         present_mode,
+        init: Some(app::AppInit {
+            instance,
+            adapter,
+            device,
+            queue,
+            renderer,
+            surface_format,
+        }),
     };
     event_loop.run_app(&mut app).unwrap();
 }

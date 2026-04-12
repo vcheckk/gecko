@@ -5,7 +5,6 @@ use std::time::Instant;
 use crossbeam_channel::Receiver;
 use egui::ViewportId;
 use gecko::flipper::si::pad::PadStatus;
-use gecko::host::GxAction;
 use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
 use winit::event_loop::ActiveEventLoop;
@@ -20,10 +19,8 @@ pub struct State {
     surface_config: wgpu::SurfaceConfiguration,
     device: wgpu::Device,
     queue: wgpu::Queue,
-    gx_renderer: backend_wgpu::GxRenderer,
-    action_rx: backend_wgpu::sink::ActionReceiver,
-    action_buf: Vec<GxAction>,
-    // egui overlay
+    renderer: backend_wgpu::sink::Renderer,
+
     egui_ctx: egui::Context,
     egui_renderer: egui_wgpu::Renderer,
     egui_winit: egui_winit::State,
@@ -36,48 +33,15 @@ pub struct State {
 impl State {
     pub fn new(
         window: Arc<Window>,
-        present_mode: wgpu::PresentMode,
-        action_rx: backend_wgpu::sink::ActionReceiver,
+        device: wgpu::Device,
+        queue: wgpu::Queue,
+        surface: wgpu::Surface<'static>,
+        surface_config: wgpu::SurfaceConfiguration,
+        renderer: backend_wgpu::sink::Renderer,
     ) -> Self {
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::all(),
-            ..Default::default()
-        });
-
-        let surface = instance.create_surface(window.clone()).unwrap();
-
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::default(),
-            compatible_surface: Some(&surface),
-            force_fallback_adapter: false,
-        }))
-        .unwrap();
-
-        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).unwrap();
-
-        let size = window.inner_size();
-        let surface_caps = surface.get_capabilities(&adapter);
-
-        let gx_renderer = backend_wgpu::GxRenderer::new(&device, &queue, wgpu::TextureFormat::Bgra8Unorm);
-
-        let surface_config = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_DST,
-            format: wgpu::TextureFormat::Bgra8Unorm,
-            width: size.width.max(1),
-            height: size.height.max(1),
-            present_mode,
-            alpha_mode: surface_caps.alpha_modes[0],
-            view_formats: vec![],
-            desired_maximum_frame_latency: 2,
-        };
-        surface.configure(&device, &surface_config);
-
         let egui_ctx = egui::Context::default();
-        let egui_renderer = egui_wgpu::Renderer::new(
-            &device,
-            wgpu::TextureFormat::Bgra8Unorm,
-            egui_wgpu::RendererOptions::default(),
-        );
+        let egui_renderer =
+            egui_wgpu::Renderer::new(&device, surface_config.format, egui_wgpu::RendererOptions::default());
         let egui_winit = egui_winit::State::new(egui_ctx.clone(), ViewportId::ROOT, window.as_ref(), None, None, None);
 
         State {
@@ -85,9 +49,7 @@ impl State {
             surface_config,
             device,
             queue,
-            gx_renderer,
-            action_rx,
-            action_buf: Vec::new(),
+            renderer,
             egui_ctx,
             egui_renderer,
             egui_winit,
@@ -110,7 +72,7 @@ impl State {
     fn render(&mut self, frame_rx: &Receiver<FrameMessage>, window: &Window) {
         let mut msg: Option<FrameMessage> = None;
         while let Ok(newer) = frame_rx.try_recv() {
-            msg = Some(newer); // drain
+            msg = Some(newer);
         }
 
         let Some(msg) = msg else { return };
@@ -136,18 +98,8 @@ impl State {
         };
         let view = frame.texture.create_view(&Default::default());
 
-        self.action_buf.clear();
-        self.action_rx.drain(&mut self.action_buf);
-
-        // Drive the GX renderer with any queued actions (draws into its EFB
-        // and updates the snapshot on CopyEfb).
-        if !self.action_buf.is_empty() {
-            self.gx_renderer
-                .render_actions(&self.device, &self.queue, &self.action_buf);
-        }
-
-        // Blit the latest EFB snapshot to the swapchain.
-        self.gx_renderer.blit_to_target(&self.device, &self.queue, &view);
+        // Blit the latest XFB output from the renderer worker to the swapchain.
+        self.renderer.blit(&self.queue, &view);
 
         // egui overlay
         let raw_input = self.egui_winit.take_egui_input(window);
@@ -231,17 +183,22 @@ impl State {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Winit application handler
-// ---------------------------------------------------------------------------
-
 pub struct App {
     pub frame_rx: Receiver<FrameMessage>,
-    pub action_rx: Option<backend_wgpu::sink::ActionReceiver>,
     pub input: Arc<Mutex<PadStatus>>,
     pub window: Option<Arc<Window>>,
     pub state: Option<State>,
     pub present_mode: wgpu::PresentMode,
+    pub init: Option<AppInit>,
+}
+
+pub struct AppInit {
+    pub instance: wgpu::Instance,
+    pub adapter: wgpu::Adapter,
+    pub device: wgpu::Device,
+    pub queue: wgpu::Queue,
+    pub renderer: backend_wgpu::sink::Renderer,
+    pub surface_format: wgpu::TextureFormat,
 }
 
 impl ApplicationHandler for App {
@@ -252,8 +209,34 @@ impl ApplicationHandler for App {
                 .unwrap(),
         );
 
-        let action_rx = self.action_rx.take().expect("action_rx consumed twice");
-        let state = State::new(window.clone(), self.present_mode, action_rx);
+        let Some(init) = self.init.take() else {
+            self.window = Some(window);
+            return;
+        };
+
+        let surface = init.instance.create_surface(window.clone()).unwrap();
+        let size = window.inner_size();
+        let surface_caps = surface.get_capabilities(&init.adapter);
+        let surface_config = wgpu::SurfaceConfiguration {
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_DST,
+            format: init.surface_format,
+            width: size.width.max(1),
+            height: size.height.max(1),
+            present_mode: self.present_mode,
+            alpha_mode: surface_caps.alpha_modes[0],
+            view_formats: vec![],
+            desired_maximum_frame_latency: 2,
+        };
+        surface.configure(&init.device, &surface_config);
+
+        let state = State::new(
+            window.clone(),
+            init.device,
+            init.queue,
+            surface,
+            surface_config,
+            init.renderer,
+        );
         window.request_redraw();
         self.window = Some(window);
         self.state = Some(state);

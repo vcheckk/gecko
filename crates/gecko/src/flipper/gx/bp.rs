@@ -183,7 +183,7 @@ impl GraphicsProcessor {
                 id,
                 width,
                 height,
-                rgba: texture::decode_to_rgba(ram, &desc)
+                rgba: texture::decode_to_rgba(ram, &desc),
             });
         }
 

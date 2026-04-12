@@ -1,43 +1,185 @@
+use crate::GxRenderer;
 use crossbeam_channel::{Receiver, Sender, bounded};
 use gecko::host::{GxAction, RenderSink};
+use std::sync::{Arc, Mutex};
 
-/// Capacity of the action channel. Must be large enough to hold at least
-/// two full frames of actions without dropping. Complex scenes (IPL cube
-/// menu) can emit 4000+ draw calls per frame.
-const CHANNEL_CAPACITY: usize = 65536;
+const CHANNEL_CAPACITY: usize = 8192;
 
+/// Holds the XFB output texture view that the worker updates and the main
+/// thread reads for blitting.
+pub struct Shared {
+    pub output: Mutex<wgpu::TextureView>,
+}
+
+fn worker(mut gx: GxRenderer, device: wgpu::Device, queue: wgpu::Queue, shared: Arc<Shared>, rx: Receiver<GxAction>) {
+    while let Ok(action) = rx.recv() {
+        gx.process_action(&device, &queue, &action);
+
+        // After a PresentXfb, update the shared output so the main thread
+        // picks up the latest composited frame on its next blit.
+        if matches!(action, GxAction::PresentXfb { .. }) {
+            let mut output = shared.output.lock().unwrap();
+            *output = gx.xfb_view.clone();
+        }
+    }
+}
+
+#[derive(Clone)]
 pub struct Renderer {
     tx: Sender<GxAction>,
+    shared: Arc<Shared>,
+    device: wgpu::Device,
+    blit_pipeline: wgpu::RenderPipeline,
+    blit_bind_group_layout: wgpu::BindGroupLayout,
+    blit_sampler: wgpu::Sampler,
 }
 
-pub struct ActionReceiver {
-    rx: Receiver<GxAction>,
-}
+impl Renderer {
+    /// Create the renderer, spawning the worker thread. The caller must
+    /// provide a wgpu device and queue.
+    pub fn new(device: wgpu::Device, queue: wgpu::Queue, surface_format: wgpu::TextureFormat) -> Self {
+        let gx = GxRenderer::new(&device, &queue, surface_format);
 
-pub fn channel() -> (Renderer, ActionReceiver) {
-    let (tx, rx) = bounded(CHANNEL_CAPACITY);
-    (Renderer { tx }, ActionReceiver { rx })
+        // Initial shared output: the XFB view (black until first PresentXfb).
+        let shared = Arc::new(Shared {
+            output: Mutex::new(gx.xfb_view.clone()),
+        });
+
+        // Build the blit pipeline on the main-thread side.
+        let blit_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("efb_blit_shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/efb_blit.wgsl").into()),
+        });
+        let blit_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("blit_bgl"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+        let blit_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: None,
+            bind_group_layouts: &[&blit_bind_group_layout],
+            immediate_size: 0,
+        });
+        let blit_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("blit_pipeline"),
+            layout: Some(&blit_layout),
+            vertex: wgpu::VertexState {
+                module: &blit_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &blit_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: surface_format,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                ..Default::default()
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        });
+        let blit_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("blit_sampler"),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+
+        let (tx, rx) = bounded(CHANNEL_CAPACITY);
+
+        // Spawn the worker.
+        let worker_shared = shared.clone();
+        let worker_device = device.clone();
+        let worker_queue = queue.clone();
+        std::thread::Builder::new()
+            .name("gx-renderer".into())
+            .spawn(move || worker(gx, worker_device, worker_queue, worker_shared, rx))
+            .expect("failed to spawn renderer worker");
+
+        Renderer {
+            tx,
+            shared,
+            device,
+            blit_pipeline,
+            blit_bind_group_layout,
+            blit_sampler,
+        }
+    }
+
+    /// Blit the latest XFB output to the given render target. Called by the
+    /// main thread on each redraw.
+    pub fn blit(&self, queue: &wgpu::Queue, target: &wgpu::TextureView) {
+        let output = self.shared.output.lock().unwrap();
+        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("blit_bg"),
+            layout: &self.blit_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&output),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.blit_sampler),
+                },
+            ],
+        });
+        drop(output);
+
+        let mut encoder = self.device.create_command_encoder(&Default::default());
+        {
+            let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("xfb_blit"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: target,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                    depth_slice: None,
+                })],
+                depth_stencil_attachment: None,
+                occlusion_query_set: None,
+                timestamp_writes: None,
+                multiview_mask: None,
+            });
+            rpass.set_pipeline(&self.blit_pipeline);
+            rpass.set_bind_group(0, &bind_group, &[]);
+            rpass.draw(0..3, 0..1);
+        }
+        queue.submit([encoder.finish()]);
+    }
 }
 
 impl RenderSink for Renderer {
     fn exec(&mut self, action: GxAction) {
-        // If the channel is full we drop the action rather than blocking the
-        // CPU thread.  In practice, the main thread should drain fast enough.
-        let _ = self.tx.try_send(action);
-    }
-}
-
-impl ActionReceiver {
-    /// Drain all pending actions into the provided buffer.
-    pub fn drain(&self, buf: &mut Vec<GxAction>) {
-        while let Ok(action) = self.rx.try_recv() {
-            buf.push(action);
-        }
-    }
-
-    /// Returns `true` when the emulator-side sender has been dropped.
-    pub fn is_disconnected(&self) -> bool {
-        // try_recv returning Disconnected means all senders are gone.
-        matches!(self.rx.try_recv(), Err(crossbeam_channel::TryRecvError::Disconnected))
+        let _ = self.tx.send(action);
     }
 }

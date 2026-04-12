@@ -245,55 +245,6 @@ impl GxRenderer {
         self.xfb_has_content = true;
     }
 
-    /// Blit the composited XFB output to the swapchain target. Falls back
-    /// to the live EFB if no XFB content has been produced yet.
-    pub fn blit_to_target(&self, device: &wgpu::Device, queue: &wgpu::Queue, target: &wgpu::TextureView) {
-        let source_view = if self.xfb_has_content {
-            &self.xfb_view
-        } else {
-            &self.efb_view
-        };
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("efb_blit_bg"),
-            layout: &self.blit_bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(source_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&self.blit_sampler),
-                },
-            ],
-        });
-
-        let mut encoder = device.create_command_encoder(&Default::default());
-        {
-            let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("efb_blit"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: target,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                        store: wgpu::StoreOp::Store,
-                    },
-                    depth_slice: None,
-                })],
-                depth_stencil_attachment: None,
-                occlusion_query_set: None,
-                timestamp_writes: None,
-                multiview_mask: None,
-            });
-            rpass.set_pipeline(&self.blit_pipeline);
-            rpass.set_bind_group(0, &bind_group, &[]);
-            rpass.draw(0..3, 0..1);
-        }
-
-        queue.submit([encoder.finish()]);
-    }
-
     fn ensure_draw_capacity(&mut self, device: &wgpu::Device, count: usize) {
         if count <= self.draw_uniform_capacity {
             return;
