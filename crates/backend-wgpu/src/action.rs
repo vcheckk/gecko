@@ -145,9 +145,8 @@ impl GxRenderer {
                     return;
                 }
 
-                // Build per-draw uniform (MVP) using tracked projection.
-                let modelview = Mat4::from_cols_array_2d(&draw.modelview);
-                let mvp = self.current_projection * modelview;
+                // Build per-draw uniform using tracked projection.
+                let mvp = self.current_projection;
                 let draw_uniform = DrawUniforms { mvp };
 
                 let start = self.scratch_draws.len() * draw_stride;

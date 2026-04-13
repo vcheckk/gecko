@@ -119,7 +119,7 @@ impl GraphicsProcessor {
                 color0: v.color0,
                 color1: v.color1,
                 pos_view: v.pos_view,
-                texcoords: std::array::from_fn(|i| v.texcoords[i].unwrap_or([0.0, 0.0])),
+                texcoords: std::array::from_fn(|i| v.texcoords[i].unwrap_or([0.0, 0.0, 1.0])),
             })
             .collect();
 
@@ -441,14 +441,16 @@ impl GraphicsProcessor {
         let pos_view = self.xf_transform_3x4(pos_mtx_base, position);
 
         // Texture coordinate generation (XF texgen)
+        // compute_texgen now returns [f32; 3] (s, t, q) with perspective
+        // divide deferred to the fragment shader.
         let num_texgens = (self.xf_mem[XF_NUM_TEXGENS] as usize).min(8);
-        let mut texcoords: [Option<[f32; 2]>; 8] = [None; 8];
+        let mut texcoords: [Option<[f32; 3]>; 8] = [None; 8];
         for tg_idx in 0..num_texgens {
             texcoords[tg_idx] = Some(self.compute_texgen(tg_idx, position, normal, &raw_texcoords, &tex_mtx_idx));
         }
-        // For texcoords beyond num_texgens, pass through raw values
+        // For texcoords beyond num_texgens, pass through raw values with q=1
         for tg_idx in num_texgens..8 {
-            texcoords[tg_idx] = raw_texcoords[tg_idx];
+            texcoords[tg_idx] = raw_texcoords[tg_idx].map(|st| [st[0], st[1], 1.0]);
         }
 
         tracing::debug!(

@@ -11,7 +11,7 @@ fn extract_bits(val: u32, lo: u32, width: u32) -> u32 {
     return (val >> lo) & ((1u << width) - 1u);
 }
 
-fn select_texcoord(in: VsOut, idx: u32) -> vec2<f32> {
+fn select_texcoord(in: VsOut, idx: u32) -> vec3<f32> {
     switch idx {
         case 0u: { return in.uv0; }
         case 1u: { return in.uv1; }
@@ -23,6 +23,17 @@ fn select_texcoord(in: VsOut, idx: u32) -> vec2<f32> {
         case 7u: { return in.uv7; }
         default: { return in.uv0; }
     }
+}
+
+// Perform the perspective divide on 3-component (s, t, q) texcoords.
+// For non-projective texcoords q == 1 and the divide is a no-op.
+// The q == 0 special case was already handled on the CPU (values are
+// clamped, so we use them directly).
+fn stq_to_uv(stq: vec3<f32>) -> vec2<f32> {
+    if abs(stq.z) < 0.00001 {
+        return stq.xy;
+    }
+    return stq.xy / stq.z;
 }
 
 fn sample_texmap(texmap: u32, uv: vec2<f32>) -> vec4<f32> {

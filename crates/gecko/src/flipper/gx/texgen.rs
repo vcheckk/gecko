@@ -10,7 +10,7 @@ impl GraphicsProcessor {
         normal: [f32; 3],
         raw_texcoords: &[Option<[f32; 2]>; 8],
         tex_mtx_indices: &[u8; 8],
-    ) -> [f32; 2] {
+    ) -> [f32; 3] {
         let tg = TexGenReg::from_raw(self.xf_mem[XF_TEXGEN_BASE + texgen_idx]);
         let dt = DualTexGenReg::from_raw(self.xf_mem[XF_DUALTEX_BASE + texgen_idx]);
 
@@ -32,11 +32,17 @@ impl GraphicsProcessor {
         // Dual texgen post-transform (normalization + post-matrix multiply)
         let (s, t, q) = self.apply_dual_texgen(s, t, q, &dt);
 
-        // When q is 0, the GameCube has a special case (Dolphin VertexShaderGen.cpp)
+        // Return (s, t, q) as a 3-component vector. The perspective divide
+        // (s/q, t/q) is deferred to the fragment shader so the rasterizer
+        // can perform correct perspective-correct interpolation.
+        //
+        // When q is 0, the GameCube uses a special path (Dolphin
+        // VertexShaderGen.cpp): clamp(xy / 2, -1, 1) with q set to 0.
+        // The fragment shader checks for q~=0 and uses xy directly.
         if q.abs() < f32::EPSILON {
-            [(s / 2.0).clamp(-1.0, 1.0), (t / 2.0).clamp(-1.0, 1.0)]
+            [(s / 2.0).clamp(-1.0, 1.0), (t / 2.0).clamp(-1.0, 1.0), 0.0]
         } else {
-            [s / q, t / q]
+            [s, t, q]
         }
     }
 

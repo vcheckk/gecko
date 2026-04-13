@@ -108,7 +108,7 @@ pub struct DrawVertex {
     pub color0: [f32; 4],
     pub color1: [f32; 4],
     pub pos_view: [f32; 3],
-    pub texcoords: [[f32; 2]; 8],
+    pub texcoords: [[f32; 3]; 8],
 }
 
 /// Per-light snapshot for the draw call.

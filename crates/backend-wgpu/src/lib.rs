@@ -21,14 +21,14 @@ pub(crate) struct GpuVertex {
     pub color1: [f32; 4],
     pub normal: [f32; 3],
     pub pos_view: [f32; 3],
-    pub tex0: [f32; 2],
-    pub tex1: [f32; 2],
-    pub tex2: [f32; 2],
-    pub tex3: [f32; 2],
-    pub tex4: [f32; 2],
-    pub tex5: [f32; 2],
-    pub tex6: [f32; 2],
-    pub tex7: [f32; 2],
+    pub tex0: [f32; 3],
+    pub tex1: [f32; 3],
+    pub tex2: [f32; 3],
+    pub tex3: [f32; 3],
+    pub tex4: [f32; 3],
+    pub tex5: [f32; 3],
+    pub tex6: [f32; 3],
+    pub tex7: [f32; 3],
 }
 
 pub(crate) fn align_up(value: u64, alignment: u64) -> u64 {

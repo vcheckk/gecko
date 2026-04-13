@@ -39,7 +39,7 @@ pub struct Vertex {
     pub color1: [f32; 4],
     pub normal: [f32; 3],
     pub pos_view: [f32; 3],
-    pub texcoords: [Option<[f32; 2]>; 8],
+    pub texcoords: [Option<[f32; 3]>; 8],
 }
 
 #[derive(BitEnum, Debug, PartialEq, Eq, Hash)]

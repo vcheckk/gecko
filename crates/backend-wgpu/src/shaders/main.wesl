@@ -1,5 +1,5 @@
 import super::common::{FrameUniforms, DrawUniforms, VsIn, VsOut, frame, draw, tex0, tex1, tex2, tex3, tex4, tex5, tex6, tex7, samp0, samp1, samp2, samp3, samp4, samp5, samp6, samp7};
-import super::tev_helpers::{read_packed, extract_bits, select_texcoord, sample_texmap, tev_color_in, tev_alpha_in};
+import super::tev_helpers::{read_packed, extract_bits, select_texcoord, stq_to_uv, sample_texmap, tev_color_in, tev_alpha_in};
 import super::tev_combiners::{tev_combine_color, tev_combine_alpha};
 import super::alpha_test::{alpha_compare, alpha_combine};
 import super::lighting::compute_channel_lighting;
@@ -7,9 +7,9 @@ import super::lighting::compute_channel_lighting;
 @vertex
 fn vs_main(in: VsIn) -> VsOut {
     var out: VsOut;
-    out.clip_pos = draw.mvp * vec4<f32>(in.position, 1.0);
-    // Remap depth: GameCube/OpenGL uses [-1,1], wgpu uses [0,1]
-    out.clip_pos.z = out.clip_pos.z * 0.5 + out.clip_pos.w * 0.5;
+    out.clip_pos = draw.mvp * vec4<f32>(in.pos_view, 1.0);
+    // Remap depth: GameCube z is [-1,0], wgpu uses [0,1]
+    out.clip_pos.z = out.clip_pos.z + out.clip_pos.w;
     out.color = compute_channel_lighting(
         frame.color_ctrl0, frame.alpha_ctrl0,
         frame.ambient_color0, frame.material_color0,
@@ -75,7 +75,8 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
 
         var tex_color: vec4<f32>;
         if tex_enabled {
-            let uv = select_texcoord(in, texcoord_idx);
+            let stq = select_texcoord(in, texcoord_idx);
+            let uv = stq_to_uv(stq);
             tex_color = sample_texmap(texmap_idx, uv);
         } else {
             tex_color = vec4<f32>(1.0, 1.0, 1.0, 1.0);
