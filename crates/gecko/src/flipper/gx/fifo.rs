@@ -1,4 +1,7 @@
-use super::constants::{BP_CMD, CALL_DL_CMD, CP_CMD, INV_VTX_CACHE_CMD, NOP_CMD, XF_CMD};
+use super::constants::{
+    ARRAY_LIGHT, ARRAY_NRM_MTX, ARRAY_POS_NRM_MTX, ARRAY_POST_MTX, BP_CMD, CALL_DL_CMD, CP_CMD, INV_VTX_CACHE_CMD,
+    LOAD_INDX_A_CMD, LOAD_INDX_B_CMD, LOAD_INDX_C_CMD, LOAD_INDX_D_CMD, NOP_CMD, XF_CMD,
+};
 use crate::flipper::gx::GraphicsProcessor;
 use crate::flipper::gx::constants::{
     DRAW_COMMANDS_END, DRAW_COMMANDS_START, VATA_REG, VATB_REG, VATC_REG, VCD_HI_REG, VCD_LO_REG,
@@ -93,6 +96,35 @@ impl GraphicsProcessor {
                     cur.read_exact(&mut data).unwrap();
                     cmds.push(FifoCmd::Bp(data));
                 }
+                LOAD_INDX_A_CMD | LOAD_INDX_B_CMD | LOAD_INDX_C_CMD | LOAD_INDX_D_CMD => {
+                    // 4 bytes payload: 2-byte index + 2-byte descriptor
+                    if remaining < 5 {
+                        cur.set_position(pos as u64);
+                        break;
+                    }
+                    let mut payload = [0u8; 4];
+                    cur.read_exact(&mut payload).unwrap();
+
+                    let index = u16::from_be_bytes([payload[0], payload[1]]);
+                    let descriptor = u16::from_be_bytes([payload[2], payload[3]]);
+                    let xf_addr = descriptor & 0x0FFF;
+                    let xf_count = ((descriptor >> 12) & 0xF) as u8 + 1;
+
+                    let cp_array_index = match cmd {
+                        LOAD_INDX_A_CMD => ARRAY_POS_NRM_MTX,
+                        LOAD_INDX_B_CMD => ARRAY_NRM_MTX,
+                        LOAD_INDX_C_CMD => ARRAY_POST_MTX,
+                        LOAD_INDX_D_CMD => ARRAY_LIGHT,
+                        _ => unreachable!(),
+                    } as u8;
+
+                    cmds.push(FifoCmd::LoadIndexedXf {
+                        cp_array_index,
+                        index,
+                        xf_addr,
+                        xf_count,
+                    });
+                }
                 DRAW_COMMANDS_START..=DRAW_COMMANDS_END => {
                     // [count_hi] [count_lo] [vertex_0_data...] ...
                     if remaining < 3 {
@@ -165,6 +197,15 @@ pub enum FifoCmd {
     Cp([u8; 5]),
     Xf(Vec<u8>),
     Bp([u8; 4]),
-    CallDisplayList { phys_addr: u32, nbytes: u32 },
+    LoadIndexedXf {
+        cp_array_index: u8,
+        index: u16,
+        xf_addr: u16,
+        xf_count: u8,
+    },
+    CallDisplayList {
+        phys_addr: u32,
+        nbytes: u32,
+    },
     DrawCall(u8, Vec<u8>),
 }

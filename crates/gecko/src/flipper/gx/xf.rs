@@ -1,6 +1,7 @@
 use super::constants::{
-    DEPTH_24_BIT_MAX, XF_PROJECTION_BASE, XF_PROJECTION_END, XF_VIEWPORT_BASE, XF_VIEWPORT_END, XF_VIEWPORT_OFFSET_X,
-    XF_VIEWPORT_OFFSET_Y, XF_VIEWPORT_OFFSET_Z, XF_VIEWPORT_SCALE_X, XF_VIEWPORT_SCALE_Y, XF_VIEWPORT_SCALE_Z,
+    ARRAY_BASE_REG, ARRAY_STRIDE_REG, DEPTH_24_BIT_MAX, XF_PROJECTION_BASE, XF_PROJECTION_END, XF_VIEWPORT_BASE,
+    XF_VIEWPORT_END, XF_VIEWPORT_OFFSET_X, XF_VIEWPORT_OFFSET_Y, XF_VIEWPORT_OFFSET_Z, XF_VIEWPORT_SCALE_X,
+    XF_VIEWPORT_SCALE_Y, XF_VIEWPORT_SCALE_Z,
 };
 use super::math::Vec3;
 use super::{GraphicsProcessor, draw};
@@ -130,6 +131,52 @@ impl GraphicsProcessor {
 
         // Rebuild viewport if the write touched its address range
         if addr <= XF_VIEWPORT_END && end > XF_VIEWPORT_BASE {
+            self.rebuild_viewport();
+            renderer.exec(GxAction::SetViewport(self.cur_viewport));
+        }
+    }
+
+    #[inline(always)]
+    pub fn load_indexed_xf(
+        &mut self,
+        renderer: &mut dyn RenderSink,
+        ram: &[u8],
+        cp_array_index: u8,
+        index: u16,
+        xf_addr: u16,
+        xf_count: u8,
+    ) {
+        let arr_idx = cp_array_index as usize;
+        let base = (self.cp_regs[ARRAY_BASE_REG + arr_idx] & 0x3FFFFFFF) as usize;
+        let stride = self.cp_regs[ARRAY_STRIDE_REG + arr_idx] as usize;
+        let src_addr = base + (index as usize) * stride;
+        let dst_addr = xf_addr as usize;
+        let n = xf_count as usize;
+        let end = dst_addr + n;
+
+        for i in 0..n {
+            let ram_offset = src_addr + i * 4;
+            let val = u32::from_be_bytes([
+                ram[ram_offset],
+                ram[ram_offset + 1],
+                ram[ram_offset + 2],
+                ram[ram_offset + 3],
+            ]);
+            let reg = dst_addr + i;
+            if reg < self.xf_mem.len() {
+                self.xf_mem[reg] = val;
+            }
+        }
+
+        if dst_addr <= XF_PROJECTION_END && end > XF_PROJECTION_BASE {
+            self.rebuild_projection();
+            renderer.exec(GxAction::SetProjection {
+                matrix: self.projection.0,
+                is_perspective: self.xf_mem[XF_PROJECTION_END] == 0,
+            });
+        }
+
+        if dst_addr <= XF_VIEWPORT_END && end > XF_VIEWPORT_BASE {
             self.rebuild_viewport();
             renderer.exec(GxAction::SetViewport(self.cur_viewport));
         }

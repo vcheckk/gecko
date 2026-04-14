@@ -121,6 +121,14 @@ impl GraphicsProcessor {
                 FifoCmd::Cp(data) => self.load_cp(&data),
                 FifoCmd::Xf(data) => self.load_xf(renderer, &data),
                 FifoCmd::Bp(data) => self.load_bp(renderer, &mmio.ram, &data),
+                FifoCmd::LoadIndexedXf {
+                    cp_array_index,
+                    index,
+                    xf_addr,
+                    xf_count,
+                } => {
+                    self.load_indexed_xf(renderer, &mmio.ram, cp_array_index, index, xf_addr, xf_count);
+                }
                 FifoCmd::CallDisplayList { phys_addr, nbytes } => {
                     let addr = (phys_addr & 0x3FFFFFFF) as usize;
                     let len = nbytes as usize;

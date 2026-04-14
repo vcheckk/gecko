@@ -3,6 +3,10 @@ pub const CP_CMD: u8 = 0x08;
 pub const XF_CMD: u8 = 0x10;
 pub const CALL_DL_CMD: u8 = 0x40;
 pub const INV_VTX_CACHE_CMD: u8 = 0x48;
+pub const LOAD_INDX_A_CMD: u8 = 0x20;
+pub const LOAD_INDX_B_CMD: u8 = 0x28;
+pub const LOAD_INDX_C_CMD: u8 = 0x30;
+pub const LOAD_INDX_D_CMD: u8 = 0x38;
 pub const BP_CMD: u8 = 0x61;
 
 pub const DRAW_COMMANDS_START: u8 = 0x80;
@@ -33,6 +37,10 @@ pub const ARRAY_NRM: usize = 1;
 pub const ARRAY_CLR0: usize = 2;
 pub const ARRAY_CLR1: usize = 3;
 pub const ARRAY_TEX0: usize = 4;
+pub const ARRAY_POS_NRM_MTX: usize = 12; // INDX A
+pub const ARRAY_NRM_MTX: usize = 13; // INDX B
+pub const ARRAY_POST_MTX: usize = 14; // INDX C
+pub const ARRAY_LIGHT: usize = 15; // INDX D
 
 // XF memory addresses
 pub const XF_MODELVIEW_BASE: usize = 0x0000;
