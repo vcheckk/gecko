@@ -4,7 +4,7 @@
 
 A work-in-progress GameCube and Wii emulator and debugger written in Rust.
 
-![wario](images/wario.png)
+<img src="images/wario.png" width="30%"> <img src="images/debugger.png" width="30%">
 
 </div>
 
@@ -17,7 +17,7 @@ Gecko is in early development. The IPL works flawlessly as far as I can tell. Ma
 - `wgpu` based renderer backend
 - `wesl` based shader compiler
 - LUA scripting/hooks system for runtime introspection
-- egui-based debugging UI
+- Probably the prettiest egui-based debugging UI for GC
 - Symbol parsing from ELFs and IDA Pro databases
 - [Support for web browser](https://gecko.layle.dev)
   - [incl. debugging capabilities](https://gecko.layle.dev/dbg)
