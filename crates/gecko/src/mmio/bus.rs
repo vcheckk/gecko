@@ -3,7 +3,8 @@ use crate::gamecube::GameCube;
 use crate::hooks::HookFlags;
 use crate::mmio::constants::{
     AI_BASE, AI_END, CP_BASE, CP_END, DI_BASE, DI_END, DSP_BASE, DSP_END, EXI_BASE, EXI_END, GX_FIFO_BASE, GX_FIFO_END,
-    MI_BASE, MI_END, PE_BASE, PE_END, PI_BASE, PI_END, RAM_END, SI_BASE, SI_END, VI_BASE, VI_END,
+    HW_REG_BASE, HW_REG_END, MI_BASE, MI_END, PE_BASE, PE_END, PI_BASE, PI_END, RAM_END, SI_BASE, SI_END, VI_BASE,
+    VI_END,
 };
 
 macro_rules! bus_read_hooks {
@@ -165,7 +166,7 @@ impl GameCube {
             if phys <= RAM_END {
                 self.mmio.ram_write_u8(phys, val);
             } else {
-                self.write_u8_mmio(phys, val);
+                self.write_u8_mmio(phys, addr, val);
             }
         });
     }
@@ -177,7 +178,7 @@ impl GameCube {
             if phys <= RAM_END - 1 {
                 self.mmio.ram_write_u16(phys, val);
             } else {
-                self.write_u16_mmio(phys, val);
+                self.write_u16_mmio(phys, addr, val);
             }
         });
     }
@@ -189,7 +190,7 @@ impl GameCube {
             if phys <= RAM_END - 3 {
                 self.mmio.ram_write_u32(phys, val);
             } else {
-                self.write_u32_mmio(phys, val);
+                self.write_u32_mmio(phys, addr, val);
             }
         });
     }
@@ -199,98 +200,492 @@ impl GameCube {
     #[inline(never)]
     fn read_u8_mmio(&mut self, phys: u32, addr: u32) -> u8 {
         match phys {
-            CP_BASE..=CP_END => crate::flipper::cp::cp_read(self, phys, 1).unwrap_or(0) as u8,
-            PE_BASE..=PE_END => crate::flipper::pe::pe_read(self, phys, 1).unwrap_or(0) as u8,
-            VI_BASE..=VI_END => crate::flipper::vi::vi_read(self, phys, 1).unwrap_or(0) as u8,
-            PI_BASE..=PI_END => crate::flipper::pi::pi_read(self, phys, 1).unwrap_or(0) as u8,
-            MI_BASE..=MI_END => crate::flipper::mi::mi_read(self, phys, 1).unwrap_or(0) as u8,
-            DSP_BASE..=DSP_END => crate::flipper::dsp::dsp_read(self, phys, 1).unwrap_or(0) as u8,
-            DI_BASE..=DI_END => crate::dvd::di_read(self, phys, 1).unwrap_or(0) as u8,
-            SI_BASE..=SI_END => crate::flipper::si::si_read(self, phys, 1).unwrap_or(0) as u8,
-            EXI_BASE..=EXI_END => crate::flipper::exi::exi_read(self, phys, 1).unwrap_or(0) as u8,
-            AI_BASE..=AI_END => crate::flipper::ai::ai_read(self, phys, 1).unwrap_or(0) as u8,
+            CP_BASE..=CP_END => crate::flipper::cp::cp_read(self, phys, 1).unwrap_or_else(|| {
+                tracing::warn!(
+                    device = "CP",
+                    addr = format!("{addr:08X}"),
+                    phys_addr = format!("{phys:08X}"),
+                    size = 1,
+                    "Unimplemented MMIO read"
+                );
+                0
+            }) as u8,
+            PE_BASE..=PE_END => crate::flipper::pe::pe_read(self, phys, 1).unwrap_or_else(|| {
+                tracing::warn!(
+                    device = "PE",
+                    addr = format!("{addr:08X}"),
+                    phys_addr = format!("{phys:08X}"),
+                    size = 1,
+                    "Unimplemented MMIO read"
+                );
+                0
+            }) as u8,
+            VI_BASE..=VI_END => crate::flipper::vi::vi_read(self, phys, 1).unwrap_or_else(|| {
+                tracing::warn!(
+                    device = "VI",
+                    addr = format!("{addr:08X}"),
+                    phys_addr = format!("{phys:08X}"),
+                    size = 1,
+                    "Unimplemented MMIO read"
+                );
+                0
+            }) as u8,
+            PI_BASE..=PI_END => crate::flipper::pi::pi_read(self, phys, 1).unwrap_or_else(|| {
+                tracing::warn!(
+                    device = "PI",
+                    addr = format!("{addr:08X}"),
+                    phys_addr = format!("{phys:08X}"),
+                    size = 1,
+                    "Unimplemented MMIO read"
+                );
+                0
+            }) as u8,
+            MI_BASE..=MI_END => crate::flipper::mi::mi_read(self, phys, 1).unwrap_or_else(|| {
+                tracing::warn!(
+                    device = "MI",
+                    addr = format!("{addr:08X}"),
+                    phys_addr = format!("{phys:08X}"),
+                    size = 1,
+                    "Unimplemented MMIO read"
+                );
+                0
+            }) as u8,
+            DSP_BASE..=DSP_END => crate::flipper::dsp::dsp_read(self, phys, 1).unwrap_or_else(|| {
+                tracing::warn!(
+                    device = "DSP",
+                    addr = format!("{addr:08X}"),
+                    phys_addr = format!("{phys:08X}"),
+                    size = 1,
+                    "Unimplemented MMIO read"
+                );
+                0
+            }) as u8,
+            DI_BASE..=DI_END => crate::dvd::di_read(self, phys, 1).unwrap_or_else(|| {
+                tracing::warn!(
+                    device = "DI",
+                    addr = format!("{addr:08X}"),
+                    phys_addr = format!("{phys:08X}"),
+                    size = 1,
+                    "Unimplemented MMIO read"
+                );
+                0
+            }) as u8,
+            SI_BASE..=SI_END => crate::flipper::si::si_read(self, phys, 1).unwrap_or_else(|| {
+                tracing::warn!(
+                    device = "SI",
+                    addr = format!("{addr:08X}"),
+                    phys_addr = format!("{phys:08X}"),
+                    size = 1,
+                    "Unimplemented MMIO read"
+                );
+                0
+            }) as u8,
+            EXI_BASE..=EXI_END => crate::flipper::exi::exi_read(self, phys, 1).unwrap_or_else(|| {
+                tracing::warn!(
+                    device = "EXI",
+                    addr = format!("{addr:08X}"),
+                    phys_addr = format!("{phys:08X}"),
+                    size = 1,
+                    "Unimplemented MMIO read"
+                );
+                0
+            }) as u8,
+            AI_BASE..=AI_END => crate::flipper::ai::ai_read(self, phys, 1).unwrap_or_else(|| {
+                tracing::warn!(
+                    device = "AI",
+                    addr = format!("{addr:08X}"),
+                    phys_addr = format!("{phys:08X}"),
+                    size = 1,
+                    "Unimplemented MMIO read"
+                );
+                0
+            }) as u8,
             GX_FIFO_BASE..=GX_FIFO_END => {
                 tracing::error!(addr = format!("{:08X}", addr), "Invalid GX FIFO read");
                 0
             }
-            _ => self.mmio.phys_read_u8(phys),
+            _ => {
+                if (HW_REG_BASE..=HW_REG_END).contains(&phys) {
+                    tracing::warn!(
+                        device = "HW_REG",
+                        addr = format!("{addr:08X}"),
+                        phys_addr = format!("{phys:08X}"),
+                        size = 1,
+                        "Unimplemented MMIO read"
+                    );
+                }
+                self.mmio.phys_read_u8(phys)
+            }
         }
     }
 
     #[inline(never)]
     fn read_u16_mmio(&mut self, phys: u32, addr: u32) -> u16 {
         match phys {
-            CP_BASE..=CP_END => crate::flipper::cp::cp_read(self, phys, 2).unwrap_or(0) as u16,
-            PE_BASE..=PE_END => crate::flipper::pe::pe_read(self, phys, 2).unwrap_or(0) as u16,
-            VI_BASE..=VI_END => crate::flipper::vi::vi_read(self, phys, 2).unwrap_or(0) as u16,
-            PI_BASE..=PI_END => crate::flipper::pi::pi_read(self, phys, 2).unwrap_or(0) as u16,
-            MI_BASE..=MI_END => crate::flipper::mi::mi_read(self, phys, 2).unwrap_or(0) as u16,
-            DSP_BASE..=DSP_END => crate::flipper::dsp::dsp_read(self, phys, 2).unwrap_or(0) as u16,
-            DI_BASE..=DI_END => crate::dvd::di_read(self, phys, 2).unwrap_or(0) as u16,
-            SI_BASE..=SI_END => crate::flipper::si::si_read(self, phys, 2).unwrap_or(0) as u16,
-            EXI_BASE..=EXI_END => crate::flipper::exi::exi_read(self, phys, 2).unwrap_or(0) as u16,
-            AI_BASE..=AI_END => crate::flipper::ai::ai_read(self, phys, 2).unwrap_or(0) as u16,
+            CP_BASE..=CP_END => crate::flipper::cp::cp_read(self, phys, 2).unwrap_or_else(|| {
+                tracing::warn!(
+                    device = "CP",
+                    addr = format!("{addr:08X}"),
+                    phys_addr = format!("{phys:08X}"),
+                    size = 2,
+                    "Unimplemented MMIO read"
+                );
+                0
+            }) as u16,
+            PE_BASE..=PE_END => crate::flipper::pe::pe_read(self, phys, 2).unwrap_or_else(|| {
+                tracing::warn!(
+                    device = "PE",
+                    addr = format!("{addr:08X}"),
+                    phys_addr = format!("{phys:08X}"),
+                    size = 2,
+                    "Unimplemented MMIO read"
+                );
+                0
+            }) as u16,
+            VI_BASE..=VI_END => crate::flipper::vi::vi_read(self, phys, 2).unwrap_or_else(|| {
+                tracing::warn!(
+                    device = "VI",
+                    addr = format!("{addr:08X}"),
+                    phys_addr = format!("{phys:08X}"),
+                    size = 2,
+                    "Unimplemented MMIO read"
+                );
+                0
+            }) as u16,
+            PI_BASE..=PI_END => crate::flipper::pi::pi_read(self, phys, 2).unwrap_or_else(|| {
+                tracing::warn!(
+                    device = "PI",
+                    addr = format!("{addr:08X}"),
+                    phys_addr = format!("{phys:08X}"),
+                    size = 2,
+                    "Unimplemented MMIO read"
+                );
+                0
+            }) as u16,
+            MI_BASE..=MI_END => crate::flipper::mi::mi_read(self, phys, 2).unwrap_or_else(|| {
+                tracing::warn!(
+                    device = "MI",
+                    addr = format!("{addr:08X}"),
+                    phys_addr = format!("{phys:08X}"),
+                    size = 2,
+                    "Unimplemented MMIO read"
+                );
+                0
+            }) as u16,
+            DSP_BASE..=DSP_END => crate::flipper::dsp::dsp_read(self, phys, 2).unwrap_or_else(|| {
+                tracing::warn!(
+                    device = "DSP",
+                    addr = format!("{addr:08X}"),
+                    phys_addr = format!("{phys:08X}"),
+                    size = 2,
+                    "Unimplemented MMIO read"
+                );
+                0
+            }) as u16,
+            DI_BASE..=DI_END => crate::dvd::di_read(self, phys, 2).unwrap_or_else(|| {
+                tracing::warn!(
+                    device = "DI",
+                    addr = format!("{addr:08X}"),
+                    phys_addr = format!("{phys:08X}"),
+                    size = 2,
+                    "Unimplemented MMIO read"
+                );
+                0
+            }) as u16,
+            SI_BASE..=SI_END => crate::flipper::si::si_read(self, phys, 2).unwrap_or_else(|| {
+                tracing::warn!(
+                    device = "SI",
+                    addr = format!("{addr:08X}"),
+                    phys_addr = format!("{phys:08X}"),
+                    size = 2,
+                    "Unimplemented MMIO read"
+                );
+                0
+            }) as u16,
+            EXI_BASE..=EXI_END => crate::flipper::exi::exi_read(self, phys, 2).unwrap_or_else(|| {
+                tracing::warn!(
+                    device = "EXI",
+                    addr = format!("{addr:08X}"),
+                    phys_addr = format!("{phys:08X}"),
+                    size = 2,
+                    "Unimplemented MMIO read"
+                );
+                0
+            }) as u16,
+            AI_BASE..=AI_END => crate::flipper::ai::ai_read(self, phys, 2).unwrap_or_else(|| {
+                tracing::warn!(
+                    device = "AI",
+                    addr = format!("{addr:08X}"),
+                    phys_addr = format!("{phys:08X}"),
+                    size = 2,
+                    "Unimplemented MMIO read"
+                );
+                0
+            }) as u16,
             GX_FIFO_BASE..=GX_FIFO_END => {
                 tracing::error!(addr = format!("{:08X}", addr), "Invalid GX FIFO read");
                 0
             }
-            _ => self.mmio.phys_read_u16(phys),
+            _ => {
+                if (HW_REG_BASE..=HW_REG_END).contains(&phys) {
+                    tracing::warn!(
+                        device = "HW_REG",
+                        addr = format!("{addr:08X}"),
+                        phys_addr = format!("{phys:08X}"),
+                        size = 2,
+                        "Unimplemented MMIO read"
+                    );
+                }
+                self.mmio.phys_read_u16(phys)
+            }
         }
     }
 
     #[inline(never)]
     fn read_u32_mmio(&mut self, phys: u32, addr: u32) -> u32 {
         match phys {
-            CP_BASE..=CP_END => crate::flipper::cp::cp_read(self, phys, 4).unwrap_or(0),
-            PE_BASE..=PE_END => crate::flipper::pe::pe_read(self, phys, 4).unwrap_or(0),
-            VI_BASE..=VI_END => crate::flipper::vi::vi_read(self, phys, 4).unwrap_or(0),
-            PI_BASE..=PI_END => crate::flipper::pi::pi_read(self, phys, 4).unwrap_or(0),
-            MI_BASE..=MI_END => crate::flipper::mi::mi_read(self, phys, 4).unwrap_or(0),
-            DSP_BASE..=DSP_END => crate::flipper::dsp::dsp_read(self, phys, 4).unwrap_or(0),
-            DI_BASE..=DI_END => crate::dvd::di_read(self, phys, 4).unwrap_or(0),
-            SI_BASE..=SI_END => crate::flipper::si::si_read(self, phys, 4).unwrap_or(0),
-            EXI_BASE..=EXI_END => crate::flipper::exi::exi_read(self, phys, 4).unwrap_or(0),
-            AI_BASE..=AI_END => crate::flipper::ai::ai_read(self, phys, 4).unwrap_or(0),
+            CP_BASE..=CP_END => crate::flipper::cp::cp_read(self, phys, 4).unwrap_or_else(|| {
+                tracing::warn!(
+                    device = "CP",
+                    addr = format!("{addr:08X}"),
+                    phys_addr = format!("{phys:08X}"),
+                    size = 4,
+                    "Unimplemented MMIO read"
+                );
+                0
+            }),
+            PE_BASE..=PE_END => crate::flipper::pe::pe_read(self, phys, 4).unwrap_or_else(|| {
+                tracing::warn!(
+                    device = "PE",
+                    addr = format!("{addr:08X}"),
+                    phys_addr = format!("{phys:08X}"),
+                    size = 4,
+                    "Unimplemented MMIO read"
+                );
+                0
+            }),
+            VI_BASE..=VI_END => crate::flipper::vi::vi_read(self, phys, 4).unwrap_or_else(|| {
+                tracing::warn!(
+                    device = "VI",
+                    addr = format!("{addr:08X}"),
+                    phys_addr = format!("{phys:08X}"),
+                    size = 4,
+                    "Unimplemented MMIO read"
+                );
+                0
+            }),
+            PI_BASE..=PI_END => crate::flipper::pi::pi_read(self, phys, 4).unwrap_or_else(|| {
+                tracing::warn!(
+                    device = "PI",
+                    addr = format!("{addr:08X}"),
+                    phys_addr = format!("{phys:08X}"),
+                    size = 4,
+                    "Unimplemented MMIO read"
+                );
+                0
+            }),
+            MI_BASE..=MI_END => crate::flipper::mi::mi_read(self, phys, 4).unwrap_or_else(|| {
+                tracing::warn!(
+                    device = "MI",
+                    addr = format!("{addr:08X}"),
+                    phys_addr = format!("{phys:08X}"),
+                    size = 4,
+                    "Unimplemented MMIO read"
+                );
+                0
+            }),
+            DSP_BASE..=DSP_END => crate::flipper::dsp::dsp_read(self, phys, 4).unwrap_or_else(|| {
+                tracing::warn!(
+                    device = "DSP",
+                    addr = format!("{addr:08X}"),
+                    phys_addr = format!("{phys:08X}"),
+                    size = 4,
+                    "Unimplemented MMIO read"
+                );
+                0
+            }),
+            DI_BASE..=DI_END => crate::dvd::di_read(self, phys, 4).unwrap_or_else(|| {
+                tracing::warn!(
+                    device = "DI",
+                    addr = format!("{addr:08X}"),
+                    phys_addr = format!("{phys:08X}"),
+                    size = 4,
+                    "Unimplemented MMIO read"
+                );
+                0
+            }),
+            SI_BASE..=SI_END => crate::flipper::si::si_read(self, phys, 4).unwrap_or_else(|| {
+                tracing::warn!(
+                    device = "SI",
+                    addr = format!("{addr:08X}"),
+                    phys_addr = format!("{phys:08X}"),
+                    size = 4,
+                    "Unimplemented MMIO read"
+                );
+                0
+            }),
+            EXI_BASE..=EXI_END => crate::flipper::exi::exi_read(self, phys, 4).unwrap_or_else(|| {
+                tracing::warn!(
+                    device = "EXI",
+                    addr = format!("{addr:08X}"),
+                    phys_addr = format!("{phys:08X}"),
+                    size = 4,
+                    "Unimplemented MMIO read"
+                );
+                0
+            }),
+            AI_BASE..=AI_END => crate::flipper::ai::ai_read(self, phys, 4).unwrap_or_else(|| {
+                tracing::warn!(
+                    device = "AI",
+                    addr = format!("{addr:08X}"),
+                    phys_addr = format!("{phys:08X}"),
+                    size = 4,
+                    "Unimplemented MMIO read"
+                );
+                0
+            }),
             GX_FIFO_BASE..=GX_FIFO_END => {
                 tracing::error!(addr = format!("{:08X}", addr), "Invalid GX FIFO read");
                 0
             }
-            _ => self.mmio.phys_read_u32(phys),
+            _ => {
+                if (HW_REG_BASE..=HW_REG_END).contains(&phys) {
+                    tracing::warn!(
+                        device = "HW_REG",
+                        addr = format!("{addr:08X}"),
+                        phys_addr = format!("{phys:08X}"),
+                        size = 4,
+                        "Unimplemented MMIO read"
+                    );
+                }
+                self.mmio.phys_read_u32(phys)
+            }
         }
     }
 
     #[inline(never)]
-    fn write_u8_mmio(&mut self, phys: u32, val: u8) {
+    fn write_u8_mmio(&mut self, phys: u32, addr: u32, val: u8) {
+        let raw = val as u32;
         match phys {
             CP_BASE..=CP_END => {
-                crate::flipper::cp::cp_write(self, phys, 1, val as u32);
+                if !crate::flipper::cp::cp_write(self, phys, 1, raw) {
+                    tracing::warn!(
+                        device = "CP",
+                        addr = format!("{addr:08X}"),
+                        phys_addr = format!("{phys:08X}"),
+                        val = format!("{raw:08X}"),
+                        size = 1,
+                        "Unimplemented MMIO write"
+                    );
+                }
             }
             PE_BASE..=PE_END => {
-                crate::flipper::pe::pe_write(self, phys, 1, val as u32);
+                if !crate::flipper::pe::pe_write(self, phys, 1, raw) {
+                    tracing::warn!(
+                        device = "PE",
+                        addr = format!("{addr:08X}"),
+                        phys_addr = format!("{phys:08X}"),
+                        val = format!("{raw:08X}"),
+                        size = 1,
+                        "Unimplemented MMIO write"
+                    );
+                }
             }
             VI_BASE..=VI_END => {
-                crate::flipper::vi::vi_write(self, phys, 1, val as u32);
+                if !crate::flipper::vi::vi_write(self, phys, 1, raw) {
+                    tracing::warn!(
+                        device = "VI",
+                        addr = format!("{addr:08X}"),
+                        phys_addr = format!("{phys:08X}"),
+                        val = format!("{raw:08X}"),
+                        size = 1,
+                        "Unimplemented MMIO write"
+                    );
+                }
             }
             PI_BASE..=PI_END => {
-                crate::flipper::pi::pi_write(self, phys, 1, val as u32);
+                if !crate::flipper::pi::pi_write(self, phys, 1, raw) {
+                    tracing::warn!(
+                        device = "PI",
+                        addr = format!("{addr:08X}"),
+                        phys_addr = format!("{phys:08X}"),
+                        val = format!("{raw:08X}"),
+                        size = 1,
+                        "Unimplemented MMIO write"
+                    );
+                }
             }
             MI_BASE..=MI_END => {
-                crate::flipper::mi::mi_write(self, phys, 1, val as u32);
+                if !crate::flipper::mi::mi_write(self, phys, 1, raw) {
+                    tracing::warn!(
+                        device = "MI",
+                        addr = format!("{addr:08X}"),
+                        phys_addr = format!("{phys:08X}"),
+                        val = format!("{raw:08X}"),
+                        size = 1,
+                        "Unimplemented MMIO write"
+                    );
+                }
             }
             DSP_BASE..=DSP_END => {
-                crate::flipper::dsp::dsp_write(self, phys, 1, val as u32);
+                if !crate::flipper::dsp::dsp_write(self, phys, 1, raw) {
+                    tracing::warn!(
+                        device = "DSP",
+                        addr = format!("{addr:08X}"),
+                        phys_addr = format!("{phys:08X}"),
+                        val = format!("{raw:08X}"),
+                        size = 1,
+                        "Unimplemented MMIO write"
+                    );
+                }
             }
             DI_BASE..=DI_END => {
-                crate::dvd::di_write(self, phys, 1, val as u32);
+                if !crate::dvd::di_write(self, phys, 1, raw) {
+                    tracing::warn!(
+                        device = "DI",
+                        addr = format!("{addr:08X}"),
+                        phys_addr = format!("{phys:08X}"),
+                        val = format!("{raw:08X}"),
+                        size = 1,
+                        "Unimplemented MMIO write"
+                    );
+                }
             }
             SI_BASE..=SI_END => {
-                crate::flipper::si::si_write(self, phys, 1, val as u32);
+                if !crate::flipper::si::si_write(self, phys, 1, raw) {
+                    tracing::warn!(
+                        device = "SI",
+                        addr = format!("{addr:08X}"),
+                        phys_addr = format!("{phys:08X}"),
+                        val = format!("{raw:08X}"),
+                        size = 1,
+                        "Unimplemented MMIO write"
+                    );
+                }
             }
             EXI_BASE..=EXI_END => {
-                crate::flipper::exi::exi_write(self, phys, 1, val as u32);
+                if !crate::flipper::exi::exi_write(self, phys, 1, raw) {
+                    tracing::warn!(
+                        device = "EXI",
+                        addr = format!("{addr:08X}"),
+                        phys_addr = format!("{phys:08X}"),
+                        val = format!("{raw:08X}"),
+                        size = 1,
+                        "Unimplemented MMIO write"
+                    );
+                }
             }
             AI_BASE..=AI_END => {
-                crate::flipper::ai::ai_write(self, phys, 1, val as u32);
+                if !crate::flipper::ai::ai_write(self, phys, 1, raw) {
+                    tracing::warn!(
+                        device = "AI",
+                        addr = format!("{addr:08X}"),
+                        phys_addr = format!("{phys:08X}"),
+                        val = format!("{raw:08X}"),
+                        size = 1,
+                        "Unimplemented MMIO write"
+                    );
+                }
             }
             GX_FIFO_BASE..=GX_FIFO_END => {
                 let wptr = self.pi.fifo_wptr as usize;
@@ -301,42 +696,145 @@ impl GameCube {
                     self.check_gx_pe_interrupts();
                 }
             }
-            _ => self.mmio.phys_write_u8(phys, val),
+            _ => {
+                if (HW_REG_BASE..=HW_REG_END).contains(&phys) {
+                    tracing::warn!(
+                        device = "HW_REG",
+                        addr = format!("{addr:08X}"),
+                        phys_addr = format!("{phys:08X}"),
+                        val = format!("{raw:08X}"),
+                        size = 1,
+                        "Unimplemented MMIO write"
+                    );
+                }
+                self.mmio.phys_write_u8(phys, val);
+            }
         }
     }
 
     #[inline(never)]
-    fn write_u16_mmio(&mut self, phys: u32, val: u16) {
+    fn write_u16_mmio(&mut self, phys: u32, addr: u32, val: u16) {
+        let raw = val as u32;
         match phys {
             CP_BASE..=CP_END => {
-                crate::flipper::cp::cp_write(self, phys, 2, val as u32);
+                if !crate::flipper::cp::cp_write(self, phys, 2, raw) {
+                    tracing::warn!(
+                        device = "CP",
+                        addr = format!("{addr:08X}"),
+                        phys_addr = format!("{phys:08X}"),
+                        val = format!("{raw:08X}"),
+                        size = 2,
+                        "Unimplemented MMIO write"
+                    );
+                }
             }
             PE_BASE..=PE_END => {
-                crate::flipper::pe::pe_write(self, phys, 2, val as u32);
+                if !crate::flipper::pe::pe_write(self, phys, 2, raw) {
+                    tracing::warn!(
+                        device = "PE",
+                        addr = format!("{addr:08X}"),
+                        phys_addr = format!("{phys:08X}"),
+                        val = format!("{raw:08X}"),
+                        size = 2,
+                        "Unimplemented MMIO write"
+                    );
+                }
             }
             VI_BASE..=VI_END => {
-                crate::flipper::vi::vi_write(self, phys, 2, val as u32);
+                if !crate::flipper::vi::vi_write(self, phys, 2, raw) {
+                    tracing::warn!(
+                        device = "VI",
+                        addr = format!("{addr:08X}"),
+                        phys_addr = format!("{phys:08X}"),
+                        val = format!("{raw:08X}"),
+                        size = 2,
+                        "Unimplemented MMIO write"
+                    );
+                }
             }
             PI_BASE..=PI_END => {
-                crate::flipper::pi::pi_write(self, phys, 2, val as u32);
+                if !crate::flipper::pi::pi_write(self, phys, 2, raw) {
+                    tracing::warn!(
+                        device = "PI",
+                        addr = format!("{addr:08X}"),
+                        phys_addr = format!("{phys:08X}"),
+                        val = format!("{raw:08X}"),
+                        size = 2,
+                        "Unimplemented MMIO write"
+                    );
+                }
             }
             MI_BASE..=MI_END => {
-                crate::flipper::mi::mi_write(self, phys, 2, val as u32);
+                if !crate::flipper::mi::mi_write(self, phys, 2, raw) {
+                    tracing::warn!(
+                        device = "MI",
+                        addr = format!("{addr:08X}"),
+                        phys_addr = format!("{phys:08X}"),
+                        val = format!("{raw:08X}"),
+                        size = 2,
+                        "Unimplemented MMIO write"
+                    );
+                }
             }
             DSP_BASE..=DSP_END => {
-                crate::flipper::dsp::dsp_write(self, phys, 2, val as u32);
+                if !crate::flipper::dsp::dsp_write(self, phys, 2, raw) {
+                    tracing::warn!(
+                        device = "DSP",
+                        addr = format!("{addr:08X}"),
+                        phys_addr = format!("{phys:08X}"),
+                        val = format!("{raw:08X}"),
+                        size = 2,
+                        "Unimplemented MMIO write"
+                    );
+                }
             }
             DI_BASE..=DI_END => {
-                crate::dvd::di_write(self, phys, 2, val as u32);
+                if !crate::dvd::di_write(self, phys, 2, raw) {
+                    tracing::warn!(
+                        device = "DI",
+                        addr = format!("{addr:08X}"),
+                        phys_addr = format!("{phys:08X}"),
+                        val = format!("{raw:08X}"),
+                        size = 2,
+                        "Unimplemented MMIO write"
+                    );
+                }
             }
             SI_BASE..=SI_END => {
-                crate::flipper::si::si_write(self, phys, 2, val as u32);
+                if !crate::flipper::si::si_write(self, phys, 2, raw) {
+                    tracing::warn!(
+                        device = "SI",
+                        addr = format!("{addr:08X}"),
+                        phys_addr = format!("{phys:08X}"),
+                        val = format!("{raw:08X}"),
+                        size = 2,
+                        "Unimplemented MMIO write"
+                    );
+                }
             }
             EXI_BASE..=EXI_END => {
-                crate::flipper::exi::exi_write(self, phys, 2, val as u32);
+                if !crate::flipper::exi::exi_write(self, phys, 2, raw) {
+                    tracing::warn!(
+                        device = "EXI",
+                        addr = format!("{addr:08X}"),
+                        phys_addr = format!("{phys:08X}"),
+                        val = format!("{raw:08X}"),
+                        size = 2,
+                        "Unimplemented MMIO write"
+                    );
+                }
             }
             AI_BASE..=AI_END => {
-                crate::flipper::ai::ai_write(self, phys, 2, val as u32);
+                if !crate::flipper::ai::ai_write(self, phys, 2, raw) {
+                    tracing::warn!(
+                        device = "AI",
+                        addr = format!("{addr:08X}"),
+                        phys_addr = format!("{phys:08X}"),
+                        val = format!("{raw:08X}"),
+                        size = 2,
+                        "Unimplemented MMIO write"
+                    );
+                }
             }
             GX_FIFO_BASE..=GX_FIFO_END => {
                 let wptr = self.pi.fifo_wptr as usize;
@@ -348,42 +846,144 @@ impl GameCube {
                     self.check_gx_pe_interrupts();
                 }
             }
-            _ => self.mmio.phys_write_u16(phys, val),
+            _ => {
+                if (HW_REG_BASE..=HW_REG_END).contains(&phys) {
+                    tracing::warn!(
+                        device = "HW_REG",
+                        addr = format!("{addr:08X}"),
+                        phys_addr = format!("{phys:08X}"),
+                        val = format!("{raw:08X}"),
+                        size = 2,
+                        "Unimplemented MMIO write"
+                    );
+                }
+                self.mmio.phys_write_u16(phys, val);
+            }
         }
     }
 
     #[inline(never)]
-    fn write_u32_mmio(&mut self, phys: u32, val: u32) {
+    fn write_u32_mmio(&mut self, phys: u32, addr: u32, val: u32) {
         match phys {
             CP_BASE..=CP_END => {
-                crate::flipper::cp::cp_write(self, phys, 4, val);
+                if !crate::flipper::cp::cp_write(self, phys, 4, val) {
+                    tracing::warn!(
+                        device = "CP",
+                        addr = format!("{addr:08X}"),
+                        phys_addr = format!("{phys:08X}"),
+                        val = format!("{val:08X}"),
+                        size = 4,
+                        "Unimplemented MMIO write"
+                    );
+                }
             }
             PE_BASE..=PE_END => {
-                crate::flipper::pe::pe_write(self, phys, 4, val);
+                if !crate::flipper::pe::pe_write(self, phys, 4, val) {
+                    tracing::warn!(
+                        device = "PE",
+                        addr = format!("{addr:08X}"),
+                        phys_addr = format!("{phys:08X}"),
+                        val = format!("{val:08X}"),
+                        size = 4,
+                        "Unimplemented MMIO write"
+                    );
+                }
             }
             VI_BASE..=VI_END => {
-                crate::flipper::vi::vi_write(self, phys, 4, val);
+                if !crate::flipper::vi::vi_write(self, phys, 4, val) {
+                    tracing::warn!(
+                        device = "VI",
+                        addr = format!("{addr:08X}"),
+                        phys_addr = format!("{phys:08X}"),
+                        val = format!("{val:08X}"),
+                        size = 4,
+                        "Unimplemented MMIO write"
+                    );
+                }
             }
             PI_BASE..=PI_END => {
-                crate::flipper::pi::pi_write(self, phys, 4, val);
+                if !crate::flipper::pi::pi_write(self, phys, 4, val) {
+                    tracing::warn!(
+                        device = "PI",
+                        addr = format!("{addr:08X}"),
+                        phys_addr = format!("{phys:08X}"),
+                        val = format!("{val:08X}"),
+                        size = 4,
+                        "Unimplemented MMIO write"
+                    );
+                }
             }
             MI_BASE..=MI_END => {
-                crate::flipper::mi::mi_write(self, phys, 4, val);
+                if !crate::flipper::mi::mi_write(self, phys, 4, val) {
+                    tracing::warn!(
+                        device = "MI",
+                        addr = format!("{addr:08X}"),
+                        phys_addr = format!("{phys:08X}"),
+                        val = format!("{val:08X}"),
+                        size = 4,
+                        "Unimplemented MMIO write"
+                    );
+                }
             }
             DSP_BASE..=DSP_END => {
-                crate::flipper::dsp::dsp_write(self, phys, 4, val);
+                if !crate::flipper::dsp::dsp_write(self, phys, 4, val) {
+                    tracing::warn!(
+                        device = "DSP",
+                        addr = format!("{addr:08X}"),
+                        phys_addr = format!("{phys:08X}"),
+                        val = format!("{val:08X}"),
+                        size = 4,
+                        "Unimplemented MMIO write"
+                    );
+                }
             }
             DI_BASE..=DI_END => {
-                crate::dvd::di_write(self, phys, 4, val);
+                if !crate::dvd::di_write(self, phys, 4, val) {
+                    tracing::warn!(
+                        device = "DI",
+                        addr = format!("{addr:08X}"),
+                        phys_addr = format!("{phys:08X}"),
+                        val = format!("{val:08X}"),
+                        size = 4,
+                        "Unimplemented MMIO write"
+                    );
+                }
             }
             SI_BASE..=SI_END => {
-                crate::flipper::si::si_write(self, phys, 4, val);
+                if !crate::flipper::si::si_write(self, phys, 4, val) {
+                    tracing::warn!(
+                        device = "SI",
+                        addr = format!("{addr:08X}"),
+                        phys_addr = format!("{phys:08X}"),
+                        val = format!("{val:08X}"),
+                        size = 4,
+                        "Unimplemented MMIO write"
+                    );
+                }
             }
             EXI_BASE..=EXI_END => {
-                crate::flipper::exi::exi_write(self, phys, 4, val);
+                if !crate::flipper::exi::exi_write(self, phys, 4, val) {
+                    tracing::warn!(
+                        device = "EXI",
+                        addr = format!("{addr:08X}"),
+                        phys_addr = format!("{phys:08X}"),
+                        val = format!("{val:08X}"),
+                        size = 4,
+                        "Unimplemented MMIO write"
+                    );
+                }
             }
             AI_BASE..=AI_END => {
-                crate::flipper::ai::ai_write(self, phys, 4, val);
+                if !crate::flipper::ai::ai_write(self, phys, 4, val) {
+                    tracing::warn!(
+                        device = "AI",
+                        addr = format!("{addr:08X}"),
+                        phys_addr = format!("{phys:08X}"),
+                        val = format!("{val:08X}"),
+                        size = 4,
+                        "Unimplemented MMIO write"
+                    );
+                }
             }
             GX_FIFO_BASE..=GX_FIFO_END => {
                 let wptr = self.pi.fifo_wptr as usize;
@@ -395,7 +995,19 @@ impl GameCube {
                     self.check_gx_pe_interrupts();
                 }
             }
-            _ => self.mmio.phys_write_u32(phys, val),
+            _ => {
+                if (HW_REG_BASE..=HW_REG_END).contains(&phys) {
+                    tracing::warn!(
+                        device = "HW_REG",
+                        addr = format!("{addr:08X}"),
+                        phys_addr = format!("{phys:08X}"),
+                        val = format!("{val:08X}"),
+                        size = 4,
+                        "Unimplemented MMIO write"
+                    );
+                }
+                self.mmio.phys_write_u32(phys, val);
+            }
         }
     }
 }

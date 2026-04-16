@@ -72,11 +72,34 @@ pub fn start_audio_dma(gc: &mut GameCube) {
     // TODO: actually stream samples to audio output.
     const AUDIO_DMA_DELAY: u64 = 10_000;
     gc.scheduler.schedule_in(AUDIO_DMA_DELAY, |gc| {
+        let csr_before = gc.dsp.csr.raw();
+        let intsr_before = gc.pi.intsr.raw();
         gc.dsp.audio_dma_control.set_length(0);
         gc.dsp.csr.set_dma_status(false);
         gc.dsp.csr.set_ai_interrupt(true);
+        tracing::info!(
+            cycles = gc.scheduler.cycles,
+            csr_before = format!("{csr_before:04X}"),
+            csr_after = format!("{:04X}", gc.dsp.csr.raw()),
+            ai_interrupt = gc.dsp.csr.ai_interrupt(),
+            ai_interrupt_mask = gc.dsp.csr.ai_interrupt_mask(),
+            ar_interrupt = gc.dsp.csr.ar_interrupt(),
+            ar_interrupt_mask = gc.dsp.csr.ar_interrupt_mask(),
+            dsp_interrupt = gc.dsp.csr.dsp_interrupt(),
+            dsp_interrupt_mask = gc.dsp.csr.dsp_interrupt_mask(),
+            pi_intsr_before = format!("{intsr_before:08X}"),
+            pi_intmr = format!("{:08X}", gc.pi.intmr.raw()),
+            "Audio DMA completion"
+        );
         // gc.dsp.audio_dma_control.set_play(false);
         dsp::refresh_interrupts(gc);
+        tracing::info!(
+            cycles = gc.scheduler.cycles,
+            csr = format!("{:04X}", gc.dsp.csr.raw()),
+            pi_intsr = format!("{:08X}", gc.pi.intsr.raw()),
+            pi_intmr = format!("{:08X}", gc.pi.intmr.raw()),
+            "Audio DMA completion IRQ refreshed"
+        );
     });
 }
 

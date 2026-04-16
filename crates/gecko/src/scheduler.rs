@@ -31,10 +31,11 @@ impl Scheduler {
             events: VecDeque::with_capacity(8),
         };
         let initial_refresh_rate = RefreshRate::Hz60; // TODO: Detect IPL and schedule accordingly
-        s.schedule_at(initial_refresh_rate.cycles_per_frame(), crate::scheduler::vsync_handler);
+        s.schedule_at(initial_refresh_rate.cycles_per_frame(), self::vsync_handler);
+        s.schedule_at(CPU_CYCLES_PER_DSP_TICK * DSP_BATCH_SIZE, self::dsp_batch_handler);
         s.schedule_at(
-            CPU_CYCLES_PER_DSP_TICK * DSP_BATCH_SIZE,
-            crate::scheduler::dsp_batch_handler,
+            crate::cpu::dec::cycles_until_underflow(u32::MAX),
+            crate::cpu::dec::underflow_handler,
         );
         s
     }
@@ -75,6 +76,11 @@ impl Scheduler {
         self.next_deadline = self.next_deadline.min(deadline);
     }
 
+    pub fn cancel(&mut self, f: ScheduledFn) {
+        self.events.retain(|e| !std::ptr::fn_addr_eq(e.f, f));
+        self.refresh_deadline();
+    }
+
     pub fn schedule_in(&mut self, delay: u64, f: ScheduledFn) {
         let deadline = self.cycles + delay;
         self.schedule_at(deadline, f);
@@ -102,15 +108,14 @@ impl Scheduler {
 pub fn vsync_handler(gc: &mut GameCube) {
     gc.vsync_pending = true;
     let rate = gc.vi.dcr.video_format().refresh_rate();
-    gc.scheduler
-        .schedule_in(rate.cycles_per_frame(), crate::scheduler::vsync_handler);
+    gc.scheduler.schedule_in(rate.cycles_per_frame(), self::vsync_handler);
 }
 
 /// Reschedules itself every DSP batch.
 pub fn dsp_batch_handler(gc: &mut GameCube) {
     gc.execute_dsp_batch();
     gc.scheduler.schedule_in(
-        crate::scheduler::CPU_CYCLES_PER_DSP_TICK * crate::scheduler::DSP_BATCH_SIZE,
-        crate::scheduler::dsp_batch_handler,
+        self::CPU_CYCLES_PER_DSP_TICK * self::DSP_BATCH_SIZE,
+        self::dsp_batch_handler,
     );
 }

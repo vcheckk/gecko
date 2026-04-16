@@ -1,4 +1,5 @@
 pub mod condition;
+pub mod dec;
 #[allow(dead_code, unused_variables, non_upper_case_globals, clippy::all)]
 pub mod instruction;
 pub mod interpreter;
@@ -23,6 +24,7 @@ pub struct Cpu {
     pub pc: u32,
     pub cr: ConditionRegister,
     pub fpscr: u32, // TODO: FP Status and Control Register
+    pub dec: dec::Decrementer,
     pub spr: spr::Spr,
     pub msr: msr::Msr,
     pub sr: [sr::Sr; 16], // Segment Registers
@@ -36,6 +38,9 @@ pub struct Cpu {
 
 impl Cpu {
     pub fn new(initial_pc: u32) -> Self {
+        let mut spr = spr::Spr::default();
+        spr.dec = u32::MAX;
+
         Cpu {
             gprs: [0; 32],
             fprs: [0.0; 32],
@@ -44,7 +49,8 @@ impl Cpu {
             cia: initial_pc,
             nia: initial_pc.wrapping_add(4),
             cr: ConditionRegister::new(),
-            spr: spr::Spr::default(),
+            dec: dec::Decrementer::default(),
+            spr,
             msr: msr::Msr::default(),
             fpscr: 0,
             sr: [sr::Sr::default(); 16],

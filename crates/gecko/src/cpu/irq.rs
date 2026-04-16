@@ -52,6 +52,38 @@ impl GameCube {
         tracing::debug!(addr = format!("{:08X}", self.cpu.pc), "IRQ triggered");
     }
 
+    pub fn cause_decrementer_interrupt(&mut self) {
+        let base: u32 = if self.cpu.msr.exception_prefix() {
+            0xFFF0_0000
+        } else {
+            0
+        };
+
+        self.cpu.dec.clear_interrupt();
+        self.cpu.spr.srr0 = Srr0::from(self.cpu.pc);
+        self.cpu.spr.srr1 = chapa::extract_bits!(self.cpu.msr; 0, 5..=9, 16..=31).raw();
+
+        self.cpu.msr = self
+            .cpu
+            .msr
+            .with_pow(false)
+            .with_fp(false)
+            .with_be(false)
+            .with_dr(false)
+            .with_fe1(false)
+            .with_ee(false)
+            .with_fe0(false)
+            .with_ri(false)
+            .with_pr(false)
+            .with_se(false)
+            .with_ir(false)
+            .with_le(self.cpu.msr.ile());
+
+        self.cpu.pc = base | IRQ_DECREMENTER;
+
+        tracing::info!(addr = format!("{:08X}", self.cpu.pc), "decrementer IRQ triggered");
+    }
+
     pub fn cause_trap_exception(&mut self) {
         let base: u32 = if self.cpu.msr.exception_prefix() {
             0xFFF0_0000
@@ -81,6 +113,8 @@ impl GameCube {
             .with_le(self.cpu.msr.ile());
 
         self.cpu.nia = base | IRQ_PROGRAM;
+
+        tracing::debug!(addr = format!("{:08X}", self.cpu.nia), "trap exception triggered");
     }
 
     pub fn cause_syscall_interrupt(&mut self) {
@@ -111,5 +145,7 @@ impl GameCube {
             .with_le(self.cpu.msr.ile());
 
         self.cpu.nia = base | IRQ_SYSTEM_CALL;
+
+        tracing::debug!(addr = format!("{:08X}", self.cpu.nia), "system call IRQ triggered");
     }
 }

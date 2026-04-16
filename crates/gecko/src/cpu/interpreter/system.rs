@@ -26,6 +26,16 @@ pub fn spr<const OP: u32>(ctx: &mut crate::gamecube::GameCube, instr: crate::cpu
             let spr_num = instr.spr_swapped();
             let val = ctx.cpu.read_gpr(instr.rs());
             match spr_num {
+                22 => {
+                    ctx.scheduler.cancel(crate::cpu::dec::underflow_handler);
+                    ctx.cpu.dec.write(ctx.scheduler.cycles, val);
+                    ctx.cpu.spr.dec = val;
+                    ctx.scheduler.schedule_in(
+                        crate::cpu::dec::cycles_until_underflow(val),
+                        crate::cpu::dec::underflow_handler,
+                    );
+                    tracing::info!(cycles = ctx.scheduler.cycles, value = val, "decrementer set");
+                }
                 284 => ctx.scheduler.set_timebase_lower(val),
                 285 => ctx.scheduler.set_timebase_upper(val),
                 923 => {
@@ -40,6 +50,10 @@ pub fn spr<const OP: u32>(ctx: &mut crate::gamecube::GameCube, instr: crate::cpu
         crate::cpu::lut::OP_MFSPR => {
             let spr_num = instr.spr_swapped();
             let val = match spr_num {
+                22 => {
+                    ctx.cpu.spr.dec = ctx.cpu.dec.read(ctx.scheduler.cycles);
+                    ctx.cpu.spr.dec
+                }
                 268 => ctx.scheduler.timebase_lower(),
                 269 => ctx.scheduler.timebase_upper(),
                 _ => ctx.cpu.spr.read(spr_num),

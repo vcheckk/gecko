@@ -293,10 +293,44 @@ impl Dsp {
 pub fn refresh_interrupts(gc: &mut GameCube) {
     use crate::flipper::pi::InterruptFlag;
 
-    if gc.dsp.interrupt_active() {
+    let active = gc.dsp.interrupt_active();
+    let intsr_before = gc.pi.intsr.raw();
+    let dsp_pi_pending = intsr_before & InterruptFlag::Dsp as u32 != 0;
+
+    if active {
         gc.pi.assert_interrupt(InterruptFlag::Dsp);
+        if !dsp_pi_pending {
+            tracing::info!(
+                csr = format!("{:04X}", gc.dsp.csr.raw()),
+                ai_interrupt = gc.dsp.csr.ai_interrupt(),
+                ai_interrupt_mask = gc.dsp.csr.ai_interrupt_mask(),
+                ar_interrupt = gc.dsp.csr.ar_interrupt(),
+                ar_interrupt_mask = gc.dsp.csr.ar_interrupt_mask(),
+                dsp_interrupt = gc.dsp.csr.dsp_interrupt(),
+                dsp_interrupt_mask = gc.dsp.csr.dsp_interrupt_mask(),
+                pi_intsr_before = format!("{intsr_before:08X}"),
+                pi_intsr_after = format!("{:08X}", gc.pi.intsr.raw()),
+                pi_intmr = format!("{:08X}", gc.pi.intmr.raw()),
+                "DSP PI interrupt asserted"
+            );
+        }
     } else {
         gc.pi.clear_interrupt(InterruptFlag::Dsp);
+        if dsp_pi_pending {
+            tracing::info!(
+                csr = format!("{:04X}", gc.dsp.csr.raw()),
+                ai_interrupt = gc.dsp.csr.ai_interrupt(),
+                ai_interrupt_mask = gc.dsp.csr.ai_interrupt_mask(),
+                ar_interrupt = gc.dsp.csr.ar_interrupt(),
+                ar_interrupt_mask = gc.dsp.csr.ar_interrupt_mask(),
+                dsp_interrupt = gc.dsp.csr.dsp_interrupt(),
+                dsp_interrupt_mask = gc.dsp.csr.dsp_interrupt_mask(),
+                pi_intsr_before = format!("{intsr_before:08X}"),
+                pi_intsr_after = format!("{:08X}", gc.pi.intsr.raw()),
+                pi_intmr = format!("{:08X}", gc.pi.intmr.raw()),
+                "DSP PI interrupt cleared"
+            );
+        }
     }
 }
 

@@ -244,11 +244,19 @@ impl GameCube {
 
     #[inline(always)]
     pub fn step_cpu(&mut self) {
-        // Deliver external interrupt when EE=1 and any enabled PI interrupt is pending
-        if self.cpu.msr.external_interrupt_enable() && self.pi.interrupt_pending() {
-            self.cause_external_interrupt();
-            self.scheduler.cycles += 2;
-            return;
+        if self.cpu.msr.external_interrupt_enable() {
+            // Deliver external interrupt when EE=1 and any enabled PI interrupt is pending
+            if self.pi.interrupt_pending() {
+                self.cause_external_interrupt();
+                self.scheduler.cycles += 2;
+                return;
+            }
+
+            if self.cpu.dec.interrupt_pending() {
+                self.cause_decrementer_interrupt();
+                self.scheduler.cycles += 2;
+                return;
+            }
         }
 
         // CPU pre-hook
