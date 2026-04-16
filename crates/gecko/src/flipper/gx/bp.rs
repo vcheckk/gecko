@@ -535,7 +535,7 @@ impl GraphicsProcessor {
     fn load_tlut(&mut self, ram: &[u8], load_val: u32) {
         let tmem_offset = (load_val & 0x3FF) as usize;
         let count = ((load_val >> 10) & 0x7FF) as usize;
-        let ram_base = ((self.bp_regs[BP_LOAD_TLUT0] as usize) & 0x00FF_FFFF) << 5;
+        let ram_base = ((self.bp_regs[BP_LOAD_TLUT0] as usize) << 5) & 0x01FF_FFFF;
         let entries = count * TLUT_LOAD_ENTRIES_PER_UNIT;
         let byte_count = entries * 2;
         let dst_base = tmem_offset * TLUT_ENTRIES_PER_UNIT;
