@@ -194,7 +194,7 @@ impl GameCube {
 
         let pc = self.dsp.registers.pc as usize;
         let w0 = self.dsp.read_imem(pc as u16);
-        let w1 = self.dsp.read_imem(pc as u16 + 1);
+        let w1 = self.dsp.read_imem((pc as u16).wrapping_add(1));
         let buf = [(w0 >> 8) as u8, w0 as u8, (w1 >> 8) as u8, w1 as u8];
         let instr = Instruction::from_be_bytes(&buf);
         self.dsp.registers.cia = self.dsp.registers.pc;

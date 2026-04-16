@@ -504,12 +504,14 @@ impl GxRenderer {
                 }
 
                 let sc = &self.draw_scissors[index];
-                let sc_w = sc.w.max(1).min(target_width.saturating_sub(sc.x));
-                let sc_h = sc.h.max(1).min(target_height.saturating_sub(sc.y));
-                rpass.set_scissor_rect(sc.x, sc.y, sc_w, sc_h);
+                let sc_x = sc.x.min(target_width);
+                let sc_y = sc.y.min(target_height);
+                let sc_w = sc.w.min(target_width - sc_x);
+                let sc_h = sc.h.min(target_height - sc_y);
+                rpass.set_scissor_rect(sc_x, sc_y, sc_w, sc_h);
                 let raster_marker = format!(
                     "Raster state: viewport=({:.1},{:.1} {:.1}x{:.1}) scissor=({},{} {}x{})",
-                    vp.x, vp.y, vp_w, vp_h, sc.x, sc.y, sc_w, sc_h
+                    vp.x, vp.y, vp_w, vp_h, sc_x, sc_y, sc_w, sc_h
                 );
                 rpass.insert_debug_marker(&raster_marker);
 

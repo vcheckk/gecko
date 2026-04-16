@@ -10,7 +10,7 @@ pub mod texture;
 mod vertex;
 mod xf;
 
-use crate::flipper::gx::constants::{BP_REG_SIZE, CP_REG_SIZE, XF_MEM_SIZE};
+use crate::flipper::gx::constants::{BP_REG_SIZE, CP_REG_SIZE, TLUT_MEM_ENTRIES, XF_MEM_SIZE};
 use crate::flipper::gx::draw::Matrix4;
 use crate::flipper::gx::regs::{AlphaCompare, BlendMode, TevAlphaEnv, TevColorEnv, TevRegisterH, TevRegisterL, ZMode};
 use crate::gamecube::GameCube;
@@ -34,6 +34,13 @@ pub struct GraphicsProcessor {
 
     // Current GX state to snapshot into a Draw action later
     pub cur_textures: [Option<draw::TextureDescriptor>; 8],
+    // Per-texture-slot TLUT binding (tmem offset + palette pixel format),
+    // populated by BP_TX_SETTLUT writes.
+    pub cur_tluts: [draw::TlutRef; 8],
+    // Palette TMEM: backing store for indexed texture palettes. Addressed as
+    // u16 entries; a LOADTLUT copies count*16 entries starting at
+    // (tmem_offset * 256). Fixed-size so indexing is branch-free.
+    pub palette_mem: Vec<u16>,
     pub cur_tev_color_env: [TevColorEnv; 16],
     pub cur_tev_alpha_env: [TevAlphaEnv; 16],
     pub cur_tev_color_regs_lo: [TevRegisterL; 4],
@@ -89,6 +96,8 @@ impl GraphicsProcessor {
             fifo: Vec::with_capacity(256),
             projection: Matrix4::default(),
             cur_textures: Default::default(),
+            cur_tluts: [draw::TlutRef::default(); 8],
+            palette_mem: vec![0u16; TLUT_MEM_ENTRIES],
             cur_tev_color_env: Default::default(),
             cur_tev_alpha_env: Default::default(),
             cur_tev_color_regs_lo: Default::default(),

@@ -1,8 +1,13 @@
-use super::draw::{TextureDescriptor, TextureFormat};
+use super::draw::{TextureDescriptor, TextureFormat, TlutFormat};
 use multiversion::multiversion;
 
 /// Decode a GX-format texture from RAM into RGBA8 pixels.
-pub fn decode_to_rgba(ram: &[u8], desc: &TextureDescriptor) -> Vec<u8> {
+///
+/// `palette` is the slice of the palette TMEM starting at the bound TLUT's
+/// tmem_offset. It is only consulted for paletted (CI*) formats; callers may
+/// pass `&[]` for non-paletted textures. `tlut_format` specifies how each
+/// 16-bit palette entry should be expanded to RGBA8.
+pub fn decode_to_rgba(ram: &[u8], desc: &TextureDescriptor, palette: &[u16], tlut_format: TlutFormat) -> Vec<u8> {
     let w = desc.width as usize;
     let h = desc.height as usize;
 
@@ -16,7 +21,9 @@ pub fn decode_to_rgba(ram: &[u8], desc: &TextureDescriptor) -> Vec<u8> {
         TextureFormat::RGB5A3 => decode_rgb5a3(ram, desc, &mut rgba, w, h),
         TextureFormat::RGBA8 => decode_rgba8(ram, desc, &mut rgba, w, h),
         TextureFormat::CMPR => decode_cmpr(ram, desc, &mut rgba, w, h),
-        _ => tracing::error!(?desc.format, "unsupported texture format"),
+        TextureFormat::CI4 => decode_ci4(ram, desc, &mut rgba, w, h, palette, tlut_format),
+        TextureFormat::CI8 => decode_ci8(ram, desc, &mut rgba, w, h, palette, tlut_format),
+        TextureFormat::CI14 => decode_ci14(ram, desc, &mut rgba, w, h, palette, tlut_format),
     }
 
     rgba
@@ -415,6 +422,180 @@ fn decode_cmpr(ram: &[u8], desc: &TextureDescriptor, rgba: &mut [u8], w: usize, 
                                 palette[pi],
                             );
                         }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[inline(always)]
+fn tlut_entry_to_rgba(packed: u16, format: TlutFormat) -> [u8; 4] {
+    match format {
+        TlutFormat::IA8 => {
+            // Palette IA8 is stored big-endian in TMEM; after our from_be_bytes
+            // load, high byte = alpha, low byte = intensity.
+            let a = (packed >> 8) as u8;
+            let i = (packed & 0xFF) as u8;
+            [i, i, i, a]
+        }
+        TlutFormat::RGB565 => self::rgb565_to_rgba(packed),
+        TlutFormat::RGB5A3 => {
+            if packed & 0x8000 != 0 {
+                let r = expand_to_8::<5>(((packed >> 10) & 0x1F) as u8);
+                let g = expand_to_8::<5>(((packed >> 5) & 0x1F) as u8);
+                let b = expand_to_8::<5>((packed & 0x1F) as u8);
+                [r, g, b, 255]
+            } else {
+                let a = expand_to_8::<3>(((packed >> 12) & 0x7) as u8);
+                let r = expand_to_8::<4>(((packed >> 8) & 0xF) as u8);
+                let g = expand_to_8::<4>(((packed >> 4) & 0xF) as u8);
+                let b = expand_to_8::<4>((packed & 0xF) as u8);
+                [r, g, b, a]
+            }
+        }
+    }
+}
+
+#[inline(always)]
+fn palette_lookup(palette: &[u16], index: usize, format: TlutFormat) -> [u8; 4] {
+    let entry = palette.get(index).copied().unwrap_or(0);
+    tlut_entry_to_rgba(entry, format)
+}
+
+#[multiversion(targets = "simd")]
+fn decode_ci4(
+    ram: &[u8],
+    desc: &TextureDescriptor,
+    rgba: &mut [u8],
+    w: usize,
+    h: usize,
+    palette: &[u16],
+    tlut_format: TlutFormat,
+) {
+    const BW: usize = 8;
+    const BH: usize = 8;
+    const BB: usize = 32;
+
+    let bcx = w.div_ceil(BW);
+    let bcy = h.div_ceil(BH);
+    if desc.ram_addr + bcx * bcy * BB > ram.len() {
+        tracing::warn!(addr = desc.ram_addr, w, h, "decode_ci4: texture OOB, skipping");
+        return;
+    }
+
+    let src = ram.as_ptr();
+    let dst = rgba.as_mut_ptr();
+
+    for by in 0..bcy {
+        let base_y = by * BH;
+        let th = BH.min(h - base_y);
+        for bx in 0..bcx {
+            let base_x = bx * BW;
+            let tw = BW.min(w - base_x);
+            let blk = desc.ram_addr + (by * bcx + bx) * BB;
+
+            for ty in 0..th {
+                for tx in 0..tw {
+                    unsafe {
+                        let byte = *src.add(blk + (ty * BW + tx) / 2);
+                        let nibble = if tx & 1 == 0 { byte >> 4 } else { byte & 0x0F };
+                        let pixel = self::palette_lookup(palette, nibble as usize, tlut_format);
+                        std::ptr::write(dst.add(((base_y + ty) * w + base_x + tx) * 4).cast::<[u8; 4]>(), pixel);
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[multiversion(targets = "simd")]
+fn decode_ci8(
+    ram: &[u8],
+    desc: &TextureDescriptor,
+    rgba: &mut [u8],
+    w: usize,
+    h: usize,
+    palette: &[u16],
+    tlut_format: TlutFormat,
+) {
+    const BW: usize = 8;
+    const BH: usize = 4;
+    const BB: usize = 32;
+
+    let bcx = w.div_ceil(BW);
+    let bcy = h.div_ceil(BH);
+    if desc.ram_addr + bcx * bcy * BB > ram.len() {
+        tracing::warn!(addr = desc.ram_addr, w, h, "decode_ci8: texture OOB, skipping");
+        return;
+    }
+
+    let src = ram.as_ptr();
+    let dst = rgba.as_mut_ptr();
+
+    for by in 0..bcy {
+        let base_y = by * BH;
+        let th = BH.min(h - base_y);
+        for bx in 0..bcx {
+            let base_x = bx * BW;
+            let tw = BW.min(w - base_x);
+            let blk = desc.ram_addr + (by * bcx + bx) * BB;
+
+            for ty in 0..th {
+                for tx in 0..tw {
+                    unsafe {
+                        let index = *src.add(blk + ty * BW + tx);
+                        let pixel = self::palette_lookup(palette, index as usize, tlut_format);
+                        std::ptr::write(dst.add(((base_y + ty) * w + base_x + tx) * 4).cast::<[u8; 4]>(), pixel);
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[multiversion(targets = "simd")]
+fn decode_ci14(
+    ram: &[u8],
+    desc: &TextureDescriptor,
+    rgba: &mut [u8],
+    w: usize,
+    h: usize,
+    palette: &[u16],
+    tlut_format: TlutFormat,
+) {
+    const BW: usize = 4;
+    const BH: usize = 4;
+    const BB: usize = 32;
+
+    let bcx = w.div_ceil(BW);
+    let bcy = h.div_ceil(BH);
+    if desc.ram_addr + bcx * bcy * BB > ram.len() {
+        tracing::warn!(addr = desc.ram_addr, w, h, "decode_ci14: texture OOB, skipping");
+        return;
+    }
+
+    let src = ram.as_ptr();
+    let dst = rgba.as_mut_ptr();
+
+    for by in 0..bcy {
+        let base_y = by * BH;
+        let th = BH.min(h - base_y);
+        for bx in 0..bcx {
+            let base_x = bx * BW;
+            let tw = BW.min(w - base_x);
+            let blk = desc.ram_addr + (by * bcx + bx) * BB;
+
+            for ty in 0..th {
+                for tx in 0..tw {
+                    unsafe {
+                        let off = blk + (ty * BW + tx) * 2;
+                        let hi = *src.add(off);
+                        let lo = *src.add(off + 1);
+                        // Bottom 14 bits index the palette; top 2 bits unused.
+                        let index = (((hi as u16) << 8) | lo as u16) & 0x3FFF;
+                        let pixel = self::palette_lookup(palette, index as usize, tlut_format);
+                        std::ptr::write(dst.add(((base_y + ty) * w + base_x + tx) * 4).cast::<[u8; 4]>(), pixel);
                     }
                 }
             }

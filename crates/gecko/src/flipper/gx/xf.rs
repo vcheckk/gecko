@@ -46,8 +46,8 @@ impl GraphicsProcessor {
         let x = x - self.cur_scissor_offset_x as f32;
         let y = y - self.cur_scissor_offset_y as f32;
 
-        let far = offset_z / DEPTH_24_BIT_MAX;
-        let near = far - scale_z / DEPTH_24_BIT_MAX;
+        let far = (offset_z / DEPTH_24_BIT_MAX).clamp(0.0, 1.0);
+        let near = (far - scale_z / DEPTH_24_BIT_MAX).clamp(0.0, 1.0);
 
         self.cur_viewport = draw::Viewport {
             x,

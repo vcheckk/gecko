@@ -1,10 +1,11 @@
 use super::constants::{
-    BP_GEN_MODE, BP_PE_ALPHA_COMPARE, BP_PE_CMODE0, BP_PE_COPY_CLEAR_AR, BP_PE_COPY_CLEAR_GB, BP_PE_COPY_CLEAR_Z,
-    BP_PE_COPY_CMD, BP_PE_COPY_DIMS, BP_PE_COPY_DST, BP_PE_COPY_DST_STRIDE, BP_PE_COPY_SRC, BP_PE_COPY_YSCALE,
-    BP_PE_DONE, BP_PE_DONE_FINISH_BIT, BP_PE_TOKEN, BP_PE_TOKEN_INT, BP_PE_ZCOMPARE, BP_PE_ZMODE, BP_RAS1_TREF_COUNT,
-    BP_RAS1_TREF0, BP_SU_SCIS_BR, BP_SU_SCIS_OFFSET, BP_SU_SCIS_TL, BP_TEV_COLOR_ENV_0, BP_TEV_KSEL_0,
-    BP_TEV_REGISTERL_0, BP_TX_SETIMAGE0_I0, BP_TX_SETIMAGE0_I4, BP_TX_SETIMAGE3_I0, BP_TX_SETIMAGE3_I4,
-    BP_TX_SETMODE0_I0, BP_TX_SETMODE0_I4, EFB_HEIGHT, EFB_WIDTH,
+    BP_GEN_MODE, BP_LOAD_TLUT0, BP_LOAD_TLUT1, BP_PE_ALPHA_COMPARE, BP_PE_CMODE0, BP_PE_COPY_CLEAR_AR,
+    BP_PE_COPY_CLEAR_GB, BP_PE_COPY_CLEAR_Z, BP_PE_COPY_CMD, BP_PE_COPY_DIMS, BP_PE_COPY_DST, BP_PE_COPY_DST_STRIDE,
+    BP_PE_COPY_SRC, BP_PE_COPY_YSCALE, BP_PE_DONE, BP_PE_DONE_FINISH_BIT, BP_PE_TOKEN, BP_PE_TOKEN_INT, BP_PE_ZCOMPARE,
+    BP_PE_ZMODE, BP_RAS1_TREF_COUNT, BP_RAS1_TREF0, BP_SU_SCIS_BR, BP_SU_SCIS_OFFSET, BP_SU_SCIS_TL,
+    BP_TEV_COLOR_ENV_0, BP_TEV_KSEL_0, BP_TEV_REGISTERL_0, BP_TX_SETIMAGE0_I0, BP_TX_SETIMAGE0_I4, BP_TX_SETIMAGE3_I0,
+    BP_TX_SETIMAGE3_I4, BP_TX_SETMODE0_I0, BP_TX_SETMODE0_I4, BP_TX_SETTLUT_I0, BP_TX_SETTLUT_I4, EFB_HEIGHT,
+    EFB_WIDTH, TLUT_ENTRIES_PER_UNIT, TLUT_LOAD_ENTRIES_PER_UNIT,
 };
 use super::regs::{
     AlphaCompare, BlendMode, DispCopyYScale, EfbCopyDims, EfbCopyDst, EfbCopyDstStride, EfbCopySrc, GenMode, PeClearAr,
@@ -41,6 +42,21 @@ impl GraphicsProcessor {
 
         if let Some(slot) = texture_slot {
             self.snapshot_texture(renderer, ram, slot, val);
+        }
+
+        // TX_SETTLUT: per-texture-slot binding of the palette (tmem offset +
+        // palette pixel format). Layout mirrors TX_SETIMAGE*: slots 0-3 at
+        // BP_TX_SETTLUT_I0, slots 4-7 at BP_TX_SETTLUT_I4.
+        if idx >= BP_TX_SETTLUT_I0 && idx < BP_TX_SETTLUT_I0 + 4 {
+            self.cur_tluts[idx - BP_TX_SETTLUT_I0] = draw::TlutRef::from_raw(val);
+        } else if idx >= BP_TX_SETTLUT_I4 && idx < BP_TX_SETTLUT_I4 + 4 {
+            self.cur_tluts[idx - BP_TX_SETTLUT_I4 + 4] = draw::TlutRef::from_raw(val);
+        }
+
+        // LOADTLUT: writing TLUT1 triggers a copy from main RAM (address in
+        // TLUT0, stored pre-shifted by 5) into our palette TMEM.
+        if idx == BP_LOAD_TLUT1 {
+            self.load_tlut(ram, val);
         }
 
         // Forward PE render state
@@ -171,7 +187,19 @@ impl GraphicsProcessor {
             "texture descriptor updated"
         );
 
-        let changed = self::texture_data_changed(&mut self.texture_hashes, ram, ram_addr, width, height, format);
+        let tlut = self.cur_tluts[slot];
+        let palette = slot_palette(&self.palette_mem, tlut.tmem_offset);
+
+        let changed = self::texture_data_changed(
+            &mut self.texture_hashes,
+            ram,
+            ram_addr,
+            width,
+            height,
+            format,
+            palette,
+            tlut,
+        );
 
         if changed {
             let desc = draw::TextureDescriptor {
@@ -188,7 +216,7 @@ impl GraphicsProcessor {
                 id: ram_addr as Address,
                 width,
                 height,
-                rgba: texture::decode_to_rgba(ram, &desc),
+                rgba: texture::decode_to_rgba(ram, &desc, palette, tlut.format),
             });
         }
 
@@ -459,6 +487,11 @@ impl GraphicsProcessor {
     }
 }
 
+fn slot_palette(palette_mem: &[u16], tmem_offset: u16) -> &[u16] {
+    let base = (tmem_offset as usize) * TLUT_ENTRIES_PER_UNIT;
+    palette_mem.get(base..).unwrap_or(&[])
+}
+
 /// Returns `true` when the raw texture data in RAM differs from the last
 /// hash recorded for the given address.
 fn texture_data_changed(
@@ -468,13 +501,72 @@ fn texture_data_changed(
     width: u32,
     height: u32,
     format: draw::TextureFormat,
+    palette: &[u16],
+    tlut: draw::TlutRef,
 ) -> bool {
     let size = texture::raw_data_size(width, height, format);
     let Some(slice) = ram.get(addr..addr + size) else {
         tracing::warn!(addr, size, "texture_changed: RAM slice OOB, assuming changed");
         return true;
     };
-    let hash = twox_hash::xxhash3_64::Hasher::oneshot(slice);
+    let mut hash = twox_hash::xxhash3_64::Hasher::oneshot(slice);
+    if format.is_paletted() {
+        let max_entries = match format {
+            draw::TextureFormat::CI4 => 16,
+            draw::TextureFormat::CI8 => 256,
+            draw::TextureFormat::CI14 => 16384,
+            _ => 0,
+        };
+        let take = max_entries.min(palette.len());
+        let palette_bytes: &[u8] = bytemuck::cast_slice(&palette[..take]);
+        hash ^= twox_hash::xxhash3_64::Hasher::oneshot(palette_bytes);
+        // Palette pixel format is part of the visual state too, so fold it
+        // into the hash or a format switch alone wouldn't force a redecode.
+        hash ^= tlut.format as u64;
+    }
     let prev = hashes.insert(addr as u32, hash);
     prev != Some(hash)
+}
+
+impl GraphicsProcessor {
+    /// Service a write to BP_LOAD_TLUT1: pulls `count * 16` big-endian u16
+    /// palette entries from main RAM (source address is BP_LOAD_TLUT0 << 5)
+    /// into palette TMEM starting at `tmem_offset * 256`.
+    fn load_tlut(&mut self, ram: &[u8], load_val: u32) {
+        let tmem_offset = (load_val & 0x3FF) as usize;
+        let count = ((load_val >> 10) & 0x7FF) as usize;
+        let ram_base = ((self.bp_regs[BP_LOAD_TLUT0] as usize) & 0x00FF_FFFF) << 5;
+        let entries = count * TLUT_LOAD_ENTRIES_PER_UNIT;
+        let byte_count = entries * 2;
+        let dst_base = tmem_offset * TLUT_ENTRIES_PER_UNIT;
+
+        if entries == 0 {
+            return;
+        }
+        if ram_base.saturating_add(byte_count) > ram.len() {
+            tracing::warn!(
+                ram_base = format!("{ram_base:#010X}"),
+                byte_count,
+                "LOADTLUT: source RAM range OOB, skipping"
+            );
+            return;
+        }
+        if dst_base.saturating_add(entries) > self.palette_mem.len() {
+            tracing::warn!(
+                dst_base,
+                entries,
+                tmem_limit = self.palette_mem.len(),
+                "LOADTLUT: destination palette range OOB, skipping"
+            );
+            return;
+        }
+
+        let src = &ram[ram_base..ram_base + byte_count];
+        let dst = &mut self.palette_mem[dst_base..dst_base + entries];
+        for (entry, chunk) in dst.iter_mut().zip(src.chunks_exact(2)) {
+            *entry = u16::from_be_bytes([chunk[0], chunk[1]]);
+        }
+
+        tracing::debug!(ram_base = format!("{ram_base:#010X}"), tmem_offset, entries, "LOADTLUT");
+    }
 }

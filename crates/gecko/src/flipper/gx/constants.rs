@@ -96,12 +96,26 @@ pub const BP_TX_SETIMAGE0_I0: usize = 0x88; // TX_SETIMAGE0 maps 0-3 (width/heig
 pub const BP_TX_SETIMAGE1_I0: usize = 0x8C; // TX_SETIMAGE1 maps 0-3
 pub const BP_TX_SETIMAGE2_I0: usize = 0x90; // TX_SETIMAGE2 maps 0-3
 pub const BP_TX_SETIMAGE3_I0: usize = 0x94; // TX_SETIMAGE3 maps 0-3 (IMAGE_BASE = addr >> 5)
+pub const BP_TX_SETTLUT_I0: usize = 0x98; // TX_SETTLUT maps 0-3 (tmem_offset + clut format)
 pub const BP_TX_SETMODE0_I4: usize = 0xA0; // TX_SETMODE0 maps 4-7
 pub const BP_TX_SETMODE1_I4: usize = 0xA4; // TX_SETMODE1 maps 4-7
 pub const BP_TX_SETIMAGE0_I4: usize = 0xA8; // TX_SETIMAGE0 maps 4-7
 pub const BP_TX_SETIMAGE1_I4: usize = 0xAC; // TX_SETIMAGE1 maps 4-7
 pub const BP_TX_SETIMAGE2_I4: usize = 0xB0; // TX_SETIMAGE2 maps 4-7
 pub const BP_TX_SETIMAGE3_I4: usize = 0xB4; // TX_SETIMAGE3 maps 4-7 (IMAGE_BASE = addr >> 5)
+pub const BP_TX_SETTLUT_I4: usize = 0xB8; // TX_SETTLUT maps 4-7
+
+// BP TLUT load registers: LOAD_TLUT0 holds the source RAM addr (>> 5 in the
+// register), LOAD_TLUT1 triggers the copy and carries tmem_offset / count.
+pub const BP_LOAD_TLUT0: usize = 0x64;
+pub const BP_LOAD_TLUT1: usize = 0x65;
+
+// Palette TMEM layout: tmem_offset is in 256-entry (512-byte) units.
+pub const TLUT_ENTRIES_PER_UNIT: usize = 256;
+// LOADTLUT `count` is in 32-byte (16 u16 entries) units.
+pub const TLUT_LOAD_ENTRIES_PER_UNIT: usize = 16;
+// Full palette TMEM area, in u16 entries. u10 offset * 256 entries = 262144.
+pub const TLUT_MEM_ENTRIES: usize = 1024 * TLUT_ENTRIES_PER_UNIT;
 
 // BP PE (Pixel Engine) registers
 pub const BP_PE_ZMODE: usize = 0x40;

@@ -34,7 +34,7 @@ pub fn spr<const OP: u32>(ctx: &mut crate::gamecube::GameCube, instr: crate::cpu
                         crate::cpu::dec::cycles_until_underflow(val),
                         crate::cpu::dec::underflow_handler,
                     );
-                    tracing::info!(cycles = ctx.scheduler.cycles, value = val, "decrementer set");
+                    tracing::debug!(cycles = ctx.scheduler.cycles, value = val, "decrementer set");
                 }
                 284 => ctx.scheduler.set_timebase_lower(val),
                 285 => ctx.scheduler.set_timebase_upper(val),

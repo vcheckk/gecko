@@ -57,6 +57,49 @@ pub enum TextureFormat {
     CMPR = 0xE,
 }
 
+impl TextureFormat {
+    #[inline(always)]
+    pub fn is_paletted(self) -> bool {
+        matches!(self, TextureFormat::CI4 | TextureFormat::CI8 | TextureFormat::CI14)
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub enum TlutFormat {
+    #[default]
+    IA8,
+    RGB565,
+    RGB5A3,
+}
+
+impl TlutFormat {
+    #[inline(always)]
+    pub fn from_raw(val: u32) -> Self {
+        match val & 0x3 {
+            0 => Self::IA8,
+            1 => Self::RGB565,
+            2 => Self::RGB5A3,
+            _ => Self::IA8,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct TlutRef {
+    pub tmem_offset: u16,
+    pub format: TlutFormat,
+}
+
+impl TlutRef {
+    #[inline(always)]
+    pub fn from_raw(val: u32) -> Self {
+        Self {
+            tmem_offset: (val & 0x3FF) as u16,
+            format: TlutFormat::from_raw(val >> 10),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct TextureDescriptor {
     pub ram_addr: usize,

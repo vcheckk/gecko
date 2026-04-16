@@ -81,7 +81,7 @@ impl GameCube {
 
         self.cpu.pc = base | IRQ_DECREMENTER;
 
-        tracing::info!(addr = format!("{:08X}", self.cpu.pc), "decrementer IRQ triggered");
+        tracing::debug!(addr = format!("{:08X}", self.cpu.pc), "decrementer IRQ triggered");
     }
 
     pub fn cause_trap_exception(&mut self) {

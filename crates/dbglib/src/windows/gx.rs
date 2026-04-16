@@ -1,10 +1,10 @@
 use egui::{Context, Grid, ScrollArea};
 use gecko::flipper::gx::GraphicsProcessor;
-use gecko::flipper::gx::draw::TextureDescriptor;
+use gecko::flipper::gx::draw::{TextureDescriptor, TlutRef};
 use gecko::mmio::Mmio;
 
-fn texture_preview(ui: &mut egui::Ui, tex: &TextureDescriptor, ram: &[u8]) {
-    let rgba = gecko::flipper::gx::texture::decode_to_rgba(ram, tex);
+fn texture_preview(ui: &mut egui::Ui, tex: &TextureDescriptor, ram: &[u8], palette: &[u16], tlut: TlutRef) {
+    let rgba = gecko::flipper::gx::texture::decode_to_rgba(ram, tex, palette, tlut.format);
     let size = [tex.width as usize, tex.height as usize];
     let image = egui::ColorImage::from_rgba_unmultiplied(size, &rgba);
     let handle = ui.ctx().load_texture(
@@ -146,8 +146,11 @@ pub fn show_gx(ctx: &Context, open: &mut bool, gx: &GraphicsProcessor, mmio: &Mm
                             "Slot {slot}: {:?} {}x{} @ 0x{:08X}",
                             tex.format, tex.width, tex.height, tex.ram_addr
                         );
+                        let tlut = gx.cur_tluts[slot];
+                        let base = (tlut.tmem_offset as usize) * 256;
+                        let palette = gx.palette_mem.get(base..).unwrap_or(&[]);
                         ui.collapsing(heading, |ui| {
-                            texture_preview(ui, tex, &mmio.ram);
+                            texture_preview(ui, tex, &mmio.ram, palette, tlut);
                         });
                     }
                 }

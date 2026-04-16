@@ -59,7 +59,7 @@ pub fn underflow_handler(gc: &mut GameCube) {
     gc.cpu.spr.dec = u32::MAX;
     gc.scheduler
         .schedule_in(cycles_until_underflow(u32::MAX), self::underflow_handler);
-    tracing::info!(
+    tracing::debug!(
         cycles = gc.scheduler.cycles,
         ee = gc.cpu.msr.external_interrupt_enable(),
         pi_pending = gc.pi.interrupt_pending(),
