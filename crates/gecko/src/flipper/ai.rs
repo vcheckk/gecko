@@ -71,8 +71,9 @@ pub fn start_audio_dma(gc: &mut GameCube) {
         return;
     }
 
-    gc.scheduler.cancel(audio_dma_block_handler);
+    gc.scheduler.cancel(self::audio_dma_block_handler);
     gc.ai.audio_dma_remaining_blocks = blocks;
+    gc.dsp.csr.set_dma_status(true);
 
     let addr = gc.dsp.audio_dma_start_addr.raw();
     let len = blocks as u32 * AUDIO_DMA_BLOCK_BYTES;
@@ -81,13 +82,14 @@ pub fn start_audio_dma(gc: &mut GameCube) {
 
     // TODO: actually stream samples to audio output.
     gc.scheduler
-        .schedule_in(cycles_per_audio_dma_block(gc), audio_dma_block_handler);
+        .schedule_in(cycles_per_audio_dma_block(gc), self::audio_dma_block_handler);
 }
 
 #[inline(always)]
 pub fn stop_audio_dma(gc: &mut GameCube) {
-    gc.scheduler.cancel(audio_dma_block_handler);
+    gc.scheduler.cancel(self::audio_dma_block_handler);
     gc.ai.audio_dma_remaining_blocks = 0;
+    gc.dsp.csr.set_dma_status(false);
 }
 
 #[inline(always)]
@@ -109,7 +111,6 @@ pub fn audio_dma_block_handler(gc: &mut GameCube) {
     gc.ai.audio_dma_remaining_blocks -= 1;
 
     if gc.ai.audio_dma_remaining_blocks == 0 {
-        gc.dsp.csr.set_dma_status(false);
         gc.dsp.csr.set_ai_interrupt(true);
         dsp::refresh_interrupts(gc);
 
@@ -125,8 +126,11 @@ pub fn audio_dma_block_handler(gc: &mut GameCube) {
     }
 
     if gc.dsp.audio_dma_control.play() && gc.ai.audio_dma_remaining_blocks != 0 {
+        gc.dsp.csr.set_dma_status(true);
         gc.scheduler
-            .schedule_in(cycles_per_audio_dma_block(gc), audio_dma_block_handler);
+            .schedule_in(cycles_per_audio_dma_block(gc), self::audio_dma_block_handler);
+    } else {
+        stop_audio_dma(gc);
     }
 }
 
