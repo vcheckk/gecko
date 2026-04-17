@@ -1,16 +1,16 @@
-use std::collections::VecDeque;
-use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use crate::thread::FrameMessage;
 use backend_wgpu::capture::{self, CaptureRequest, ScreenshotControl};
 use crossbeam_channel::Receiver;
 use egui::ViewportId;
 use gecko::flipper::si::pad::PadStatus;
+use std::collections::VecDeque;
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
 use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
 use winit::event_loop::ActiveEventLoop;
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowId};
-use crate::thread::FrameMessage;
 
 pub struct State {
     surface: wgpu::Surface<'static>,

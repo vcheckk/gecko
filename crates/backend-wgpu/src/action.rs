@@ -106,10 +106,23 @@ impl GxRenderer {
                     },
                 );
                 let view = tex.create_view(&Default::default());
+
                 // Invalidate bind groups that referenced the old texture.
                 let tid = *id;
                 self.bind_group_cache
                     .retain(|key, _| !key.tex_keys.iter().any(|k| *k == Some(tid)));
+
+                // A fresh RAM upload means the game wrote this address
+                // after a prior EFB copy. Return the stale GPU
+                // copy to its pool and let the RAM-decoded entry win.
+                if let Some((old_tex, old_view)) = self.efb_copy_cache.remove(&tid) {
+                    let old_size = old_tex.size();
+                    self.efb_copy_pool
+                        .entry((old_size.width, old_size.height))
+                        .or_default()
+                        .push((old_tex, old_view));
+                }
+
                 self.texture_cache.insert(*id, (tex, view));
             }
             GxAction::SetTexture {
@@ -243,13 +256,13 @@ impl GxRenderer {
             }
 
             GxAction::CopyEfbToTexture {
-                dest_addr: _dest_addr,
+                dest_addr,
                 src_x,
                 src_y,
                 src_w,
                 src_h,
                 copy_format: _copy_format,
-                mipmap: _mipmap,
+                mipmap,
                 stride: _stride,
                 clear,
                 clear_color,
@@ -258,7 +271,7 @@ impl GxRenderer {
                 alpha_update,
                 z_update,
                 alpha_supported,
-                depth_copy: _depth_copy,
+                depth_copy,
             } => {
                 self.flush_pending_draws(device, queue);
 
@@ -269,15 +282,15 @@ impl GxRenderer {
                 self.execute_copy_efb_to_texture(
                     device,
                     queue,
-                    *_dest_addr,
+                    *dest_addr,
                     *src_x,
                     *src_y,
                     *src_w,
                     *src_h,
                     *_copy_format,
-                    *_mipmap,
+                    *mipmap,
                     *_stride,
-                    *_depth_copy,
+                    *depth_copy,
                     *clear,
                     *clear_color,
                     *clear_z,
@@ -287,10 +300,11 @@ impl GxRenderer {
                     *alpha_supported,
                 );
 
-                // Default path: no readback, no encode, no RAM touch. Texture
-                // invalidation happens on the emu side via a `texture_hashes`
-                // drop. We only need to honor the post-copy clear here.
-                #[cfg(not(feature = "efb-writeback"))]
+                // Blit the resolved EFB region into a GPU texture keyed by `dest_addr`.
+                if !*depth_copy {
+                    self.cache_efb_copy_color(device, queue, *dest_addr, *src_x, *src_y, *src_w, *src_h, *mipmap);
+                }
+
                 if *clear {
                     self.efb_clear.clear_region_masked(
                         device,
@@ -350,9 +364,12 @@ impl GxRenderer {
 
                 for slot in 0..8 {
                     if let Some(tid) = &bg_key.tex_keys[slot] {
-                        if let Some((_, view)) = self.texture_cache.get(tid) {
+                        // The EFB-copy cache wins over the RAM-decoded
+                        // `texture_cache`.
+                        if let Some((_, view)) = self.efb_copy_cache.get(tid).or_else(|| self.texture_cache.get(tid)) {
                             tex_views[slot] = view;
                         }
+
                         if let Some(sk) = &bg_key.sampler_keys[slot] {
                             if let Some(sampler) = self.sampler_cache.get(sk) {
                                 tex_samplers[slot] = sampler;

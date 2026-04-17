@@ -415,12 +415,8 @@ impl GraphicsProcessor {
                 depth_copy: self.cur_pe_control.pixel_format().is_depth_only(),
             });
 
-            // Default path (feature off): the renderer doesn't do a readback
-            // and RAM at `dest_addr` is not modified, so "invalidating" the
-            // texture at that address means dropping the hash so the next
-            // `TX_SETIMAGE3` forces a fresh re-decode + re-upload. That
-            // evicts any stale GPU texture / bind groups tied to the old
-            // cache entry.
+            // Writeback overwrites RAM, so drop the hash to force a re-decode. The default path keeps it GPU-side.
+            #[cfg(feature = "efb-writeback")]
             self.texture_hashes.remove(&dest_addr);
             let _ = ram;
 

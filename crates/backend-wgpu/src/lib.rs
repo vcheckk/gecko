@@ -108,6 +108,12 @@ pub struct GxRenderer {
     pub(crate) efb_needs_clear: bool,
     pub(crate) sampler_cache: FxHashMap<(WrapMode, WrapMode, MagFilter, MinFilter), wgpu::Sampler>,
     pub(crate) texture_cache: FxHashMap<Address, (wgpu::Texture, wgpu::TextureView)>,
+    // GPU textures holding EFB copy results, checked before `texture_cache` on every texture bind.
+    pub(crate) efb_copy_cache: FxHashMap<Address, (wgpu::Texture, wgpu::TextureView)>,
+    // Retired EFB-copy textures grouped by size, popped by the next copy to skip reallocating.
+    pub(crate) efb_copy_pool: FxHashMap<(u32, u32), Vec<(wgpu::Texture, wgpu::TextureView)>>,
+    // Blits a sub-rect of `efb_view` into an `Rgba8Unorm` target, reusing xfb_copy's shader and layout.
+    pub(crate) efb_copy_pipeline: wgpu::RenderPipeline,
     pub(crate) fallback_view: wgpu::TextureView,
     pub(crate) scratch_vertices: Vec<GpuVertex>,
     pub(crate) scratch_draws: Vec<(u32, u32)>,
@@ -393,6 +399,7 @@ impl GxRenderer {
                 },
             ],
         });
+
         let xfb_copy_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("xfb_copy_layout"),
             bind_group_layouts: &[&xfb_copy_bind_group_layout],
@@ -430,6 +437,41 @@ impl GxRenderer {
             multiview_mask: None,
             cache: None,
         });
+
+        // Same shader and layout as xfb_copy, but writes `Rgba8Unorm` so the output matches `LoadTexture`.
+        let efb_copy_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("efb_copy_pipeline"),
+            layout: Some(&xfb_copy_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &xfb_copy_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &xfb_copy_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: wgpu::TextureFormat::Rgba8Unorm,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                ..Default::default()
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState {
+                count: 1,
+                mask: !0,
+                alpha_to_coverage_enabled: false,
+            },
+            multiview_mask: None,
+            cache: None,
+        });
+
         let xfb_copy_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("xfb_copy_sampler"),
             address_mode_u: wgpu::AddressMode::ClampToEdge,
@@ -440,6 +482,7 @@ impl GxRenderer {
             mipmap_filter: wgpu::MipmapFilterMode::Nearest,
             ..Default::default()
         });
+
         let xfb_copy_uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("xfb_copy_uniforms"),
             size: std::mem::size_of::<render::XfbCopyUniforms>() as u64,
@@ -481,6 +524,9 @@ impl GxRenderer {
                 m
             },
             texture_cache: FxHashMap::default(),
+            efb_copy_cache: FxHashMap::default(),
+            efb_copy_pool: FxHashMap::default(),
+            efb_copy_pipeline,
             fallback_view,
             scratch_vertices: Vec::new(),
             scratch_draws: Vec::new(),

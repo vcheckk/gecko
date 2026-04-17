@@ -106,7 +106,7 @@ impl ApplicationHandler for App {
                             }
                         }
                     }
-                    
+
                     if !egui_consumed {
                         update_pad(self.emulator.primary_controller_mut(), key, pressed);
                     }
