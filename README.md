@@ -15,6 +15,7 @@ Gecko is in early development. The IPL works flawlessly as far as I can tell. Ma
 
 - PowerPC interpreter
 - DSP LLE interpreter
+- IPL skip patches for NTSC and PAL
 - `wgpu` based renderer backend
 - `wesl` based shader compiler
 - LUA scripting/hooks system for runtime introspection
