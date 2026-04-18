@@ -1,6 +1,6 @@
 use super::GraphicsProcessor;
-use super::constants::{XF_DUAL_TEX_ENABLE, XF_DUALTEX_BASE, XF_POS_MTX_STRIDE, XF_POST_MTX_BASE, XF_TEXGEN_BASE};
-use super::regs::{DualTexGenReg, TexGenReg};
+use super::constants::*;
+use super::regs::*;
 
 impl GraphicsProcessor {
     pub fn compute_texgen(

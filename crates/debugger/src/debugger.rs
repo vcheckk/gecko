@@ -30,6 +30,8 @@ pub struct DebuggerUi {
     pub lua_source: String,
     pub lua_log: Vec<String>,
     pub lua_load_pending: bool,
+    pub gx_invalidate_requested: bool,
+    pub gx_dump_requested: bool,
 }
 
 impl Default for DebuggerUi {
@@ -56,6 +58,8 @@ impl Default for DebuggerUi {
             lua_source: DEFAULT_LUA_SCRIPT.to_string(),
             lua_log: Vec::new(),
             lua_load_pending: false,
+            gx_invalidate_requested: false,
+            gx_dump_requested: false,
         }
     }
 }

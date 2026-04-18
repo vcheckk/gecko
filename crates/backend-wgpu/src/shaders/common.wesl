@@ -13,6 +13,13 @@ struct FrameUniforms {
     alpha_comp0: u32,
     alpha_comp1: u32,
     alpha_op: u32,
+    // Indirect memes
+    indirect_matrices: array<vec4<i32>, 6>,
+    indirect_scales: array<vec4<u32>, 2>,
+    indirect_refs: u32,
+    num_indirect_stages: u32,
+    bump_imask: u32,
+    tev_indirect: array<vec4<u32>, 4>,
     // XF lighting state
     light_colors: array<vec4<f32>, 8>,
     light_cosatt: array<vec4<f32>, 8>,

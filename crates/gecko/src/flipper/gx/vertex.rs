@@ -1,14 +1,6 @@
-use super::constants::{
-    ARRAY_BASE_REG, ARRAY_CLR0, ARRAY_CLR1, ARRAY_NRM, ARRAY_POS, ARRAY_STRIDE_REG, ARRAY_TEX0, VATA_REG, VATB_REG,
-    VATC_REG, VCD_HI_REG, VCD_LO_REG, XF_ALPHA_CTRL0, XF_ALPHA_CTRL1, XF_AMBIENT_COLOR0, XF_AMBIENT_COLOR1,
-    XF_COLOR_CTRL0, XF_COLOR_CTRL1, XF_LIGHT_A0, XF_LIGHT_BASE, XF_LIGHT_COLOR, XF_LIGHT_K0, XF_LIGHT_NX, XF_LIGHT_PX,
-    XF_LIGHT_STRIDE, XF_MATERIAL_COLOR0, XF_MATERIAL_COLOR1, XF_MATRIX_INDEX_A, XF_MATRIX_INDEX_B, XF_NRM_MTX_BASE,
-    XF_NUM_TEXGENS, XF_POS_MTX_STRIDE,
-};
+use super::constants::*;
 use super::math::{Vec3, unpack_rgba};
-use super::regs::{
-    self, AttributeType, ComponentFormat, MatrixIndex0, MatrixIndex1, TexCount, VatA, VatB, VatC, VcdHi, VcdLo,
-};
+use super::regs::{self, *};
 use super::{GraphicsProcessor, draw};
 use crate::host::{DrawData, DrawVertex, GxAction, LightData, RenderSink};
 use crate::mmio::Mmio;
@@ -131,6 +123,35 @@ impl GraphicsProcessor {
             direction: light_dir[i],
         });
 
+        // Flatten the three indirect matrices to 6 rows. Row 2M is row
+        // 0 of matrix M, row 2M+1 is row 1. The .w lane carries the
+        // shared scale exponent (positive means right-shift, negative
+        // means left-shift of the mat-mul result).
+        let mut indirect_matrices = [[0i32; 4]; 6];
+        for m in 0..3 {
+            let mtx = &self.cur_indirect_matrices[m];
+            let exp = mtx.scale_exponent();
+            let r0 = mtx.row0();
+            let r1 = mtx.row1();
+            indirect_matrices[2 * m] = [r0[0], r0[1], r0[2], exp];
+            indirect_matrices[2 * m + 1] = [r1[0], r1[1], r1[2], exp];
+        }
+
+        let indirect_scales = [
+            [
+                self.cur_indirect_scales[0].ss0() as u32,
+                self.cur_indirect_scales[0].ts0() as u32,
+                self.cur_indirect_scales[0].ss1() as u32,
+                self.cur_indirect_scales[0].ts1() as u32,
+            ],
+            [
+                self.cur_indirect_scales[1].ss0() as u32,
+                self.cur_indirect_scales[1].ts0() as u32,
+                self.cur_indirect_scales[1].ss1() as u32,
+                self.cur_indirect_scales[1].ts1() as u32,
+            ],
+        ];
+
         renderer.exec(GxAction::Draw(DrawData {
             primitive,
             vertices: draw_vertices,
@@ -141,6 +162,12 @@ impl GraphicsProcessor {
             tev_color_regs,
             tev_konst_colors: self.cur_tev_konst_colors,
             num_tev_stages: self.cur_num_tev_stages,
+            indirect_matrices,
+            indirect_scales,
+            indirect_refs: self.cur_indirect_refs.raw(),
+            num_indirect_stages: self.cur_num_indirect_stages,
+            bump_imask: self.cur_bump_imask,
+            tev_indirect: self.cur_tev_indirect.iter().map(|c| c.raw()).collect(),
             color_ctrl,
             alpha_ctrl,
             ambient_color,

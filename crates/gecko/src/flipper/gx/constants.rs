@@ -131,6 +131,26 @@ pub const BP_PE_TOKEN_INT: usize = 0x48;
 pub const BP_GEN_MODE: usize = 0x00;
 pub const BP_RAS1_TREF0: usize = 0x28; // ..0x2F, order registers
 pub const BP_RAS1_TREF_COUNT: usize = 8;
+
+// BP indirect texture registers
+pub const BP_IND_MTX_A0: usize = 0x06;
+pub const BP_IND_MTX_B0: usize = 0x07;
+pub const BP_IND_MTX_C0: usize = 0x08;
+pub const BP_IND_MTX_A1: usize = 0x09;
+pub const BP_IND_MTX_B1: usize = 0x0A;
+pub const BP_IND_MTX_C1: usize = 0x0B;
+pub const BP_IND_MTX_A2: usize = 0x0C;
+pub const BP_IND_MTX_B2: usize = 0x0D;
+pub const BP_IND_MTX_C2: usize = 0x0E;
+pub const BP_BUMP_IMASK: usize = 0x0F;
+// 16 per-TEV-stage indirect command registers at 0x10..=0x1F
+pub const BP_IND_CMD_0: usize = 0x10;
+pub const BP_IND_CMD_COUNT: usize = 16;
+// Two 4x4-bit TEXSCALE registers, covering indirect stages 0-1 and 2-3
+pub const BP_RAS1_SS0: usize = 0x25;
+pub const BP_RAS1_SS1: usize = 0x26;
+// Indirect texture reference: maps 4 indirect stages to texmap + texcoord
+pub const BP_RAS1_IREF: usize = 0x27;
 pub const BP_TEV_COLOR_ENV_0: usize = 0xC0; // stage N color = 0xC0 + N*2
 pub const BP_TEV_ALPHA_ENV_0: usize = 0xC1; // stage N alpha = 0xC1 + N*2
 // lo = 0xE0 + N*2 (R,A), hi = 0xE1 + N*2 (G,B)

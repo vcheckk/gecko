@@ -1,6 +1,8 @@
 use crate::common::Address;
-use crate::flipper::gx::draw::{Primitive, Scissor, Viewport};
+use crate::flipper::gx::draw::{Primitive, Scissor, TextureFormat, Viewport};
 use crate::flipper::gx::regs::{AlphaCompare, BlendMode, ChanCtrl, CullMode, MagFilter, MinFilter, WrapMode, ZMode};
+#[cfg(not(target_arch = "wasm32"))]
+use std::path::PathBuf;
 
 #[derive(Debug)]
 pub enum GxAction {
@@ -24,7 +26,19 @@ pub enum GxAction {
         id: Address,
         width: u32,
         height: u32,
+        fmt: TextureFormat,
         rgba: Vec<u8>,
+    },
+
+    /// Debug action: Drop every cached pipeline, bind group, and texture on
+    /// the renderer side. Used by the GX debug window to force fresh decodes.
+    InvalidateCaches,
+
+    /// Debug action: Dump every currently cached texture to `dir` as a PNG,
+    /// filename including the GX format. Native only.
+    #[cfg(not(target_arch = "wasm32"))]
+    DumpTextures {
+        dir: PathBuf,
     },
 
     /// Bind a previously loaded texture to a TEV texture slot.
@@ -143,6 +157,16 @@ pub struct DrawData {
     pub tev_color_regs: [[f32; 4]; 4],
     pub tev_konst_colors: [[f32; 4]; 16],
     pub num_tev_stages: u8,
+    // Indirect texturing state. `indirect_matrices` is 6 rows (2 per
+    // matrix, matrix N at rows 2*N and 2*N+1) with .xyz holding the
+    // 11-bit signed elements and .w holding `17 - scale_exponent`.
+    // `tev_indirect` holds the raw IND_CMD per TEV stage (16 entries).
+    pub indirect_matrices: [[i32; 4]; 6],
+    pub indirect_scales: [[u32; 4]; 2],
+    pub indirect_refs: u32,
+    pub num_indirect_stages: u8,
+    pub bump_imask: u32,
+    pub tev_indirect: Vec<u32>,
     // Lighting state (2 channels: COLOR0/ALPHA0 and COLOR1/ALPHA1)
     pub color_ctrl: [ChanCtrl; 2],
     pub alpha_ctrl: [ChanCtrl; 2],

@@ -257,7 +257,14 @@ impl RenderState {
                 }
             }
             if debugger_ui.show_gx_state {
-                dbglib::windows::gx::show_gx(&ctx, &mut debugger_ui.show_gx_state, gx, mmio);
+                dbglib::windows::gx::show_gx(
+                    &ctx,
+                    &mut debugger_ui.show_gx_state,
+                    gx,
+                    mmio,
+                    &mut debugger_ui.gx_invalidate_requested,
+                    &mut debugger_ui.gx_dump_requested,
+                );
             }
             if debugger_ui.show_mmio {
                 dbglib::windows::mmio::show_mmio(
@@ -304,6 +311,17 @@ impl RenderState {
                 }
             }
         });
+
+        if std::mem::take(&mut debugger_ui.gx_invalidate_requested) {
+            emulator.gx.texture_hashes.clear();
+            emulator.render_sink.exec(gecko::host::GxAction::InvalidateCaches);
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        if std::mem::take(&mut debugger_ui.gx_dump_requested) {
+            emulator.render_sink.exec(gecko::host::GxAction::DumpTextures {
+                dir: std::path::PathBuf::from("textures"),
+            });
+        }
 
         self.egui_winit
             .handle_platform_output(window, full_output.platform_output);

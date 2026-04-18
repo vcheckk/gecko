@@ -74,9 +74,10 @@ impl GxRenderer {
                 id,
                 width,
                 height,
+                fmt,
                 rgba,
             } => {
-                let texture_label = format!("gx_tex addr={:#010x} size={}x{}", *id, *width, *height);
+                let texture_label = format!("gx_tex addr={:#010x} fmt={:?} size={}x{}", *id, *fmt, *width, *height);
                 let tex = device.create_texture(&wgpu::TextureDescriptor {
                     label: Some(&texture_label),
                     size: wgpu::Extent3d {
@@ -88,7 +89,9 @@ impl GxRenderer {
                     sample_count: 1,
                     dimension: wgpu::TextureDimension::D2,
                     format: wgpu::TextureFormat::Rgba8Unorm,
-                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING
+                        | wgpu::TextureUsages::COPY_DST
+                        | wgpu::TextureUsages::COPY_SRC,
                     view_formats: &[],
                 });
                 queue.write_texture(
@@ -119,7 +122,22 @@ impl GxRenderer {
                     self.return_to_pool(old_tex, old_view);
                 }
 
-                self.texture_cache.insert(*id, (tex, view));
+                self.texture_cache.insert(*id, (*fmt, tex, view));
+            }
+            GxAction::InvalidateCaches => {
+                self.flush_pending_draws(device, queue);
+                self.texture_cache.clear();
+                let drained: Vec<_> = self.efb_copy_cache.drain().map(|(_, v)| v).collect();
+                for (tex, view) in drained {
+                    self.return_to_pool(tex, view);
+                }
+                self.bind_group_cache.clear();
+                self.pipeline_cache.clear();
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            GxAction::DumpTextures { dir } => {
+                self.flush_pending_draws(device, queue);
+                self.dump_textures(device, queue, dir);
             }
             GxAction::SetTexture {
                 slot,
@@ -179,6 +197,12 @@ impl GxRenderer {
                     alpha_comp0: alpha_cmp.comp0() as u32,
                     alpha_comp1: alpha_cmp.comp1() as u32,
                     alpha_op: alpha_cmp.op() as u32,
+                    indirect_matrices: draw.indirect_matrices.map(glam::IVec4::from),
+                    indirect_scales: draw.indirect_scales.map(glam::UVec4::from),
+                    indirect_refs: draw.indirect_refs,
+                    num_indirect_stages: draw.num_indirect_stages as u32,
+                    bump_imask: draw.bump_imask,
+                    tev_indirect: pack_u32_slice_to_uvec4x4(&draw.tev_indirect),
                     light_colors: draw.lights.each_ref().map(|l| Vec4::from(l.color)),
                     light_cosatt: draw.lights.each_ref().map(|l| Vec4::from(l.cosatt)),
                     light_distatt: draw.lights.each_ref().map(|l| Vec4::from(l.distatt)),
@@ -364,7 +388,12 @@ impl GxRenderer {
                     if let Some(tid) = &bg_key.tex_keys[slot] {
                         // The EFB-copy cache wins over the RAM-decoded
                         // `texture_cache`.
-                        if let Some((_, view)) = self.efb_copy_cache.get(tid).or_else(|| self.texture_cache.get(tid)) {
+                        let view = self
+                            .efb_copy_cache
+                            .get(tid)
+                            .map(|(_, v)| v)
+                            .or_else(|| self.texture_cache.get(tid).map(|(_, _, v)| v));
+                        if let Some(view) = view {
                             tex_views[slot] = view;
                         }
 

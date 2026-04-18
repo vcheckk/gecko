@@ -1,17 +1,5 @@
-use super::constants::{
-    BP_GEN_MODE, BP_LOAD_TLUT0, BP_LOAD_TLUT1, BP_PE_ALPHA_COMPARE, BP_PE_CMODE0, BP_PE_COPY_CLEAR_AR,
-    BP_PE_COPY_CLEAR_GB, BP_PE_COPY_CLEAR_Z, BP_PE_COPY_CMD, BP_PE_COPY_DIMS, BP_PE_COPY_DST, BP_PE_COPY_DST_STRIDE,
-    BP_PE_COPY_SRC, BP_PE_COPY_YSCALE, BP_PE_DONE, BP_PE_DONE_FINISH_BIT, BP_PE_TOKEN, BP_PE_TOKEN_INT, BP_PE_ZCOMPARE,
-    BP_PE_ZMODE, BP_RAS1_TREF_COUNT, BP_RAS1_TREF0, BP_SU_SCIS_BR, BP_SU_SCIS_OFFSET, BP_SU_SCIS_TL,
-    BP_TEV_COLOR_ENV_0, BP_TEV_KSEL_0, BP_TEV_REGISTERL_0, BP_TX_SETIMAGE0_I0, BP_TX_SETIMAGE0_I4, BP_TX_SETIMAGE3_I0,
-    BP_TX_SETIMAGE3_I4, BP_TX_SETMODE0_I0, BP_TX_SETMODE0_I4, BP_TX_SETTLUT_I0, BP_TX_SETTLUT_I4, EFB_HEIGHT,
-    EFB_WIDTH, TLUT_ENTRIES_PER_UNIT, TLUT_LOAD_ENTRIES_PER_UNIT,
-};
-use super::regs::{
-    AlphaCompare, BlendMode, DispCopyYScale, EfbCopyDims, EfbCopyDst, EfbCopyDstStride, EfbCopySrc, GenMode, PeClearAr,
-    PeClearGb, PeClearZ, PeControl, PeCopyCmd, SuScisOffset, SuScisRect, TevAlphaEnv, TevColorEnv, TevOrder,
-    TevRegType, TevRegisterH, TevRegisterL, TxSetImage0, TxSetImage3, TxSetMode0, ZMode,
-};
+use super::constants::*;
+use super::regs::*;
 use super::{GraphicsProcessor, draw, texture};
 use crate::common::Address;
 use crate::host::{GxAction, RenderSink};
@@ -46,17 +34,32 @@ impl GraphicsProcessor {
 
         // TX_SETTLUT: per-texture-slot binding of the palette (tmem offset +
         // palette pixel format). Layout mirrors TX_SETIMAGE*: slots 0-3 at
-        // BP_TX_SETTLUT_I0, slots 4-7 at BP_TX_SETTLUT_I4.
-        if idx >= BP_TX_SETTLUT_I0 && idx < BP_TX_SETTLUT_I0 + 4 {
-            self.cur_tluts[idx - BP_TX_SETTLUT_I0] = draw::TlutRef::from_raw(val);
+        // BP_TX_SETTLUT_I0, slots 4-7 at BP_TX_SETTLUT_I4. Rebinding a TLUT
+        // invalidates the cached decode of any paletted texture on that slot,
+        // since both palette format and tmem offset feed the decoded pixels.
+        let tlut_slot = if idx >= BP_TX_SETTLUT_I0 && idx < BP_TX_SETTLUT_I0 + 4 {
+            Some(idx - BP_TX_SETTLUT_I0)
         } else if idx >= BP_TX_SETTLUT_I4 && idx < BP_TX_SETTLUT_I4 + 4 {
-            self.cur_tluts[idx - BP_TX_SETTLUT_I4 + 4] = draw::TlutRef::from_raw(val);
+            Some(idx - BP_TX_SETTLUT_I4 + 4)
+        } else {
+            None
+        };
+        if let Some(slot) = tlut_slot {
+            self.cur_tluts[slot] = draw::TlutRef::from_raw(val);
+            self.resnapshot_paletted_slot(renderer, ram, slot);
         }
 
         // LOADTLUT: writing TLUT1 triggers a copy from main RAM (address in
-        // TLUT0, stored pre-shifted by 5) into our palette TMEM.
+        // TLUT0, stored pre-shifted by 5) into our palette TMEM. Any paletted
+        // texture already bound is now looking at fresh palette bytes, so we
+        // must redecode it. We don't know which slots' TLUT regions overlap
+        // the load, so rescan all bound paletted slots (saw this in Dolphin @
+        // TMEM::InvalidateAll on LOADTLUT1).
         if idx == BP_LOAD_TLUT1 {
             self.load_tlut(ram, val);
+            for slot in 0..self.cur_textures.len() {
+                self.resnapshot_paletted_slot(renderer, ram, slot);
+            }
         }
 
         // Forward PE render state
@@ -95,14 +98,58 @@ impl GraphicsProcessor {
             self.load_tev_register(idx, val);
         }
 
-        // GEN_MODE, extract num TEV stages + cull mode
+        // GEN_MODE, extract num TEV stages + cull mode + num indirect stages
         if idx == BP_GEN_MODE {
             let gen_mode = GenMode::from_raw(val);
             let stages = gen_mode.num_tev_stages() + 1;
-            tracing::debug!(num_tev_stages = stages, "GEN_MODE");
+            let indirect_stages = gen_mode.num_ind_stages();
+            tracing::debug!(
+                num_tev_stages = stages,
+                num_indirect_stages = indirect_stages,
+                "GEN_MODE"
+            );
             self.cur_num_tev_stages = stages;
+            self.cur_num_indirect_stages = indirect_stages;
             self.resolve_konst_colors();
             renderer.exec(GxAction::SetCullMode(gen_mode.cull_mode()));
+        }
+
+        // Indirect-matrix rows at 0x06..=0x0E. Each write lands in one
+        // of the A, B, or C rows of one of three matrices.
+        match idx {
+            BP_IND_MTX_A0 => self.cur_indirect_matrices[0].a = val,
+            BP_IND_MTX_B0 => self.cur_indirect_matrices[0].b = val,
+            BP_IND_MTX_C0 => self.cur_indirect_matrices[0].c = val,
+            BP_IND_MTX_A1 => self.cur_indirect_matrices[1].a = val,
+            BP_IND_MTX_B1 => self.cur_indirect_matrices[1].b = val,
+            BP_IND_MTX_C1 => self.cur_indirect_matrices[1].c = val,
+            BP_IND_MTX_A2 => self.cur_indirect_matrices[2].a = val,
+            BP_IND_MTX_B2 => self.cur_indirect_matrices[2].b = val,
+            BP_IND_MTX_C2 => self.cur_indirect_matrices[2].c = val,
+            _ => {}
+        }
+
+        // TODO: BumpIMask is captured for measure but never read on the
+        // GPU side. AFAICT it's unused. Dolphin agrees.
+        if idx == BP_BUMP_IMASK {
+            self.cur_bump_imask = val;
+        }
+
+        // Per TEV stage indirect commands at 0x10..=0x1F.
+        if idx >= BP_IND_CMD_0 && idx < BP_IND_CMD_0 + BP_IND_CMD_COUNT {
+            self.cur_tev_indirect[idx - BP_IND_CMD_0] = TevIndirect::from_raw(val);
+        }
+
+        // Indirect texcoord scale pair. SS0 covers indirect stages 0-1,
+        // SS1 covers 2-3.
+        if idx == BP_RAS1_SS0 {
+            self.cur_indirect_scales[0] = Ras1Ss::from_raw(val);
+        } else if idx == BP_RAS1_SS1 {
+            self.cur_indirect_scales[1] = Ras1Ss::from_raw(val);
+        }
+
+        if idx == BP_RAS1_IREF {
+            self.cur_indirect_refs = Ras1IRef::from_raw(val);
         }
 
         // TEV KSEL (constant color selection) registers: recalculate konst colors
@@ -216,6 +263,7 @@ impl GraphicsProcessor {
                 id: ram_addr as Address,
                 width,
                 height,
+                fmt: format,
                 rgba: texture::decode_to_rgba(ram, &desc, palette, tlut.format),
             });
         }
@@ -239,6 +287,25 @@ impl GraphicsProcessor {
             mag_filter: mode0.mag_filter(),
             min_filter: mode0.min_filter(),
         });
+    }
+
+    /// If the slot currently binds a paletted texture, rerun the snapshot
+    /// pipeline so `texture_data_changed` rehashes the (now possibly fresh)
+    /// palette bytes + TLUT format and decodes a new RGBA if anything moved.
+    fn resnapshot_paletted_slot(&mut self, renderer: &mut dyn RenderSink, ram: &[u8], slot: usize) {
+        let Some(desc) = self.cur_textures[slot] else {
+            return;
+        };
+        if !desc.format.is_paletted() {
+            return;
+        }
+        let image3_reg = if slot < 4 {
+            BP_TX_SETIMAGE3_I0 + slot
+        } else {
+            BP_TX_SETIMAGE3_I4 + (slot - 4)
+        };
+        let image3_val = self.bp_regs[image3_reg];
+        self.snapshot_texture(renderer, ram, slot, image3_val);
     }
 
     fn load_tev_env(&mut self, idx: usize, val: u32) {

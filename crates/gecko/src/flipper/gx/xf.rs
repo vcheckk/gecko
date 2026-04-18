@@ -1,8 +1,4 @@
-use super::constants::{
-    ARRAY_BASE_REG, ARRAY_STRIDE_REG, DEPTH_24_BIT_MAX, XF_PROJECTION_BASE, XF_PROJECTION_END, XF_VIEWPORT_BASE,
-    XF_VIEWPORT_END, XF_VIEWPORT_OFFSET_X, XF_VIEWPORT_OFFSET_Y, XF_VIEWPORT_OFFSET_Z, XF_VIEWPORT_SCALE_X,
-    XF_VIEWPORT_SCALE_Y, XF_VIEWPORT_SCALE_Z,
-};
+use super::constants::*;
 use super::math::Vec3;
 use super::{GraphicsProcessor, draw};
 use crate::host::{GxAction, RenderSink};

@@ -1,5 +1,6 @@
 import super::common::{FrameUniforms, DrawUniforms, VsIn, VsOut, frame, draw, tex0, tex1, tex2, tex3, tex4, tex5, tex6, tex7, samp0, samp1, samp2, samp3, samp4, samp5, samp6, samp7};
 import super::tev_helpers::{read_packed, extract_bits, select_texcoord, stq_to_uv, sample_texmap, tev_color_in, tev_alpha_in};
+import super::tev_indirect::{IndirectSamples, IndirectResult, sample_indirect_textures, apply_indirect, texmap_size};
 import super::tev_combiners::{tev_combine_color, tev_combine_alpha};
 import super::alpha_test::{alpha_compare, alpha_combine};
 import super::lighting::compute_channel_lighting;
@@ -46,6 +47,9 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     var last_color_dest = 0u;
     var last_alpha_dest = 0u;
 
+    let presampled = sample_indirect_textures(in);
+    var running_uv = vec2<f32>(0.0, 0.0);
+
     for (var stage = 0u; stage < 16u; stage++) {
         if stage >= num_stages {
             break;
@@ -59,6 +63,16 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         let tex_enabled = ((order >> 6u) & 1u) != 0u;
         let ras_channel = (order >> 7u) & 7u;
 
+        // Run the stage's indirect pipeline first. It yields the final
+        // direct-texmap UV, the fixpoint chaining value, and any bump
+        // alpha produced. When the stage doesn't use indirect this
+        // returns the raw direct UV and zero bump alpha.
+        let stq = select_texcoord(in, texcoord_idx);
+        let direct_uv = stq_to_uv(stq);
+        let direct_size = texmap_size(texmap_idx);
+        let indirect = apply_indirect(stage, direct_uv, direct_size, presampled, running_uv);
+        running_uv = indirect.uv;
+
         // Select raster color based on channel:
         // 0=Color0, 1=Color1, 2=Alpha0, 3=Alpha1, 4=Color0A0, 5=Color1A1, 6=Zero, 7=Bump
         var ras_color: vec4<f32>;
@@ -70,14 +84,12 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
             case 4u: { ras_color = color0; }                                                    // Color0A0
             case 5u: { ras_color = in.color1; }                                                 // Color1A1
             case 6u: { ras_color = vec4(0.0, 0.0, 0.0, 0.0); }                                  // Zero
-            default: { ras_color = vec4(0.0, 0.0, 0.0, 0.0); }                                  // Bump (TODO: not implemented)
+            default: { ras_color = vec4(indirect.bump_alpha); }                                 // Bump
         }
 
         var tex_color: vec4<f32>;
         if tex_enabled {
-            let stq = select_texcoord(in, texcoord_idx);
-            let uv = stq_to_uv(stq);
-            tex_color = sample_texmap(texmap_idx, uv);
+            tex_color = sample_texmap(texmap_idx, indirect.uv);
         } else {
             tex_color = vec4<f32>(1.0, 1.0, 1.0, 1.0);
         }

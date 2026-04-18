@@ -1,4 +1,4 @@
-use super::regs::{MagFilter, MinFilter, WrapMode};
+use super::regs::*;
 use chapa::BitEnum;
 
 #[derive(Debug, Clone, Copy)]

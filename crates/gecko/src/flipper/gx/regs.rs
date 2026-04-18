@@ -891,6 +891,159 @@ pub struct GenMode {
     pub num_tev_stages: u8, // num stages - 1
     #[bits(14..=15)]
     pub cull_mode: CullMode,
+    #[bits(16..=18)]
+    pub num_ind_stages: u8,
+}
+
+#[derive(Debug, PartialEq, BitEnum)]
+pub enum IndTexFormat {
+    Itf8 = 0,
+    Itf5 = 1,
+    Itf4 = 2,
+    Itf3 = 3,
+}
+
+#[derive(Debug, PartialEq, BitEnum)]
+pub enum IndTexBumpAlpha {
+    Off = 0,
+    S = 1,
+    T = 2,
+    U = 3,
+}
+
+#[derive(Debug, PartialEq, BitEnum)]
+pub enum IndMtxIndex {
+    Off = 0,
+    Mtx0 = 1,
+    Mtx1 = 2,
+    Mtx2 = 3,
+}
+
+#[derive(Debug, PartialEq, BitEnum)]
+pub enum IndMtxId {
+    Indirect = 0,
+    S = 1,
+    T = 2,
+    Invalid = 3, // libogc?
+}
+
+#[derive(Debug, PartialEq, BitEnum)]
+pub enum IndTexWrap {
+    Off = 0,
+    W256 = 1,
+    W128 = 2,
+    W64 = 3,
+    W32 = 4,
+    W16 = 5,
+    W0 = 6,
+    W0Alt = 7,
+}
+
+// BP 0x10+N indirect TEV command, one per TEV stage.
+#[chapa::bitfield(u32, order = lsb0)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct TevIndirect {
+    #[bits(0..=1)]
+    pub bt: u8, // which indirect stage supplies the coord
+    #[bits(2..=3)]
+    pub fmt: IndTexFormat,
+    #[bits(4)]
+    pub bias_s: bool,
+    #[bits(5)]
+    pub bias_t: bool,
+    #[bits(6)]
+    pub bias_u: bool,
+    #[bits(7..=8)]
+    pub bs: IndTexBumpAlpha,
+    #[bits(9..=10)]
+    pub matrix_index: IndMtxIndex,
+    #[bits(11..=12)]
+    pub matrix_id: IndMtxId,
+    #[bits(13..=15)]
+    pub sw: IndTexWrap,
+    #[bits(16..=18)]
+    pub tw: IndTexWrap,
+    #[bits(19)]
+    pub lb_utclod: bool,
+    #[bits(20)]
+    pub fb_addprev: bool,
+}
+
+// BP 0x25/0x26 RAS1_SS0/SS1
+#[chapa::bitfield(u32, order = lsb0)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Ras1Ss {
+    #[bits(0..=3)]
+    pub ss0: u8,
+    #[bits(4..=7)]
+    pub ts0: u8,
+    #[bits(8..=11)]
+    pub ss1: u8,
+    #[bits(12..=15)]
+    pub ts1: u8,
+}
+
+// BP 0x27 RAS1_IREF
+#[chapa::bitfield(u32, order = lsb0)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Ras1IRef {
+    #[bits(0..=2)]
+    pub bi0: u8,
+    #[bits(3..=5)]
+    pub bc0: u8,
+    #[bits(6..=8)]
+    pub bi1: u8,
+    #[bits(9..=11)]
+    pub bc1: u8,
+    #[bits(12..=14)]
+    pub bi2: u8,
+    #[bits(15..=17)]
+    pub bc2: u8,
+    #[bits(18..=20)]
+    pub bi3: u8,
+    #[bits(21..=23)]
+    pub bc3: u8,
+}
+
+// BP 0x06..=0x0E IND_MTX_{A,B,C}{0,1,2}. Three 32-bit rows together
+// describe one 2x3 indirect matrix plus a 5-bit shared scale exponent.
+// Elements are 11-bit signed. The combined scale is formed by
+// (A[22:24] << 0) | (B[22:24] << 2) | (C[22:23] << 4) per libogc.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct IndMtx {
+    pub a: u32,
+    pub b: u32,
+    pub c: u32,
+}
+
+fn sign_extend_11(val: u32) -> i32 {
+    let v = (val & 0x7FF) as i32;
+    if v & 0x400 != 0 { v - 0x800 } else { v }
+}
+
+impl IndMtx {
+    pub fn row0(&self) -> [i32; 3] {
+        [sign_extend_11(self.a), sign_extend_11(self.b), sign_extend_11(self.c)]
+    }
+
+    pub fn row1(&self) -> [i32; 3] {
+        [
+            sign_extend_11(self.a >> 11),
+            sign_extend_11(self.b >> 11),
+            sign_extend_11(self.c >> 11),
+        ]
+    }
+
+    pub fn scale(&self) -> u8 {
+        let s0 = ((self.a >> 22) & 0x3) as u8;
+        let s1 = ((self.b >> 22) & 0x3) as u8;
+        let s2 = ((self.c >> 22) & 0x1) as u8;
+        s0 | (s1 << 2) | (s2 << 4)
+    }
+
+    pub fn scale_exponent(&self) -> i32 {
+        17 - self.scale() as i32
+    }
 }
 
 #[derive(BitEnum, Debug, PartialEq, Eq, Hash)]

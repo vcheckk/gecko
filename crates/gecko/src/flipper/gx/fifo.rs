@@ -1,12 +1,6 @@
-use super::constants::{
-    ARRAY_LIGHT, ARRAY_NRM_MTX, ARRAY_POS_NRM_MTX, ARRAY_POST_MTX, BP_CMD, CALL_DL_CMD, CP_CMD, INV_VTX_CACHE_CMD,
-    LOAD_INDX_A_CMD, LOAD_INDX_B_CMD, LOAD_INDX_C_CMD, LOAD_INDX_D_CMD, NOP_CMD, XF_CMD,
-};
+use super::constants::*;
+use super::regs::*;
 use crate::flipper::gx::GraphicsProcessor;
-use crate::flipper::gx::constants::{
-    DRAW_COMMANDS_END, DRAW_COMMANDS_START, VATA_REG, VATB_REG, VATC_REG, VCD_HI_REG, VCD_LO_REG,
-};
-use crate::flipper::gx::regs::{AttributeType, VatA, VatB, VatC, VcdHi, VcdLo};
 use std::io::{Cursor, Read};
 
 impl GraphicsProcessor {

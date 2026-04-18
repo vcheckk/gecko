@@ -1,6 +1,8 @@
 mod action;
 pub mod capture;
 mod clear;
+#[cfg(not(target_arch = "wasm32"))]
+mod dump;
 mod helpers;
 mod pipeline;
 mod render;
@@ -8,7 +10,7 @@ pub mod sink;
 
 use encase::ShaderType as _;
 use gecko::common::Address;
-use gecko::flipper::gx::draw::{Scissor, Viewport};
+use gecko::flipper::gx::draw::{Scissor, TextureFormat, Viewport};
 use gecko::flipper::gx::regs::{AlphaCompare, BlendMode, CompareFunc, CullMode, MagFilter, MinFilter, WrapMode, ZMode};
 #[cfg(feature = "efb-writeback")]
 use gecko::host::EfbWriteback;
@@ -59,6 +61,18 @@ pub(crate) struct FrameUniforms {
     alpha_comp0: u32,
     alpha_comp1: u32,
     alpha_op: u32,
+    // Indirect texturing state. `indirect_matrices` stores the 6 rows of
+    // the three 2x3 matrices.
+    indirect_matrices: [glam::IVec4; 6],
+    // Two packed RAS1_SS registers holding four 4-bit divisor exponents
+    // each. Stage i reads from `indirect_scales[i / 2]`.
+    indirect_scales: [glam::UVec4; 2],
+    // Packed RAS1_IREF. Four 3+3 bit (texmap, texcoord) pairs.
+    indirect_refs: u32,
+    num_indirect_stages: u32,
+    bump_imask: u32,
+    // Per-TEV-stage IND_CMD, packed four per UVec4.
+    tev_indirect: [glam::UVec4; 4],
     light_colors: [glam::Vec4; 8],
     light_cosatt: [glam::Vec4; 8],
     light_distatt: [glam::Vec4; 8],
@@ -107,7 +121,7 @@ pub struct GxRenderer {
     pub(crate) efb_depth_view: wgpu::TextureView,
     pub(crate) efb_needs_clear: bool,
     pub(crate) sampler_cache: FxHashMap<(WrapMode, WrapMode, MagFilter, MinFilter), wgpu::Sampler>,
-    pub(crate) texture_cache: FxHashMap<Address, (wgpu::Texture, wgpu::TextureView)>,
+    pub(crate) texture_cache: FxHashMap<Address, (TextureFormat, wgpu::Texture, wgpu::TextureView)>,
     // GPU textures holding EFB copy results, checked before `texture_cache` on every texture bind.
     pub(crate) efb_copy_cache: FxHashMap<Address, (wgpu::Texture, wgpu::TextureView)>,
     // Retired EFB-copy textures grouped by size, popped by the next copy to skip reallocating.

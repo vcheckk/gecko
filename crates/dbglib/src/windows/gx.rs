@@ -21,9 +21,30 @@ fn texture_preview(ui: &mut egui::Ui, tex: &TextureDescriptor, ram: &[u8], palet
     ui.label(format!("Mag: {:?}  Min: {:?}", tex.mag_filter, tex.min_filter));
 }
 
-pub fn show_gx(ctx: &Context, open: &mut bool, gx: &GraphicsProcessor, mmio: &Mmio) {
+pub fn show_gx(
+    ctx: &Context,
+    open: &mut bool,
+    gx: &GraphicsProcessor,
+    mmio: &Mmio,
+    invalidate_caches: &mut bool,
+    dump_textures: &mut bool,
+) {
     egui::Window::new("GX").open(open).show(ctx, |ui| {
         ScrollArea::vertical().show(ui, |ui| {
+            ui.horizontal(|ui| {
+                if ui.button("Invalidate Caches").clicked() {
+                    *invalidate_caches = true;
+                }
+                #[cfg(not(target_arch = "wasm32"))]
+                if ui.button("Dump Textures").clicked() {
+                    *dump_textures = true;
+                }
+                #[cfg(target_arch = "wasm32")]
+                let _ = dump_textures;
+                ui.label(format!("{} cached", gx.texture_hashes.len()));
+            });
+            ui.separator();
+
             // Projection matrix
             ui.collapsing("Projection", |ui| {
                 Grid::new("proj").num_columns(4).show(ui, |ui| {

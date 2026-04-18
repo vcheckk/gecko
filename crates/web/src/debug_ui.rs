@@ -20,6 +20,8 @@ pub struct DebugState {
     pub run_until_addr_input: String,
     pub breakpoint_addr_input: String,
     pub dvd_cover_open: Option<bool>,
+    pub gx_invalidate_requested: bool,
+    pub gx_dump_requested: bool,
 }
 
 impl Default for DebugState {
@@ -44,6 +46,8 @@ impl Default for DebugState {
             run_until_addr_input: String::new(),
             breakpoint_addr_input: String::new(),
             dvd_cover_open: None,
+            gx_invalidate_requested: false,
+            gx_dump_requested: false,
         }
     }
 }
@@ -57,6 +61,14 @@ impl DebugState {
                 emulator.close_cover();
             }
         }
+        
+        if std::mem::take(&mut self.gx_invalidate_requested) {
+            emulator.gx.texture_hashes.clear();
+            emulator.render_sink.exec(gecko::host::GxAction::InvalidateCaches);
+        }
+
+        // Dump action is for desktop only.
+        self.gx_dump_requested = false;
         self.debugger.tick(emulator);
     }
 
@@ -126,7 +138,14 @@ impl DebugState {
             self.debugger.set_state(state);
         }
         if self.show_gx_state {
-            dbglib::windows::gx::show_gx(ctx, &mut self.show_gx_state, &emulator.gx, &emulator.mmio);
+            dbglib::windows::gx::show_gx(
+                ctx,
+                &mut self.show_gx_state,
+                &emulator.gx,
+                &emulator.mmio,
+                &mut self.gx_invalidate_requested,
+                &mut self.gx_dump_requested,
+            );
         }
         if self.show_mmio {
             dbglib::windows::mmio::show_mmio(
