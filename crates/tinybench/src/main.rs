@@ -10,7 +10,7 @@ struct Args {
     #[arg(long)]
     ipl: Option<String>,
 
-    /// Boot from ISO using HLE IPL (requires --iso)
+    /// Boot from a disc image using HLE IPL (requires --dvd)
     #[arg(long)]
     ipl_hle: bool,
 
@@ -18,9 +18,9 @@ struct Args {
     #[arg(long)]
     dsp: Option<String>,
 
-    /// Path to a GameCube ISO
+    /// Path to a GameCube disc image (.iso or .rvz)
     #[arg(long)]
-    iso: Option<String>,
+    dvd: Option<String>,
 
     /// Number of frames to run (0 = unlimited)
     #[arg(long, default_value_t = 0)]
@@ -35,20 +35,15 @@ fn main() {
     let args = Args::parse();
 
     let mut emulator = if args.ipl_hle {
-        let Some(ref iso_path) = args.iso else {
-            eprintln!("--ipl-hle requires --iso");
+        let Some(ref dvd) = args.dvd else {
+            eprintln!("--ipl-hle requires --dvd");
             std::process::exit(1);
         };
-        let iso_data = std::fs::read(iso_path).expect("failed to read ISO");
-        let dvd = image::dvd::Dvd::parse(iso_data);
-        GameCube::with_ipl_hle(dvd)
+        GameCube::with_ipl_hle(image::load_dvd(std::fs::read(dvd).expect("failed to read DVD")))
     } else if let Some(ref ipl) = args.ipl {
-        let ipl_data = std::fs::read(ipl).expect("failed to read IPL");
-        let mut gc = GameCube::with_ipl(&ipl_data, false);
-        if let Some(ref iso_path) = args.iso {
-            let iso_data = std::fs::read(iso_path).expect("failed to read ISO");
-            let dvd = image::dvd::Dvd::parse(iso_data);
-            gc.insert_dvd(dvd);
+        let mut gc = GameCube::with_ipl(&std::fs::read(ipl).expect("failed to read IPL"), false);
+        if let Some(ref dvd) = args.dvd {
+            gc.insert_dvd(image::load_dvd(std::fs::read(dvd).expect("failed to read DVD")));
         }
         gc
     } else {

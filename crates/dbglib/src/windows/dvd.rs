@@ -7,10 +7,10 @@ pub fn show_dvd(ctx: &Context, open: &mut bool, di: &DvdInterface) {
     egui::Window::new("DVD").open(open).show(ctx, |ui| {
         // Disc info
         if let Some(dvd) = &di.dvd {
-            let game_name = String::from_utf8_lossy(&dvd.header.game_name);
+            let game_name = String::from_utf8_lossy(&dvd.header().game_name);
             let game_name = game_name.trim_end_matches('\0');
-            let game_code = String::from_utf8_lossy(&dvd.header.game_code);
-            let maker_code = String::from_utf8_lossy(&dvd.header.maker_code);
+            let game_code = String::from_utf8_lossy(&dvd.header().game_code);
+            let maker_code = String::from_utf8_lossy(&dvd.header().maker_code);
 
             ui.strong("Disc");
             Grid::new("dvd_disc_info").num_columns(2).striped(true).show(ui, |ui| {
@@ -19,7 +19,7 @@ pub fn show_dvd(ctx: &Context, open: &mut bool, di: &DvdInterface) {
                 ui.end_row();
 
                 ui.label("ID");
-                ui.monospace(format!("{}{} v{}", game_code, maker_code, dvd.header.version));
+                ui.monospace(format!("{}{} v{}", game_code, maker_code, dvd.header().version));
                 ui.end_row();
             });
         } else {

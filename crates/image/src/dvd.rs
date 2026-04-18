@@ -1,8 +1,6 @@
 use zerocopy::byteorder::big_endian::U32;
 use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
-use crate::{Dol, Executable, Section};
-
 pub const DVD_HEADER_SIZE: usize = 0x440;
 pub const DVD_HEADER_INFO_SIZE: usize = 0x2000;
 pub const DVD_APPLOADER_SIZE: usize = 0x2000;
@@ -12,7 +10,7 @@ pub const DVD_HEADER_INFO_OFFSET: usize = DVD_HEADER_OFFSET + DVD_HEADER_SIZE;
 pub const DVD_APPLOADER_OFFSET: usize = DVD_HEADER_INFO_OFFSET + DVD_HEADER_INFO_SIZE;
 
 #[repr(C, packed)]
-#[derive(FromBytes, IntoBytes, Immutable, KnownLayout, Debug)]
+#[derive(FromBytes, IntoBytes, Immutable, KnownLayout, Debug, Clone, Copy)]
 pub struct Header {
     pub game_code: [u8; 4],
     pub maker_code: [u8; 2],
@@ -49,7 +47,7 @@ pub struct HeaderInfo {
 }
 
 #[repr(C, packed)]
-#[derive(FromBytes, IntoBytes, Immutable, KnownLayout, Debug)]
+#[derive(FromBytes, IntoBytes, Immutable, KnownLayout, Debug, Clone, Copy)]
 pub struct Apploader {
     pub timestamp: [u8; 10],
     _unused0: [u8; 6],
@@ -120,73 +118,5 @@ impl FstNode {
 
     pub fn is_file(&self) -> bool {
         matches!(self, Self::File { .. })
-    }
-}
-
-pub struct Dvd {
-    pub header: Header,
-    pub header_info: HeaderInfo,
-    pub apploader: Apploader,
-    pub filesystem: FstNode,
-    data: Vec<u8>,
-    sections: Vec<Section>,
-}
-
-impl Dvd {
-    pub fn parse(data: Vec<u8>) -> Self {
-        let header = Header::read_from_bytes(&data[DVD_HEADER_OFFSET..DVD_HEADER_OFFSET + DVD_HEADER_SIZE]).unwrap();
-        let header_info =
-            HeaderInfo::read_from_bytes(&data[DVD_HEADER_INFO_OFFSET..DVD_HEADER_INFO_OFFSET + DVD_HEADER_INFO_SIZE])
-                .unwrap();
-        let apploader =
-            Apploader::read_from_bytes(&data[DVD_APPLOADER_OFFSET..DVD_APPLOADER_OFFSET + DVD_APPLOADER_SIZE]).unwrap();
-
-        let fst_start = header.offset_filesystem.get() as usize;
-        let fst_end = fst_start + header.filesystem_size.get() as usize;
-        let filesystem = FstNode::parse(&data[fst_start..fst_end]);
-
-        let apploader_section = Section {
-            offset: DVD_APPLOADER_OFFSET as u32,
-            vaddr: 0x81200000,
-            size: apploader.size.get(),
-        };
-
-        let main_dol = Dol::parse(data[header.offset_main_executable.get() as usize..].to_vec());
-        let main_section = Section {
-            offset: header.offset_main_executable.get(),
-            vaddr: main_dol.entry_point(),
-            size: main_dol.size() as u32,
-        };
-
-        Dvd {
-            header,
-            header_info,
-            apploader,
-            filesystem,
-            data,
-            sections: vec![apploader_section, main_section],
-        }
-    }
-}
-
-impl Executable for Dvd {
-    fn entry_point(&self) -> u32 {
-        self.apploader.entrypoint.get()
-    }
-
-    fn data(&self) -> &[u8] {
-        &self.data
-    }
-
-    fn text_sections(&self) -> &[crate::Section] {
-        &self.sections
-    }
-
-    fn data_sections(&self) -> &[crate::Section] {
-        &[]
-    }
-
-    fn bss(&self) -> (u32, u32) {
-        (0, 0)
     }
 }

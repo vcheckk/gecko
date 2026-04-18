@@ -1,7 +1,6 @@
 pub mod regs;
 
 use crate::gamecube::GameCube;
-use image::Executable;
 
 pub enum Command {
     DriveInfo,
@@ -21,7 +20,7 @@ pub struct DvdInterface {
     pub cmdbuf1: u32,
     pub cmdbuf2: u32,
     pub immbuf: u32,
-    pub dvd: Option<image::dvd::Dvd>,
+    pub dvd: Option<Box<dyn image::Dvd>>,
 }
 
 impl DvdInterface {
@@ -139,7 +138,7 @@ pub fn start_transfer(gc: &mut GameCube) {
 }
 
 #[inline(always)]
-fn process_dvd_command(gc: &mut GameCube, cmd: Command, dvd: &image::dvd::Dvd) {
+fn process_dvd_command(gc: &mut GameCube, cmd: Command, dvd: &dyn image::Dvd) {
     match cmd {
         Command::DriveInfo => {
             let dst = gc.di.dma_address.address();
@@ -153,7 +152,7 @@ fn process_dvd_command(gc: &mut GameCube, cmd: Command, dvd: &image::dvd::Dvd) {
             assert!(len == gc.di.dma_length.length() as usize, "DMA length mismatch");
 
             let buffer = gc.mmio.phys_slice_mut(dst, len);
-            buffer.copy_from_slice(&dvd.data()[src as usize..src as usize + len]);
+            dvd.read_disc_into(src as usize, buffer);
 
             tracing::debug!(
                 src = format!("{:08X}", src),
@@ -168,7 +167,7 @@ fn process_dvd_command(gc: &mut GameCube, cmd: Command, dvd: &image::dvd::Dvd) {
             let len = gc.di.dma_length.length() as usize;
 
             let buffer = gc.mmio.phys_slice_mut(dst, len);
-            buffer.copy_from_slice(&dvd.data()[..len]);
+            dvd.read_disc_into(0, buffer);
 
             tracing::debug!(
                 src = format!("{:08X}", src),
@@ -185,8 +184,8 @@ fn process_dvd_command(gc: &mut GameCube, cmd: Command, dvd: &image::dvd::Dvd) {
 }
 
 impl GameCube {
-    pub fn insert_dvd(&mut self, dvd: image::dvd::Dvd) {
-        let name = String::from_utf8_lossy(&dvd.header.game_name);
+    pub fn insert_dvd(&mut self, dvd: Box<dyn image::Dvd>) {
+        let name = String::from_utf8_lossy(&dvd.header().game_name);
         let name = name.trim_end_matches('\0');
         tracing::info!("DVD inserted: {}", name);
         self.di.dvd = Some(dvd);

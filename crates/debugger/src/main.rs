@@ -10,7 +10,6 @@ use winit::window::{Window, WindowId};
 use gecko::flipper::si::pad::{self, PadStatus, STICK_CENTER};
 use gecko::gamecube::GameCube;
 use image::Dol;
-use image::dvd::Dvd;
 
 use crate::debugger::DebuggerUi;
 use crate::render::RenderState;
@@ -138,13 +137,13 @@ struct Args {
     #[arg(long)]
     skip_ipl: bool,
 
-    /// Boot from ISO using HLE IPL (requires --iso)
+    /// Boot from a disc image using HLE IPL (requires --dvd)
     #[arg(long)]
     ipl_hle: bool,
 
-    /// Path to a GameCube ISO file
+    /// Path to a GameCube disc image (.iso or .rvz)
     #[arg(long)]
-    iso: Option<String>,
+    dvd: Option<String>,
 
     /// Use immediate present mode (no vsync)
     #[arg(long)]
@@ -181,36 +180,21 @@ fn main() {
     };
 
     let mut emulator = if args.ipl_hle {
-        let Some(ref iso) = args.iso else {
-            eprintln!("--ipl-hle requires --iso");
-            std::process::exit(1);
+        let Some(ref dvd) = args.dvd else {
+            panic!("--ipl-hle requires --dvd");
         };
-        let iso_data = std::fs::read(iso).expect("failed to read ISO");
-        let dvd = Dvd::parse(iso_data);
-        GameCube::with_ipl_hle(dvd)
+        GameCube::with_ipl_hle(image::load_dvd(std::fs::read(dvd).expect("failed to read DVD")))
     } else if let Some(ref ipl) = args.ipl {
-        let ipl_data = std::fs::read(ipl).expect("failed to read IPL");
-        GameCube::with_ipl(&ipl_data, args.skip_ipl)
-    } else if let Some(ref path) = args.dol {
-        let dol_data = std::fs::read(path).expect("failed to read DOL");
-        let dol = Dol::parse(dol_data);
-        GameCube::with_image(&dol)
-    } else {
-        eprintln!("error: either --ipl, --ipl-hle, or --dol must be provided");
-        std::process::exit(1);
-    };
-
-    if !args.ipl_hle {
-        if let Some(ref iso) = args.iso {
-            if args.ipl.is_none() {
-                eprintln!("--iso requires --ipl or --ipl-hle");
-                std::process::exit(1);
-            }
-            let iso_data = std::fs::read(iso).expect("failed to read ISO");
-            let dvd = Dvd::parse(iso_data);
-            emulator.insert_dvd(dvd);
+        let mut gc = GameCube::with_ipl(&std::fs::read(ipl).expect("failed to read IPL"), args.skip_ipl);
+        if let Some(ref dvd) = args.dvd {
+            gc.insert_dvd(image::load_dvd(std::fs::read(dvd).expect("failed to read DVD")));
         }
-    }
+        gc
+    } else if let Some(ref dol) = args.dol {
+        GameCube::with_image(&Dol::parse(std::fs::read(dol).expect("failed to read DOL")))
+    } else {
+        panic!("either --ipl, --ipl-hle, or --dol must be provided");
+    };
 
     if let Some(ref dsp_path) = args.dsp {
         let dsp_data = std::fs::read(dsp_path).expect("failed to read DSP IROM");

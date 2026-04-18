@@ -139,17 +139,17 @@ impl GameCube {
         emulator
     }
 
-    pub fn with_ipl_hle(dvd: image::dvd::Dvd) -> Self {
+    pub fn with_ipl_hle(dvd: Box<dyn image::Dvd>) -> Self {
         const APPLOADER_LOAD: u32 = 0x0120_0000;
         const IPL_LOAD: u32 = 0x0130_0000;
         const IPL_ENTRY: u32 = 0x8130_0000;
         const ARAM_SIZE: u32 = 16 * 1024 * 1024;
 
-        let game_name = String::from_utf8_lossy(&dvd.header.game_name);
+        let game_name = String::from_utf8_lossy(&dvd.header().game_name);
         let game_name = game_name.trim_end_matches('\0');
         tracing::info!("Game: {game_name}");
 
-        let apploader_version = String::from_utf8_lossy(&dvd.apploader.timestamp);
+        let apploader_version = String::from_utf8_lossy(&dvd.apploader().timestamp);
         tracing::info!("Apploader: {apploader_version}");
 
         let mut emulator = Self::new(IPL_ENTRY);
@@ -171,12 +171,12 @@ impl GameCube {
         emulator.cpu.spr.ibat3l = 0xFFF0_0001;
 
         // DVD header fields to low memory
-        emulator.mmio.ram[0x00..0x04].copy_from_slice(&dvd.header.game_code);
-        emulator.mmio.ram[0x04..0x06].copy_from_slice(&dvd.header.maker_code);
-        emulator.mmio.ram[0x06] = dvd.header.disk_id;
-        emulator.mmio.ram[0x07] = dvd.header.version;
-        emulator.mmio.ram[0x08] = dvd.header.audio_streaming;
-        emulator.mmio.ram[0x09] = dvd.header.streaming_buffer_size;
+        emulator.mmio.ram[0x00..0x04].copy_from_slice(&dvd.header().game_code);
+        emulator.mmio.ram[0x04..0x06].copy_from_slice(&dvd.header().maker_code);
+        emulator.mmio.ram[0x06] = dvd.header().disk_id;
+        emulator.mmio.ram[0x07] = dvd.header().version;
+        emulator.mmio.ram[0x08] = dvd.header().audio_streaming;
+        emulator.mmio.ram[0x09] = dvd.header().streaming_buffer_size;
 
         // System info
         emulator
@@ -198,10 +198,12 @@ impl GameCube {
 
         // Load apploader code into RAM
         let apploader_code_start = image::dvd::DVD_APPLOADER_OFFSET + 0x20;
-        let apploader_size = (dvd.apploader.size.get() + dvd.apploader.trailer_size.get()) as usize;
-        let apploader_entry = dvd.apploader.entrypoint.get();
-        emulator.mmio.ram[APPLOADER_LOAD as usize..][..apploader_size]
-            .copy_from_slice(&dvd.data()[apploader_code_start..][..apploader_size]);
+        let apploader_size = (dvd.apploader().size.get() + dvd.apploader().trailer_size.get()) as usize;
+        let apploader_entry = dvd.apploader().entrypoint.get();
+        dvd.read_disc_into(
+            apploader_code_start,
+            &mut emulator.mmio.ram[APPLOADER_LOAD as usize..][..apploader_size],
+        );
 
         // Load custom IPL binary into RAM
         emulator.mmio.ram[IPL_LOAD as usize..][..IPL_HLE.len()].copy_from_slice(IPL_HLE);

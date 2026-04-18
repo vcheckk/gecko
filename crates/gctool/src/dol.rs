@@ -1,8 +1,9 @@
 use comfy_table::Table;
 use comfy_table::presets::ASCII_MARKDOWN;
-use image::{Dol, Executable};
+use image::dol::Dol;
+use image::{Executable, Section};
 
-fn section_table(sections: &[image::Section]) -> Table {
+fn section_table(sections: &[Section]) -> Table {
     let mut table = Table::new();
     table.load_preset(ASCII_MARKDOWN);
     table.set_header(vec!["idx", "offset", "vaddr", "size", "end"]);
