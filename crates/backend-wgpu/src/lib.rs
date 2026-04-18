@@ -159,7 +159,7 @@ pub struct GxRenderer {
     pub(crate) current_texture_ids: [Option<Address>; 8],
     pub(crate) current_sampler_keys: [Option<SamplerKey>; 8],
     // XFB output texture: composited from per-copy snapshots by PresentXfb.
-    pub(crate) xfb_texture: wgpu::Texture,
+    pub xfb_texture: wgpu::Texture,
     pub xfb_view: wgpu::TextureView,
     pub(crate) xfb_has_content: bool,
     // Per-copy temporary textures stored by CopyXfb, composited by PresentXfb.
@@ -386,6 +386,7 @@ impl GxRenderer {
             dimension: wgpu::TextureDimension::D2,
             format: surface_format,
             usage: wgpu::TextureUsages::COPY_DST
+                | wgpu::TextureUsages::COPY_SRC
                 | wgpu::TextureUsages::TEXTURE_BINDING
                 | wgpu::TextureUsages::RENDER_ATTACHMENT,
             view_formats: &[],

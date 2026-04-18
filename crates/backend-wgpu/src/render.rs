@@ -526,6 +526,7 @@ impl GxRenderer {
                 dimension: wgpu::TextureDimension::D2,
                 format: self.surface_format,
                 usage: wgpu::TextureUsages::COPY_DST
+                    | wgpu::TextureUsages::COPY_SRC
                     | wgpu::TextureUsages::TEXTURE_BINDING
                     | wgpu::TextureUsages::RENDER_ATTACHMENT,
                 view_formats: &[],

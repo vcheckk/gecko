@@ -16,6 +16,7 @@ members = [
 
     # Stuff we rarely use
     "crates/dsptestrunner",
+    "crates/screenshotter",
 ]
 default-members = [
     "crates/gctool",

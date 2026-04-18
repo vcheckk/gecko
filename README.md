@@ -51,7 +51,7 @@ For more information refer to the GitHub CI actions file. PGO optimized compilat
 ```sh
 gctool ipl --action decode ipl.encoded.bin ipl.decoded.bin
 tinyapp --dol homebrew.dol  # may also require a DSP depending on the DOL
-tinyapp --iso game.iso --ipl ipl.decoded.bin --dsp dsp_rom.bin
+tinyapp --dvd game.iso --ipl ipl.decoded.bin --dsp dsp_rom.bin
 ```
 
 The CLI options are largely the same across the sub projects (such as the debugger). For more options, see `--help`.

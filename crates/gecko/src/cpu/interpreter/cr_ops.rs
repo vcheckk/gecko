@@ -1,3 +1,17 @@
+use crate::cpu::condition::ConditionField;
+
+#[inline(always)]
+pub fn mcrxr(ctx: &mut crate::gamecube::GameCube, instr: crate::cpu::instruction::Instruction) {
+    let xer = ctx.cpu.spr.xer;
+    let field = ConditionField::new()
+        .with_lt(xer.summary_overflow())
+        .with_gt(xer.overflow())
+        .with_eq(xer.carry())
+        .with_so(false);
+    ctx.cpu.cr.set_field(instr.crfd(), field);
+    ctx.cpu.spr.xer = xer.with_summary_overflow(false).with_overflow(false).with_carry(false);
+}
+
 #[inline(always)]
 pub fn cr_ops<const OP: u32>(ctx: &mut crate::gamecube::GameCube, instr: crate::cpu::instruction::Instruction) {
     match OP {

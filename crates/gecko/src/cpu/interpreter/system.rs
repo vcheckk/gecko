@@ -78,6 +78,18 @@ pub fn segment<const OP: u32>(ctx: &mut crate::gamecube::GameCube, instr: crate:
 }
 
 #[inline(always)]
+pub fn mtsrin(ctx: &mut crate::gamecube::GameCube, instr: crate::cpu::instruction::Instruction) {
+    let sr_idx = (ctx.cpu.read_gpr(instr.rb()) >> 28) as usize;
+    ctx.cpu.sr[sr_idx] = Sr::from_raw(ctx.cpu.read_gpr(instr.rs()));
+}
+
+#[inline(always)]
+pub fn mfsrin(ctx: &mut crate::gamecube::GameCube, instr: crate::cpu::instruction::Instruction) {
+    let sr_idx = (ctx.cpu.read_gpr(instr.rb()) >> 28) as usize;
+    ctx.cpu.write_gpr(instr.rd(), ctx.cpu.sr[sr_idx].raw());
+}
+
+#[inline(always)]
 pub fn mftb(ctx: &mut crate::gamecube::GameCube, instr: crate::cpu::instruction::Instruction) {
     let tbr = instr.spr_swapped();
     let val = match tbr {
@@ -99,6 +111,23 @@ pub fn twi(ctx: &mut crate::gamecube::GameCube, instr: crate::cpu::instruction::
         || (to & 0x04 != 0 && a == simm)
         || (to & 0x02 != 0 && (a as u32) < (simm as u32))
         || (to & 0x01 != 0 && (a as u32) > (simm as u32));
+
+    if trap {
+        ctx.cause_trap_exception();
+    }
+}
+
+#[inline(always)]
+pub fn tw(ctx: &mut crate::gamecube::GameCube, instr: crate::cpu::instruction::Instruction) {
+    let a = ctx.cpu.read_gpr(instr.ra()) as i32;
+    let b = ctx.cpu.read_gpr(instr.rb()) as i32;
+    let to = instr.to();
+
+    let trap = (to & 0x10 != 0 && a < b)
+        || (to & 0x08 != 0 && a > b)
+        || (to & 0x04 != 0 && a == b)
+        || (to & 0x02 != 0 && (a as u32) < (b as u32))
+        || (to & 0x01 != 0 && (a as u32) > (b as u32));
 
     if trap {
         ctx.cause_trap_exception();
