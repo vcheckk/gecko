@@ -1,7 +1,5 @@
 use crate::cpu::IPL_RESET_VECTOR;
 use crate::flipper::exi::macronix::ExiMacronix;
-#[cfg(feature = "idle-skip")]
-use crate::idle::{IDLE_LOOP_MAX_INSTRS, IdleCheck};
 use crate::ipl::IPL_HLE;
 use crate::scheduler::Scheduler;
 use crate::system::{GC, System};

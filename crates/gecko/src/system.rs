@@ -14,7 +14,7 @@ use crate::flipper::vi::VideoInterface;
 use crate::hooks::{HookFilters, HookFlags, HookState, Host};
 use crate::host::{EmptyRenderSink, RenderSink};
 #[cfg(feature = "idle-skip")]
-use crate::idle::IdleDetector;
+use crate::idle::{IDLE_LOOP_MAX_INSTRS, IdleCheck, IdleDetector};
 use crate::mmio::Mmio;
 use crate::scheduler::Scheduler;
 use image::Executable;
