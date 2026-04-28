@@ -5,19 +5,21 @@ use clap::Parser;
 use crossbeam_channel::bounded;
 use gecko::flipper::si::pad::{self, PadStatus, STICK_CENTER};
 use gecko::gamecube::GameCube;
+use gecko::system::{System, SystemId};
+use gecko::wii::Wii;
 use image::Dol;
 use std::sync::{Arc, Mutex};
 use winit::event_loop::EventLoop;
 use winit::keyboard::KeyCode;
 
 #[derive(Parser)]
-#[command(about = "GameCube emulator")]
+#[command(about = "GameCube/Wii emulator")]
 struct Args {
-    /// Path to the DOL file
+    /// Path to the DOL file (GameCube homebrew)
     #[arg(long)]
     dol: Option<String>,
 
-    /// Path to an IPL file
+    /// Path to an IPL file (boot the real GameCube IPL)
     #[arg(long)]
     ipl: Option<String>,
 
@@ -25,11 +27,8 @@ struct Args {
     #[arg(long)]
     skip_ipl: bool,
 
-    /// Boot from a disc image using HLE IPL (requires --dvd)
-    #[arg(long)]
-    ipl_hle: bool,
-
-    /// Path to a GameCube disc image (.iso or .rvz)
+    /// Path to a disc image (.iso or .rvz). System (GameCube vs Wii) is
+    /// autodetected from the disc magic; Wii discs require .rvz format.
     #[arg(long)]
     dvd: Option<String>,
 
@@ -69,23 +68,43 @@ fn main() {
         )
         .init();
 
-    let mut emulator = if args.ipl_hle {
-        let Some(ref dvd) = args.dvd else {
-            panic!("--ipl-hle requires --dvd");
-        };
-        GameCube::with_ipl_hle(image::load_dvd(std::fs::read(dvd).expect("failed to read DVD")))
-    } else if let Some(ref ipl) = args.ipl {
-        let mut gc = GameCube::with_ipl(&std::fs::read(ipl).expect("failed to read IPL"), args.skip_ipl);
-        if let Some(ref dvd) = args.dvd {
-            gc.insert_dvd(image::load_dvd(std::fs::read(dvd).expect("failed to read DVD")));
+    // Boot dispatch:
+    //   --dol           : GameCube homebrew (with_image)
+    //   --ipl [+ --dvd] : GameCube real IPL boot (with_ipl)
+    //   --dvd <path>    : autodetect Wii vs GC, HLE boot via apploader
+    if let Some(ref dol) = args.dol {
+        let mut emulator = GameCube::with_image(&Dol::parse(std::fs::read(dol).expect("failed to read DOL")));
+        configure(&mut emulator, &args);
+        run(emulator, present_mode);
+    } else if let Some(ref ipl_path) = args.ipl {
+        let ipl_data = std::fs::read(ipl_path).expect("failed to read IPL");
+        let mut emulator = GameCube::with_ipl(&ipl_data, args.skip_ipl);
+        if let Some(ref dvd_path) = args.dvd {
+            let dvd_data = std::fs::read(dvd_path).expect("failed to read DVD");
+            emulator.insert_dvd(image::load_dvd(dvd_data));
         }
-        gc
-    } else if let Some(ref dol) = args.dol {
-        GameCube::with_image(&Dol::parse(std::fs::read(dol).expect("failed to read DOL")))
+        configure(&mut emulator, &args);
+        run(emulator, present_mode);
+    } else if let Some(ref dvd_path) = args.dvd {
+        let dvd_data = std::fs::read(dvd_path).expect("failed to read DVD");
+        let dvd = image::load_dvd(dvd_data);
+        if dvd.header().is_wii() {
+            println!("Detected Wii disc, booting via apploader HLE");
+            let mut emulator = Wii::with_apploader_hle(dvd);
+            configure(&mut emulator, &args);
+            run(emulator, present_mode);
+        } else {
+            println!("Detected GameCube disc, booting via IPL HLE");
+            let mut emulator = GameCube::with_ipl_hle(dvd);
+            configure(&mut emulator, &args);
+            run(emulator, present_mode);
+        }
     } else {
-        panic!("either --ipl, --ipl-hle, or --dol must be provided");
-    };
+        panic!("provide one of --dol, --ipl, or --dvd");
+    }
+}
 
+fn configure<const SYSTEM: SystemId>(emulator: &mut System<SYSTEM>, args: &Args) {
     if let Some(ref dsp_path) = args.dsp {
         let dsp_data = std::fs::read(dsp_path).expect("failed to read DSP IROM");
         emulator.dsp.load_irom(&dsp_data);
@@ -97,12 +116,13 @@ fn main() {
         emulator.set_hook_host(Box::new(host));
     }
 
-    // Channel 0 always has a controller connected
     emulator.add_primary_controller(PadStatus {
         connected: true,
         ..PadStatus::default()
     });
+}
 
+fn run<const SYSTEM: SystemId>(mut emulator: System<SYSTEM>, present_mode: wgpu::PresentMode) {
     let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
         backends: wgpu::Backends::all(),
         ..Default::default()
@@ -120,15 +140,10 @@ fn main() {
 
     let surface_format = wgpu::TextureFormat::Bgra8Unorm;
 
-    // Create the renderer (spawns the worker thread internally).
     let renderer = backend_wgpu::sink::Renderer::new(device.clone(), queue.clone(), surface_format);
 
-    // Install the renderer as the emulator's render sink.
     emulator.render_sink = Box::new(renderer.clone());
 
-    // Install the EFB-to-texture writeback receiver so the emu thread
-    // can copy encoded texture bytes back into RAM after each readback.
-    // Only present with the `efb-writeback` feature.
     #[cfg(feature = "efb-writeback")]
     {
         emulator.gx.efb_writeback_rx = renderer.take_writeback_rx();
@@ -144,7 +159,7 @@ fn main() {
     let emu_input = input.clone();
     std::thread::Builder::new()
         .name("emu".into())
-        .spawn(move || thread::emu_thread(emulator, frame_tx, emu_input, proxy))
+        .spawn(move || thread::emu_thread::<SYSTEM>(emulator, frame_tx, emu_input, proxy))
         .expect("failed to spawn emulator thread");
 
     let mut app = app::App {

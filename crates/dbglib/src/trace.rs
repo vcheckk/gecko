@@ -2,7 +2,7 @@ use disasm::gekko::GekkoInstruction;
 use disasm::tokenizer::{self, AsmToken};
 use gecko::flipper::dsp::Dsp;
 use gecko::flipper::dsp::core::Registers as DspRegisters;
-use gecko::gamecube::GameCube;
+use gecko::system::{System, SystemId};
 
 const DISASM_COL: usize = 22;
 const COMMENT_COL: usize = 50;
@@ -10,7 +10,7 @@ const COMMENT_COL: usize = 50;
 /// Format a single trace line for the current PC of the emulator.
 ///
 /// Returns a string like `80003100  4E800020  blr                           ; lr=80001234`
-pub fn format_trace_line(emulator: &GameCube) -> String {
+pub fn format_trace_line<const SYSTEM: SystemId>(emulator: &System<SYSTEM>) -> String {
     let pc = emulator.gekko.pc;
     let raw = emulator.mmio.virt_read_u32(pc);
 

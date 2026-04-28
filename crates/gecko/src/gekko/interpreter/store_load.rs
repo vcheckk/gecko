@@ -1,62 +1,65 @@
 use crate::gekko::condition::ConditionField;
+use crate::gekko::instruction::Instruction;
+use crate::gekko::lut::*;
+use crate::system::{System, SystemId};
 
 #[inline(always)]
-pub fn store_load<const OP: u32>(ctx: &mut crate::gamecube::GameCube, instr: crate::gekko::instruction::Instruction) {
+pub fn store_load<const OP: u32, const SYSTEM: SystemId>(ctx: &mut System<SYSTEM>, instr: Instruction) {
     match OP {
-        crate::gekko::lut::OP_STW | crate::gekko::lut::OP_STWU => {
+        OP_STW | OP_STWU => {
             let addr = ctx.gekko.read_gpr_or_zero(instr.ra()).wrapping_add_signed(instr.disp());
             ctx.write_u32(addr, ctx.gekko.read_gpr(instr.rs()));
-            if OP == crate::gekko::lut::OP_STWU {
+            if OP == OP_STWU {
                 ctx.gekko.write_gpr(instr.ra(), addr);
             }
         }
-        crate::gekko::lut::OP_STH | crate::gekko::lut::OP_STHU => {
+        OP_STH | OP_STHU => {
             let addr = ctx.gekko.read_gpr_or_zero(instr.ra()).wrapping_add_signed(instr.disp());
             ctx.write_u16(addr, ctx.gekko.read_gpr(instr.rs()) as u16);
-            if OP == crate::gekko::lut::OP_STHU {
+            if OP == OP_STHU {
                 ctx.gekko.write_gpr(instr.ra(), addr);
             }
         }
-        crate::gekko::lut::OP_STB | crate::gekko::lut::OP_STBU => {
+        OP_STB | OP_STBU => {
             let addr = ctx.gekko.read_gpr_or_zero(instr.ra()).wrapping_add_signed(instr.disp());
             ctx.write_u8(addr, ctx.gekko.read_gpr(instr.rs()) as u8);
-            if OP == crate::gekko::lut::OP_STBU {
+            if OP == OP_STBU {
                 ctx.gekko.write_gpr(instr.ra(), addr);
             }
         }
-        crate::gekko::lut::OP_LWZ | crate::gekko::lut::OP_LWZU => {
+        OP_LWZ | OP_LWZU => {
             let addr = ctx.gekko.read_gpr_or_zero(instr.ra()).wrapping_add_signed(instr.disp());
             let val = ctx.read_u32(addr);
             ctx.gekko.write_gpr(instr.rd(), val);
-            if OP == crate::gekko::lut::OP_LWZU {
+            if OP == OP_LWZU {
                 ctx.gekko.write_gpr(instr.ra(), addr);
             }
         }
-        crate::gekko::lut::OP_LBZ | crate::gekko::lut::OP_LBZU => {
+        OP_LBZ | OP_LBZU => {
             let addr = ctx.gekko.read_gpr_or_zero(instr.ra()).wrapping_add_signed(instr.disp());
             let val = ctx.read_u8(addr) as u32;
             ctx.gekko.write_gpr(instr.rd(), val);
-            if OP == crate::gekko::lut::OP_LBZU {
+            if OP == OP_LBZU {
                 ctx.gekko.write_gpr(instr.ra(), addr);
             }
         }
-        crate::gekko::lut::OP_LHZ | crate::gekko::lut::OP_LHZU => {
+        OP_LHZ | OP_LHZU => {
             let addr = ctx.gekko.read_gpr_or_zero(instr.ra()).wrapping_add_signed(instr.disp());
             let val = ctx.read_u16(addr) as u32;
             ctx.gekko.write_gpr(instr.rd(), val);
-            if OP == crate::gekko::lut::OP_LHZU {
+            if OP == OP_LHZU {
                 ctx.gekko.write_gpr(instr.ra(), addr);
             }
         }
-        crate::gekko::lut::OP_LHA | crate::gekko::lut::OP_LHAU => {
+        OP_LHA | OP_LHAU => {
             let addr = ctx.gekko.read_gpr_or_zero(instr.ra()).wrapping_add_signed(instr.disp());
             let val = ctx.read_u16(addr) as i16 as i32 as u32;
             ctx.gekko.write_gpr(instr.rd(), val);
-            if OP == crate::gekko::lut::OP_LHAU {
+            if OP == OP_LHAU {
                 ctx.gekko.write_gpr(instr.ra(), addr);
             }
         }
-        crate::gekko::lut::OP_LMW => {
+        OP_LMW => {
             let mut addr = ctx.gekko.read_gpr_or_zero(instr.ra()).wrapping_add_signed(instr.disp());
             for r in instr.rd()..32 {
                 let val = ctx.read_u32(addr);
@@ -64,7 +67,7 @@ pub fn store_load<const OP: u32>(ctx: &mut crate::gamecube::GameCube, instr: cra
                 addr = addr.wrapping_add(4);
             }
         }
-        crate::gekko::lut::OP_STMW => {
+        OP_STMW => {
             let mut addr = ctx.gekko.read_gpr_or_zero(instr.ra()).wrapping_add_signed(instr.disp());
             for r in instr.rs()..32 {
                 let val = ctx.gekko.read_gpr(r);
@@ -72,81 +75,81 @@ pub fn store_load<const OP: u32>(ctx: &mut crate::gamecube::GameCube, instr: cra
                 addr = addr.wrapping_add(4);
             }
         }
-        crate::gekko::lut::OP_LWZX | crate::gekko::lut::OP_LWZUX => {
+        OP_LWZX | OP_LWZUX => {
             let addr = ctx
                 .gekko
                 .read_gpr_or_zero(instr.ra())
                 .wrapping_add(ctx.gekko.read_gpr(instr.rb()));
             let val = ctx.read_u32(addr);
             ctx.gekko.write_gpr(instr.rd(), val);
-            if OP == crate::gekko::lut::OP_LWZUX {
+            if OP == OP_LWZUX {
                 ctx.gekko.write_gpr(instr.ra(), addr);
             }
         }
-        crate::gekko::lut::OP_LBZX | crate::gekko::lut::OP_LBZUX => {
+        OP_LBZX | OP_LBZUX => {
             let addr = ctx
                 .gekko
                 .read_gpr_or_zero(instr.ra())
                 .wrapping_add(ctx.gekko.read_gpr(instr.rb()));
             let val = ctx.read_u8(addr) as u32;
             ctx.gekko.write_gpr(instr.rd(), val);
-            if OP == crate::gekko::lut::OP_LBZUX {
+            if OP == OP_LBZUX {
                 ctx.gekko.write_gpr(instr.ra(), addr);
             }
         }
-        crate::gekko::lut::OP_LHZX | crate::gekko::lut::OP_LHZUX => {
+        OP_LHZX | OP_LHZUX => {
             let addr = ctx
                 .gekko
                 .read_gpr_or_zero(instr.ra())
                 .wrapping_add(ctx.gekko.read_gpr(instr.rb()));
             let val = ctx.read_u16(addr) as u32;
             ctx.gekko.write_gpr(instr.rd(), val);
-            if OP == crate::gekko::lut::OP_LHZUX {
+            if OP == OP_LHZUX {
                 ctx.gekko.write_gpr(instr.ra(), addr);
             }
         }
-        crate::gekko::lut::OP_LHAX | crate::gekko::lut::OP_LHAUX => {
+        OP_LHAX | OP_LHAUX => {
             let addr = ctx
                 .gekko
                 .read_gpr_or_zero(instr.ra())
                 .wrapping_add(ctx.gekko.read_gpr(instr.rb()));
             let val = ctx.read_u16(addr) as i16 as i32 as u32;
             ctx.gekko.write_gpr(instr.rd(), val);
-            if OP == crate::gekko::lut::OP_LHAUX {
+            if OP == OP_LHAUX {
                 ctx.gekko.write_gpr(instr.ra(), addr);
             }
         }
-        crate::gekko::lut::OP_STWX | crate::gekko::lut::OP_STWUX => {
+        OP_STWX | OP_STWUX => {
             let addr = ctx
                 .gekko
                 .read_gpr_or_zero(instr.ra())
                 .wrapping_add(ctx.gekko.read_gpr(instr.rb()));
             ctx.write_u32(addr, ctx.gekko.read_gpr(instr.rs()));
-            if OP == crate::gekko::lut::OP_STWUX {
+            if OP == OP_STWUX {
                 ctx.gekko.write_gpr(instr.ra(), addr);
             }
         }
-        crate::gekko::lut::OP_STBX | crate::gekko::lut::OP_STBUX => {
+        OP_STBX | OP_STBUX => {
             let addr = ctx
                 .gekko
                 .read_gpr_or_zero(instr.ra())
                 .wrapping_add(ctx.gekko.read_gpr(instr.rb()));
             ctx.write_u8(addr, ctx.gekko.read_gpr(instr.rs()) as u8);
-            if OP == crate::gekko::lut::OP_STBUX {
+            if OP == OP_STBUX {
                 ctx.gekko.write_gpr(instr.ra(), addr);
             }
         }
-        crate::gekko::lut::OP_STHX | crate::gekko::lut::OP_STHUX => {
+        OP_STHX | OP_STHUX => {
             let addr = ctx
                 .gekko
                 .read_gpr_or_zero(instr.ra())
                 .wrapping_add(ctx.gekko.read_gpr(instr.rb()));
             ctx.write_u16(addr, ctx.gekko.read_gpr(instr.rs()) as u16);
-            if OP == crate::gekko::lut::OP_STHUX {
+            if OP == OP_STHUX {
                 ctx.gekko.write_gpr(instr.ra(), addr);
             }
         }
-        crate::gekko::lut::OP_LWBRX => {
+        OP_LWBRX => {
             let addr = ctx
                 .gekko
                 .read_gpr_or_zero(instr.ra())
@@ -154,7 +157,7 @@ pub fn store_load<const OP: u32>(ctx: &mut crate::gamecube::GameCube, instr: cra
             let val = ctx.read_u32(addr).swap_bytes();
             ctx.gekko.write_gpr(instr.rd(), val);
         }
-        crate::gekko::lut::OP_LHBRX => {
+        OP_LHBRX => {
             let addr = ctx
                 .gekko
                 .read_gpr_or_zero(instr.ra())
@@ -162,14 +165,14 @@ pub fn store_load<const OP: u32>(ctx: &mut crate::gamecube::GameCube, instr: cra
             let val = ctx.read_u16(addr).swap_bytes() as u32;
             ctx.gekko.write_gpr(instr.rd(), val);
         }
-        crate::gekko::lut::OP_STWBRX => {
+        OP_STWBRX => {
             let addr = ctx
                 .gekko
                 .read_gpr_or_zero(instr.ra())
                 .wrapping_add(ctx.gekko.read_gpr(instr.rb()));
             ctx.write_u32(addr, ctx.gekko.read_gpr(instr.rs()).swap_bytes());
         }
-        crate::gekko::lut::OP_STHBRX => {
+        OP_STHBRX => {
             let addr = ctx
                 .gekko
                 .read_gpr_or_zero(instr.ra())
@@ -181,7 +184,7 @@ pub fn store_load<const OP: u32>(ctx: &mut crate::gamecube::GameCube, instr: cra
 }
 
 #[inline(always)]
-pub fn lwarx(ctx: &mut crate::gamecube::GameCube, instr: crate::gekko::instruction::Instruction) {
+pub fn lwarx<const SYSTEM: SystemId>(ctx: &mut System<SYSTEM>, instr: Instruction) {
     let addr = ctx
         .gekko
         .read_gpr_or_zero(instr.ra())
@@ -192,7 +195,7 @@ pub fn lwarx(ctx: &mut crate::gamecube::GameCube, instr: crate::gekko::instructi
 }
 
 #[inline(always)]
-pub fn stwcx_dot(ctx: &mut crate::gamecube::GameCube, instr: crate::gekko::instruction::Instruction) {
+pub fn stwcx_dot<const SYSTEM: SystemId>(ctx: &mut System<SYSTEM>, instr: Instruction) {
     let addr = ctx
         .gekko
         .read_gpr_or_zero(instr.ra())
@@ -209,47 +212,44 @@ pub fn stwcx_dot(ctx: &mut crate::gamecube::GameCube, instr: crate::gekko::instr
 }
 
 #[inline(always)]
-pub fn store_load_fp<const OP: u32>(
-    ctx: &mut crate::gamecube::GameCube,
-    instr: crate::gekko::instruction::Instruction,
-) {
+pub fn store_load_fp<const OP: u32, const SYSTEM: SystemId>(ctx: &mut System<SYSTEM>, instr: Instruction) {
     if !ctx.check_fp_available() {
         return;
     }
 
     match OP {
-        crate::gekko::lut::OP_LFD | crate::gekko::lut::OP_LFDU => {
+        OP_LFD | OP_LFDU => {
             let addr = ctx.gekko.read_gpr_or_zero(instr.ra()).wrapping_add_signed(instr.disp());
             let val = ctx.read_f64(addr);
             ctx.gekko.write_fpr(instr.rd(), val);
-            if OP == crate::gekko::lut::OP_LFDU {
+            if OP == OP_LFDU {
                 ctx.gekko.write_gpr(instr.ra(), addr);
             }
         }
-        crate::gekko::lut::OP_STFD | crate::gekko::lut::OP_STFDU => {
+        OP_STFD | OP_STFDU => {
             let addr = ctx.gekko.read_gpr_or_zero(instr.ra()).wrapping_add_signed(instr.disp());
             ctx.write_f64(addr, ctx.gekko.read_fpr(instr.rs()));
-            if OP == crate::gekko::lut::OP_STFDU {
+            if OP == OP_STFDU {
                 ctx.gekko.write_gpr(instr.ra(), addr);
             }
         }
-        crate::gekko::lut::OP_LFS | crate::gekko::lut::OP_LFSU => {
+        OP_LFS | OP_LFSU => {
             let addr = ctx.gekko.read_gpr_or_zero(instr.ra()).wrapping_add_signed(instr.disp());
             let val = ctx.read_f32(addr);
             ctx.gekko.write_fpr(instr.rd(), val);
             ctx.gekko.write_ps1(instr.rd(), val);
-            if OP == crate::gekko::lut::OP_LFSU {
+            if OP == OP_LFSU {
                 ctx.gekko.write_gpr(instr.ra(), addr);
             }
         }
-        crate::gekko::lut::OP_STFS | crate::gekko::lut::OP_STFSU => {
+        OP_STFS | OP_STFSU => {
             let addr = ctx.gekko.read_gpr_or_zero(instr.ra()).wrapping_add_signed(instr.disp());
             ctx.write_f32(addr, ctx.gekko.read_fpr(instr.rs()));
-            if OP == crate::gekko::lut::OP_STFSU {
+            if OP == OP_STFSU {
                 ctx.gekko.write_gpr(instr.ra(), addr);
             }
         }
-        crate::gekko::lut::OP_LFSX | crate::gekko::lut::OP_LFSUX => {
+        OP_LFSX | OP_LFSUX => {
             let addr = ctx
                 .gekko
                 .read_gpr_or_zero(instr.ra())
@@ -257,42 +257,42 @@ pub fn store_load_fp<const OP: u32>(
             let val = ctx.read_f32(addr);
             ctx.gekko.write_fpr(instr.rd(), val);
             ctx.gekko.write_ps1(instr.rd(), val);
-            if OP == crate::gekko::lut::OP_LFSUX {
+            if OP == OP_LFSUX {
                 ctx.gekko.write_gpr(instr.ra(), addr);
             }
         }
-        crate::gekko::lut::OP_LFDX | crate::gekko::lut::OP_LFDUX => {
+        OP_LFDX | OP_LFDUX => {
             let addr = ctx
                 .gekko
                 .read_gpr_or_zero(instr.ra())
                 .wrapping_add(ctx.gekko.read_gpr(instr.rb()));
             let val = ctx.read_f64(addr);
             ctx.gekko.write_fpr(instr.rd(), val);
-            if OP == crate::gekko::lut::OP_LFDUX {
+            if OP == OP_LFDUX {
                 ctx.gekko.write_gpr(instr.ra(), addr);
             }
         }
-        crate::gekko::lut::OP_STFSX | crate::gekko::lut::OP_STFSUX => {
+        OP_STFSX | OP_STFSUX => {
             let addr = ctx
                 .gekko
                 .read_gpr_or_zero(instr.ra())
                 .wrapping_add(ctx.gekko.read_gpr(instr.rb()));
             ctx.write_f32(addr, ctx.gekko.read_fpr(instr.rs()));
-            if OP == crate::gekko::lut::OP_STFSUX {
+            if OP == OP_STFSUX {
                 ctx.gekko.write_gpr(instr.ra(), addr);
             }
         }
-        crate::gekko::lut::OP_STFDX | crate::gekko::lut::OP_STFDUX => {
+        OP_STFDX | OP_STFDUX => {
             let addr = ctx
                 .gekko
                 .read_gpr_or_zero(instr.ra())
                 .wrapping_add(ctx.gekko.read_gpr(instr.rb()));
             ctx.write_f64(addr, ctx.gekko.read_fpr(instr.rs()));
-            if OP == crate::gekko::lut::OP_STFDUX {
+            if OP == OP_STFDUX {
                 ctx.gekko.write_gpr(instr.ra(), addr);
             }
         }
-        crate::gekko::lut::OP_STFIWX => {
+        OP_STFIWX => {
             let addr = ctx
                 .gekko
                 .read_gpr_or_zero(instr.ra())
@@ -304,7 +304,7 @@ pub fn store_load_fp<const OP: u32>(
 }
 
 #[inline(always)]
-pub fn lswx(ctx: &mut crate::gamecube::GameCube, instr: crate::gekko::instruction::Instruction) {
+pub fn lswx<const SYSTEM: SystemId>(ctx: &mut System<SYSTEM>, instr: Instruction) {
     let ea = ctx
         .gekko
         .read_gpr_or_zero(instr.ra())
@@ -335,7 +335,7 @@ pub fn lswx(ctx: &mut crate::gamecube::GameCube, instr: crate::gekko::instructio
 }
 
 #[inline(always)]
-pub fn stswx(ctx: &mut crate::gamecube::GameCube, instr: crate::gekko::instruction::Instruction) {
+pub fn stswx<const SYSTEM: SystemId>(ctx: &mut System<SYSTEM>, instr: Instruction) {
     let ea = ctx
         .gekko
         .read_gpr_or_zero(instr.ra())
@@ -360,7 +360,7 @@ pub fn stswx(ctx: &mut crate::gamecube::GameCube, instr: crate::gekko::instructi
 }
 
 #[inline(always)]
-pub fn lswi(ctx: &mut crate::gamecube::GameCube, instr: crate::gekko::instruction::Instruction) {
+pub fn lswi<const SYSTEM: SystemId>(ctx: &mut System<SYSTEM>, instr: Instruction) {
     let ea = ctx.gekko.read_gpr_or_zero(instr.ra());
     let nb = instr.nb();
     let mut n = if nb == 0 { 32u32 } else { nb as u32 };
@@ -386,7 +386,7 @@ pub fn lswi(ctx: &mut crate::gamecube::GameCube, instr: crate::gekko::instructio
 }
 
 #[inline(always)]
-pub fn stswi(ctx: &mut crate::gamecube::GameCube, instr: crate::gekko::instruction::Instruction) {
+pub fn stswi<const SYSTEM: SystemId>(ctx: &mut System<SYSTEM>, instr: Instruction) {
     let ea = ctx.gekko.read_gpr_or_zero(instr.ra());
     let nb = instr.nb();
     let mut n = if nb == 0 { 32u32 } else { nb as u32 };
@@ -409,7 +409,7 @@ pub fn stswi(ctx: &mut crate::gamecube::GameCube, instr: crate::gekko::instructi
 }
 
 #[inline(always)]
-pub fn eciwx(ctx: &mut crate::gamecube::GameCube, instr: crate::gekko::instruction::Instruction) {
+pub fn eciwx<const SYSTEM: SystemId>(ctx: &mut System<SYSTEM>, instr: Instruction) {
     let ea = ctx
         .gekko
         .read_gpr_or_zero(instr.ra())
@@ -419,7 +419,7 @@ pub fn eciwx(ctx: &mut crate::gamecube::GameCube, instr: crate::gekko::instructi
 }
 
 #[inline(always)]
-pub fn ecowx(ctx: &mut crate::gamecube::GameCube, instr: crate::gekko::instruction::Instruction) {
+pub fn ecowx<const SYSTEM: SystemId>(ctx: &mut System<SYSTEM>, instr: Instruction) {
     let ea = ctx
         .gekko
         .read_gpr_or_zero(instr.ra())

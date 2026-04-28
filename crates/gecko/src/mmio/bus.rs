@@ -88,13 +88,23 @@ impl<const SYSTEM: SystemId> System<SYSTEM> {
             return ea & 0x3FFFFFFF;
         }
 
-        // Check all 4 DBATs
-        let dbats = [
+        // Check DBATs. GC has 4, Wii's Broadway has 8 (extended BATs).
+        let mut dbats: [(u32, u32); 8] = [
             (self.gekko.spr.dbat0u, self.gekko.spr.dbat0l),
             (self.gekko.spr.dbat1u, self.gekko.spr.dbat1l),
             (self.gekko.spr.dbat2u, self.gekko.spr.dbat2l),
             (self.gekko.spr.dbat3u, self.gekko.spr.dbat3l),
+            (0, 0),
+            (0, 0),
+            (0, 0),
+            (0, 0),
         ];
+        if SYSTEM == WII {
+            dbats[4] = (self.gekko.spr.dbat4u, self.gekko.spr.dbat4l);
+            dbats[5] = (self.gekko.spr.dbat5u, self.gekko.spr.dbat5l);
+            dbats[6] = (self.gekko.spr.dbat6u, self.gekko.spr.dbat6l);
+            dbats[7] = (self.gekko.spr.dbat7u, self.gekko.spr.dbat7l);
+        }
 
         for (batu, batl) in dbats {
             // Valid in supervisor (Vs) or problem (Vp) mode

@@ -1,8 +1,6 @@
 use crossbeam_channel::Sender;
-use gecko::{
-    flipper::{si::pad::PadStatus, vi::regs::RefreshRate},
-    gamecube::GameCube,
-};
+use gecko::flipper::{si::pad::PadStatus, vi::regs::RefreshRate};
+use gecko::system::{System, SystemId};
 use std::sync::{Arc, Mutex};
 use winit::event_loop::EventLoopProxy;
 
@@ -10,8 +8,8 @@ pub struct FrameMessage {
     pub native_hz: f64,
 }
 
-pub fn emu_thread(
-    mut emulator: GameCube,
+pub fn emu_thread<const SYSTEM: SystemId>(
+    mut emulator: System<SYSTEM>,
     frame_tx: Sender<FrameMessage>,
     input: Arc<Mutex<PadStatus>>,
     proxy: EventLoopProxy<()>,

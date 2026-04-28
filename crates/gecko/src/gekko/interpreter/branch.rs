@@ -1,7 +1,10 @@
 use crate::gekko::condition::BranchControl;
+use crate::gekko::instruction::Instruction;
+use crate::gekko::lut::*;
+use crate::system::{System, SystemId};
 
 #[inline(always)]
-pub fn branch<const OP: u32>(ctx: &mut crate::gamecube::GameCube, instr: crate::gekko::instruction::Instruction) {
+pub fn branch<const OP: u32, const SYSTEM: SystemId>(ctx: &mut System<SYSTEM>, instr: Instruction) {
     // Read LR before potentially overwriting LR with CIA+4 (matters for blrl/bctrl)
     let old_lr = ctx.gekko.spr.lr;
 
@@ -10,14 +13,14 @@ pub fn branch<const OP: u32>(ctx: &mut crate::gamecube::GameCube, instr: crate::
     }
 
     match OP {
-        crate::gekko::lut::OP_BX => {
+        OP_BX => {
             ctx.gekko.nia = if instr.aa() {
                 instr.li() as u32
             } else {
                 ctx.gekko.cia.wrapping_add_signed(instr.li())
             }
         }
-        crate::gekko::lut::OP_BCLRX | crate::gekko::lut::OP_BCX | crate::gekko::lut::OP_BCCTRX => {
+        OP_BCLRX | OP_BCX | OP_BCCTRX => {
             let ctrl = BranchControl::from_bo(instr.bo());
             tracing::trace!("Branch control: {ctrl:?}");
 
@@ -31,15 +34,15 @@ pub fn branch<const OP: u32>(ctx: &mut crate::gamecube::GameCube, instr: crate::
             }
 
             match OP {
-                crate::gekko::lut::OP_BCLRX => ctx.gekko.nia = old_lr,
-                crate::gekko::lut::OP_BCX => {
+                OP_BCLRX => ctx.gekko.nia = old_lr,
+                OP_BCX => {
                     ctx.gekko.nia = if instr.aa() {
                         instr.bd() as u32
                     } else {
                         ctx.gekko.cia.wrapping_add_signed(instr.bd())
                     }
                 }
-                crate::gekko::lut::OP_BCCTRX => ctx.gekko.nia = ctx.gekko.spr.ctr,
+                OP_BCCTRX => ctx.gekko.nia = ctx.gekko.spr.ctr,
                 _ => tracing::error!("missing OP = {OP:#x}"),
             }
         }

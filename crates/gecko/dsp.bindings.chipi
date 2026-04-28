@@ -14,7 +14,7 @@ target rust {
             output "$OUT_DIR/dsp_instr.rs"
         }
 
-        handler control<const OP> {
+        handler control {
             nop
             halt
             ifcc
@@ -26,21 +26,21 @@ target rust {
             callrcc
         }
 
-        handler loops<const OP> {
+        handler loops {
             loop_reg
             bloop
             loopi
             bloopi
         }
 
-        handler addr_reg<const OP> {
+        handler addr_reg {
             dar
             iar
             subarn
             addarn
         }
 
-        handler load_store<const OP> {
+        handler load_store {
             lri
             lr
             sr
@@ -63,7 +63,7 @@ target rust {
             ilrrn
         }
 
-        handler imm_alu<const OP> {
+        handler imm_alu {
             addi
             xori
             andi
@@ -76,7 +76,7 @@ target rust {
             lris
         }
 
-        handler add_sub<const OP> {
+        handler add_sub {
             addr
             addax
             add
@@ -89,7 +89,7 @@ target rust {
             addpaxz
         }
 
-        handler move_ops<const OP> {
+        handler move_ops {
             movr
             movax
             mov
@@ -98,7 +98,7 @@ target rust {
             movnp
         }
 
-        handler inc_dec<const OP> {
+        handler inc_dec {
             incm
             inc
             decm
@@ -107,7 +107,7 @@ target rust {
             abs_ac
         }
 
-        handler cmp_test<const OP> {
+        handler cmp_test {
             cmp
             cmpaxh
             tst
@@ -120,7 +120,7 @@ target rust {
             clrl
         }
 
-        handler logic<const OP> {
+        handler logic {
             xorr
             andr
             orr
@@ -130,7 +130,7 @@ target rust {
             not_ac
         }
 
-        handler shifts<const OP> {
+        handler shifts {
             lsl
             lsr
             asl
@@ -146,7 +146,7 @@ target rust {
             asrnr
         }
 
-        handler status<const OP> {
+        handler status {
             sbclr
             sbset
             m2
@@ -157,7 +157,7 @@ target rust {
             set40
         }
 
-        handler mul<const OP> {
+        handler mul {
             mul
             mulx
             mulc
@@ -186,23 +186,23 @@ target rust {
                 output "$OUT_DIR/dsp_ext_instr.rs"
             }
 
-            handler ext_addr<const OP> {
+            handler ext_addr {
                 ext_dr
                 ext_ir
                 ext_nr
             }
 
-            handler ext_load<const OP> {
+            handler ext_load {
                 ext_l
                 ext_ln
             }
 
-            handler ext_store<const OP> {
+            handler ext_store {
                 ext_s
                 ext_sn
             }
 
-            handler ext_load_store<const OP> {
+            handler ext_load_store {
                 ext_ls
                 ext_sl
                 ext_lsn
@@ -213,14 +213,14 @@ target rust {
                 ext_slnm
             }
 
-            handler ext_ld<const OP> {
+            handler ext_ld {
                 ext_ld_00
                 ext_ldn_01
                 ext_ldm_10
                 ext_ldnm_11
             }
 
-            handler ext_ldax<const OP> {
+            handler ext_ldax {
                 ext_ldax
                 ext_ldaxn
                 ext_ldaxm

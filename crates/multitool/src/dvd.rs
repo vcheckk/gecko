@@ -28,7 +28,7 @@ pub fn info(data: Vec<u8>) {
         header.disk_id,
         header.version
     );
-    println!("  {:<24} {:08X}", "Magic:".bold(), u32::from_be_bytes(header.magic));
+    println!("  {:<24} {:08X}", "Magic:".bold(), header.magic());
     println!(
         "  {:<24} {}",
         "Apploader Date:".bold(),
@@ -62,7 +62,7 @@ fn read_filesystem(dvd: &dyn Dvd) -> FstNode {
     let fst_size = header.filesystem_size.get() as usize;
     let mut buf = vec![0u8; fst_size];
     dvd.read_disc_into(fst_offset, &mut buf);
-    let file_offset_shift = if header.magic == [0xC2, 0x33, 0x9F, 0x3D] { 0 } else { 2 };
+    let file_offset_shift = if header.is_wii() { 2 } else { 0 };
     FstNode::parse(&buf, file_offset_shift)
 }
 

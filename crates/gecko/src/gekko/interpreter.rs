@@ -22,6 +22,9 @@ pub use system::{mfsrin, mftb, msr, mtsrin, nop, sc, segment, spr, tw, twi};
 
 #[cold]
 #[inline(never)]
-pub fn invalid(_ctx: &mut crate::gamecube::GameCube, instr: crate::gekko::instruction::Instruction) {
+pub fn invalid<const SYSTEM: crate::system::SystemId>(
+    _ctx: &mut crate::system::System<SYSTEM>,
+    instr: crate::gekko::instruction::Instruction,
+) {
     panic!("unimplemented Gekko opcode {:#010x}", instr.0);
 }

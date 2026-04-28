@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 
 use crate::flipper::vi::regs::RefreshRate;
-use crate::system::{GC, System, SystemId};
+use crate::system::{System, SystemId};
 
 pub const TIMEBASE_DIVISOR: u64 = 12;
 pub const CPU_CYCLES_PER_DSP_TICK: u64 = 6; // ~486MHz CPU / ~81MHz DSP
@@ -96,7 +96,7 @@ impl<const SYSTEM: SystemId> Scheduler<SYSTEM> {
     }
 }
 
-impl Scheduler<{ GC }> {
+impl Scheduler<{ crate::system::GC }> {
     pub fn new_gamecube() -> Self {
         Self::with_default_events()
     }

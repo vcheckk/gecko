@@ -20,7 +20,7 @@ impl Iso {
 
         let fst_start = header.offset_filesystem.get() as usize;
         let fst_end = fst_start + header.filesystem_size.get() as usize;
-        let file_offset_shift = if header.magic == [0xC2, 0x33, 0x9F, 0x3D] { 0 } else { 2 };
+        let file_offset_shift = if header.gc_magic == crate::GC_MAGIC { 0 } else { 2 };
         let filesystem = FstNode::parse(&data[fst_start..fst_end], file_offset_shift);
 
         Iso {
@@ -48,5 +48,9 @@ impl crate::Dvd for Iso {
 
     fn read_disc_into(&self, offset: usize, buf: &mut [u8]) {
         buf.copy_from_slice(&self.data[offset..offset + buf.len()]);
+    }
+
+    fn data_partition_offset(&self) -> u64 {
+        if self.header.is_wii() { 0xF80_0000 } else { 0 }
     }
 }

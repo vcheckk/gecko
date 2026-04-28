@@ -17,10 +17,16 @@ pub use rvz::Rvz;
 
 use dvd::{Apploader, Header};
 
+/// Wii disc magic word at header offset 0x18.
+pub const WII_MAGIC: [u8; 4] = [0x5D, 0x1C, 0x9E, 0xA3];
+/// GameCube disc magic word at header offset 0x1C.
+pub const GC_MAGIC: [u8; 4] = [0xC2, 0x33, 0x9F, 0x3D];
+
 pub trait Dvd: Send {
     fn header(&self) -> &Header;
     fn apploader(&self) -> &Apploader;
     fn read_disc_into(&self, offset: usize, buf: &mut [u8]);
+    fn data_partition_offset(&self) -> u64;
 }
 
 impl<T: Dvd + ?Sized> Dvd for Box<T> {
@@ -34,6 +40,10 @@ impl<T: Dvd + ?Sized> Dvd for Box<T> {
 
     fn read_disc_into(&self, offset: usize, buf: &mut [u8]) {
         (**self).read_disc_into(offset, buf)
+    }
+
+    fn data_partition_offset(&self) -> u64 {
+        (**self).data_partition_offset()
     }
 }
 

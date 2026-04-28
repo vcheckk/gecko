@@ -12,15 +12,16 @@ pub const DVD_APPLOADER_OFFSET: usize = DVD_HEADER_INFO_OFFSET + DVD_HEADER_INFO
 #[repr(C, packed)]
 #[derive(FromBytes, IntoBytes, Immutable, KnownLayout, Debug, Clone, Copy)]
 pub struct Header {
-    pub game_code: [u8; 4],
-    pub maker_code: [u8; 2],
-    pub disk_id: u8,
-    pub version: u8,
-    pub audio_streaming: u8,
-    pub streaming_buffer_size: u8,
-    _unused1: [u8; 0x12],
-    pub magic: [u8; 4],
-    pub game_name: [u8; 0x3E0],
+    pub game_code: [u8; 4],        // 0x00
+    pub maker_code: [u8; 2],       // 0x04
+    pub disk_id: u8,               // 0x06
+    pub version: u8,               // 0x07
+    pub audio_streaming: u8,       // 0x08
+    pub streaming_buffer_size: u8, // 0x09
+    _unused1: [u8; 0x0E],          // 0x0A..0x18
+    pub wii_magic: [u8; 4],        // 0x18: 0x5D1C9EA3 on Wii discs, zero otherwise
+    pub gc_magic: [u8; 4],         // 0x1C: 0xC2339F3D on GC discs, zero otherwise
+    pub game_name: [u8; 0x3E0],    // 0x20
     pub offset_debug_monitor: U32,
     pub vaddr_debug_monitor: U32,
     _unused2: [u8; 0x18],
@@ -31,6 +32,28 @@ pub struct Header {
     pub user_position: U32,
     pub user_size: U32,
     _unused3: [u8; 0x8],
+}
+
+impl Header {
+    pub fn magic(&self) -> u32 {
+        if self.is_wii() {
+            u32::from_be_bytes(self.wii_magic)
+        } else {
+            u32::from_be_bytes(self.gc_magic)
+        }
+    }
+
+    pub fn is_wii(&self) -> bool {
+        self.wii_magic == crate::WII_MAGIC
+    }
+
+    pub fn is_gc(&self) -> bool {
+        self.gc_magic == crate::GC_MAGIC
+    }
+
+    pub fn is_ntsc(&self) -> bool {
+        matches!(self.game_code[3], b'E' | b'B' | b'N' | b'J' | b'W' | b'K' | b'Q' | b'T')
+    }
 }
 
 #[repr(C, packed)]

@@ -163,6 +163,13 @@ impl<const SYSTEM: SystemId> System<SYSTEM> {
         self.step_cpu();
     }
 
+    pub fn run_until(&mut self, pc: u32, predicate: impl Fn(&Self) -> bool) {
+        self.gekko.pc = pc;
+        while !predicate(self) {
+            self.step();
+        }
+    }
+
     #[inline(always)]
     pub fn prepare_frame(&mut self) {
         self.begin_frame();

@@ -759,6 +759,13 @@ impl crate::Dvd for Rvz {
             ),
         }
     }
+
+    fn data_partition_offset(&self) -> u64 {
+        match self.data_partition {
+            Some(idx) => (self.partitions[idx].data[0].first_sector as u64) * 0x8000,
+            None => 0,
+        }
+    }
 }
 
 #[inline(always)]

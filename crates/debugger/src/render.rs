@@ -1,7 +1,7 @@
 use backend_wgpu::capture::{self, CaptureRequest, ScreenshotControl};
 use dbglib::EmulatorState;
 use egui::ViewportId;
-use gecko::gamecube::GameCube;
+use gecko::system::{System, SystemId};
 use std::sync::Arc;
 use winit::window::Window;
 
@@ -74,7 +74,12 @@ impl RenderState {
         self.surface.configure(&self.device, &self.surface_config);
     }
 
-    pub fn render(&mut self, emulator: &mut GameCube, debugger_ui: &mut DebuggerUi, window: &Window) {
+    pub fn render<const SYSTEM: SystemId>(
+        &mut self,
+        emulator: &mut System<SYSTEM>,
+        debugger_ui: &mut DebuggerUi,
+        window: &Window,
+    ) {
         if let Some(open) = debugger_ui.dvd_cover_open.take() {
             if open {
                 emulator.open_cover();
@@ -83,25 +88,14 @@ impl RenderState {
             }
         }
 
-        // Drain Lua log messages from the script host
+        // Drain Lua log messages from the script host. `drain_logs` is on the
+        // generic `Host` trait so this works regardless of system. Loading a
+        // new Lua script is handled by the App, since `LuaHost` only impls
+        // `Host<{ GC }>`.
         if debugger_ui.show_lua
             && let Some(ref mut host) = emulator.hook_host
         {
             debugger_ui.lua_log.extend(host.drain_logs());
-        }
-
-        // Load a new Lua script if requested
-        if debugger_ui.lua_load_pending {
-            debugger_ui.lua_load_pending = false;
-            match scripting::LuaHost::from_source("editor", &debugger_ui.lua_source) {
-                Ok(host) => {
-                    debugger_ui.lua_log.push("[lua] script loaded".to_string());
-                    emulator.set_hook_host(Box::new(host));
-                }
-                Err(err) => {
-                    debugger_ui.lua_log.push(format!("[lua] error: {err}"));
-                }
-            }
         }
 
         debugger_ui.debugger.tick(emulator);

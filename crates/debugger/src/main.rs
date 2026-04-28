@@ -9,6 +9,7 @@ use winit::window::{Window, WindowId};
 
 use gecko::flipper::si::pad::{self, PadStatus, STICK_CENTER};
 use gecko::gamecube::GameCube;
+use gecko::wii::Wii;
 use image::Dol;
 
 use crate::debugger::DebuggerUi;
@@ -17,8 +18,54 @@ use crate::render::RenderState;
 mod debugger;
 mod render;
 
+/// Holds either a GameCube or Wii emulator. Runtime dispatch lets the
+/// debugger UI work uniformly while keeping `System<SYSTEM>` strongly typed
+/// inside each branch.
+enum EmulatorVariant {
+    Gc(GameCube),
+    Wii(Wii),
+}
+
+impl EmulatorVariant {
+    fn primary_controller_mut(&mut self) -> &mut PadStatus {
+        match self {
+            Self::Gc(e) => e.primary_controller_mut(),
+            Self::Wii(e) => e.primary_controller_mut(),
+        }
+    }
+
+    fn add_primary_controller(&mut self, pad: PadStatus) {
+        match self {
+            Self::Gc(e) => e.add_primary_controller(pad),
+            Self::Wii(e) => e.add_primary_controller(pad),
+        }
+    }
+
+    fn install_render_sink(&mut self, sink: Box<dyn gecko::host::RenderSink>) {
+        match self {
+            Self::Gc(e) => e.render_sink = sink,
+            Self::Wii(e) => e.render_sink = sink,
+        }
+    }
+
+    #[cfg(feature = "efb-writeback")]
+    fn install_efb_writeback(&mut self, rx: Option<crossbeam_channel::Receiver<gecko::flipper::gx::WritebackEvent>>) {
+        match self {
+            Self::Gc(e) => e.gx.efb_writeback_rx = rx,
+            Self::Wii(e) => e.gx.efb_writeback_rx = rx,
+        }
+    }
+
+    fn load_dsp_irom(&mut self, data: &[u8]) {
+        match self {
+            Self::Gc(e) => e.dsp.load_irom(data),
+            Self::Wii(e) => e.dsp.load_irom(data),
+        }
+    }
+}
+
 struct App {
-    emulator: GameCube,
+    emulator: EmulatorVariant,
     ui: DebuggerUi,
     window: Option<Arc<Window>>,
     state: Option<RenderState>,
@@ -33,6 +80,41 @@ struct AppInit {
     queue: wgpu::Queue,
     renderer: backend_wgpu::sink::Renderer,
     surface_format: wgpu::TextureFormat,
+}
+
+impl App {
+    /// Render one frame against whichever emulator variant is loaded.
+    fn render_frame(&mut self) {
+        let Some(state) = self.state.as_mut() else { return };
+        let Some(window) = self.window.as_ref() else { return };
+
+        // Drain Lua-load request before rendering so the script becomes
+        // active starting with this frame's tick.
+        if self.ui.lua_load_pending {
+            self.ui.lua_load_pending = false;
+            match &mut self.emulator {
+                EmulatorVariant::Gc(emu) => try_load_lua(emu, &mut self.ui),
+                EmulatorVariant::Wii(emu) => try_load_lua(emu, &mut self.ui),
+            }
+        }
+
+        match &mut self.emulator {
+            EmulatorVariant::Gc(emu) => state.render(emu, &mut self.ui, window),
+            EmulatorVariant::Wii(emu) => state.render(emu, &mut self.ui, window),
+        }
+    }
+}
+
+fn try_load_lua<const SYSTEM: gecko::SystemId>(emu: &mut gecko::System<SYSTEM>, ui: &mut DebuggerUi) {
+    match scripting::LuaHost::from_source("editor", &ui.lua_source) {
+        Ok(host) => {
+            ui.lua_log.push("[lua] script loaded".to_string());
+            emu.set_hook_host(Box::new(host));
+        }
+        Err(err) => {
+            ui.lua_log.push(format!("[lua] error: {err}"));
+        }
+    }
 }
 
 impl ApplicationHandler for App {
@@ -112,8 +194,8 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::RedrawRequested => {
-                if let (Some(state), Some(window)) = (&mut self.state, &self.window) {
-                    state.render(&mut self.emulator, &mut self.ui, window);
+                self.render_frame();
+                if let Some(window) = &self.window {
                     window.request_redraw();
                 }
             }
@@ -123,13 +205,13 @@ impl ApplicationHandler for App {
 }
 
 #[derive(Parser)]
-#[command(about = "GameCube debugger")]
+#[command(about = "GameCube/Wii debugger")]
 struct Args {
-    /// Path to the DOL file
+    /// Path to the DOL file (GameCube homebrew)
     #[arg(long)]
     dol: Option<String>,
 
-    /// Path to an IPL file
+    /// Path to an IPL file (boot the real GameCube IPL)
     #[arg(long)]
     ipl: Option<String>,
 
@@ -137,11 +219,8 @@ struct Args {
     #[arg(long)]
     skip_ipl: bool,
 
-    /// Boot from a disc image using HLE IPL (requires --dvd)
-    #[arg(long)]
-    ipl_hle: bool,
-
-    /// Path to a GameCube disc image (.iso or .rvz)
+    /// Path to a disc image (.iso or .rvz). System (GameCube vs Wii) is
+    /// autodetected from the disc magic; Wii discs require .rvz format.
     #[arg(long)]
     dvd: Option<String>,
 
@@ -179,31 +258,41 @@ fn main() {
         wgpu::PresentMode::Fifo
     };
 
-    let mut emulator = if args.ipl_hle {
-        let Some(ref dvd) = args.dvd else {
-            panic!("--ipl-hle requires --dvd");
-        };
-        GameCube::with_ipl_hle(image::load_dvd(std::fs::read(dvd).expect("failed to read DVD")))
+    let mut emulator = if let Some(ref dol) = args.dol {
+        EmulatorVariant::Gc(GameCube::with_image(&Dol::parse(
+            std::fs::read(dol).expect("failed to read DOL"),
+        )))
     } else if let Some(ref ipl) = args.ipl {
         let mut gc = GameCube::with_ipl(&std::fs::read(ipl).expect("failed to read IPL"), args.skip_ipl);
         if let Some(ref dvd) = args.dvd {
             gc.insert_dvd(image::load_dvd(std::fs::read(dvd).expect("failed to read DVD")));
         }
-        gc
-    } else if let Some(ref dol) = args.dol {
-        GameCube::with_image(&Dol::parse(std::fs::read(dol).expect("failed to read DOL")))
+        EmulatorVariant::Gc(gc)
+    } else if let Some(ref dvd_path) = args.dvd {
+        let dvd_data = std::fs::read(dvd_path).expect("failed to read DVD");
+        let dvd = image::load_dvd(dvd_data);
+        if dvd.header().is_wii() {
+            eprintln!("Detected Wii disc, booting via apploader HLE");
+            EmulatorVariant::Wii(Wii::with_apploader_hle(dvd))
+        } else {
+            eprintln!("Detected GameCube disc, booting via IPL HLE");
+            EmulatorVariant::Gc(GameCube::with_ipl_hle(dvd))
+        }
     } else {
-        panic!("either --ipl, --ipl-hle, or --dol must be provided");
+        panic!("provide one of --dol, --ipl, or --dvd");
     };
 
     if let Some(ref dsp_path) = args.dsp {
         let dsp_data = std::fs::read(dsp_path).expect("failed to read DSP IROM");
-        emulator.dsp.load_irom(&dsp_data);
+        emulator.load_dsp_irom(&dsp_data);
     }
 
     if let Some(ref path) = args.script {
         let host = scripting::LuaHost::from_file(path).expect("failed to load script");
-        emulator.set_hook_host(Box::new(host));
+        match &mut emulator {
+            EmulatorVariant::Gc(emu) => emu.set_hook_host(Box::new(host)),
+            EmulatorVariant::Wii(emu) => emu.set_hook_host(Box::new(host)),
+        }
     }
 
     let symbols = args
@@ -234,16 +323,13 @@ fn main() {
 
     let surface_format = wgpu::TextureFormat::Bgra8Unorm;
 
-    // Create the renderer (spawns the worker thread internally).
     let renderer = backend_wgpu::sink::Renderer::new(device.clone(), queue.clone(), surface_format);
 
-    // Install the renderer as the emulator's render sink.
-    emulator.render_sink = Box::new(renderer.clone());
+    emulator.install_render_sink(Box::new(renderer.clone()));
 
-    // Install the EFB-to-texture writeback receiver. Feature-gated.
     #[cfg(feature = "efb-writeback")]
     {
-        emulator.gx.efb_writeback_rx = renderer.take_writeback_rx();
+        emulator.install_efb_writeback(renderer.take_writeback_rx());
     }
 
     let ui = DebuggerUi {

@@ -16,6 +16,11 @@ pub mod lut {
     include!(concat!(env!("OUT_DIR"), "/gekko_lut.rs"));
 }
 
+#[allow(dead_code, unused_variables, non_upper_case_globals, clippy::all)]
+pub mod lut_wii {
+    include!(concat!(env!("OUT_DIR"), "/gekko_lut_wii.rs"));
+}
+
 pub const IPL_RESET_VECTOR: u32 = 0xFFF0_0100;
 
 pub struct Gekko {
@@ -149,18 +154,6 @@ impl Gekko {
             unsafe { *self.gprs.get_unchecked(index as usize) }
         }
     }
-
-    /// Get XER carry bit
-    #[inline(always)]
-    pub fn xer_ca(&self) -> u32 {
-        self.spr.xer.carry() as u32
-    }
-
-    /// Set XER carry bit
-    #[inline(always)]
-    pub fn set_xer_ca(&mut self, ca: bool) {
-        self.spr.xer = self.spr.xer.with_carry(ca);
-    }
 }
 
 #[inline(always)]
@@ -169,9 +162,10 @@ pub fn dispatch<const SYSTEM: crate::system::SystemId>(
     instr: instruction::Instruction,
 ) {
     if SYSTEM == crate::system::GC {
-        let ctx: &mut crate::system::System<{ crate::system::GC }> = unsafe { core::mem::transmute(ctx) };
+        let ctx: &mut crate::gamecube::GameCube = unsafe { core::mem::transmute(ctx) };
         self::lut::dispatch(ctx, instr);
     } else {
-        todo!()
+        let ctx: &mut crate::wii::Wii = unsafe { core::mem::transmute(ctx) };
+        self::lut_wii::dispatch(ctx, instr);
     }
 }

@@ -5,8 +5,8 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
-use gecko::gamecube::GameCube;
 use gecko::hooks::{AddressFilter, BusAddressFilter, HookFilters, HookFlags, HookState, Host};
+use gecko::system::{System, SystemId};
 use mlua::{Function, Lua, RegistryKey, Result as LuaResult, Table, UserDataMethods, Value};
 
 pub struct LuaHost {
@@ -207,7 +207,7 @@ impl LuaHost {
         Ok(state)
     }
 
-    fn register_emu_methods(methods: &mut impl UserDataMethods<GameCubeRef>) {
+    fn register_emu_methods<const SYSTEM: SystemId>(methods: &mut impl UserDataMethods<SystemRef<SYSTEM>>) {
         methods.add_method("gpr", |_, this, i: u8| Ok(this.gekko.read_gpr(i)));
         methods.add_method_mut("set_gpr", |_, this, (i, val): (u8, u32)| {
             this.gekko.write_gpr(i, val);
@@ -279,39 +279,44 @@ impl LuaHost {
         });
     }
 
-    fn call_cpu_hook(&self, hook_name: &str, callback: &LuaCallback, emu: &mut GameCube) -> LuaResult<()> {
+    fn call_cpu_hook<const SYSTEM: SystemId>(
+        &self,
+        hook_name: &str,
+        callback: &LuaCallback,
+        emu: &mut System<SYSTEM>,
+    ) -> LuaResult<()> {
         self.lua
             .scope(|scope| {
-                let ud = scope.create_userdata(GameCubeRef(emu as *mut GameCube))?;
+                let ud = scope.create_userdata(SystemRef::<SYSTEM>(emu as *mut System<SYSTEM>))?;
                 let func = callback.resolve(&self.lua)?;
                 func.call::<()>(&ud)
             })
             .map_err(|err| annotate_hook_error(hook_name, err))
     }
 
-    fn call_bus_read_pre_hook(
+    fn call_bus_read_pre_hook<const SYSTEM: SystemId>(
         &self,
         hook_name: &str,
         callback: &LuaCallback,
-        emu: &mut GameCube,
+        emu: &mut System<SYSTEM>,
         virt_addr: u32,
         phys_addr: u32,
         size: u8,
     ) -> LuaResult<Option<u32>> {
         self.lua
             .scope(|scope| {
-                let ud = scope.create_userdata(GameCubeRef(emu as *mut GameCube))?;
+                let ud = scope.create_userdata(SystemRef::<SYSTEM>(emu as *mut System<SYSTEM>))?;
                 let func = callback.resolve(&self.lua)?;
                 func.call::<Option<u32>>((&ud, virt_addr, phys_addr, size))
             })
             .map_err(|err| annotate_hook_error(hook_name, err))
     }
 
-    fn call_bus_read_post_hook(
+    fn call_bus_read_post_hook<const SYSTEM: SystemId>(
         &self,
         hook_name: &str,
         callback: &LuaCallback,
-        emu: &mut GameCube,
+        emu: &mut System<SYSTEM>,
         virt_addr: u32,
         phys_addr: u32,
         size: u8,
@@ -319,18 +324,18 @@ impl LuaHost {
     ) -> LuaResult<Option<u32>> {
         self.lua
             .scope(|scope| {
-                let ud = scope.create_userdata(GameCubeRef(emu as *mut GameCube))?;
+                let ud = scope.create_userdata(SystemRef::<SYSTEM>(emu as *mut System<SYSTEM>))?;
                 let func = callback.resolve(&self.lua)?;
                 func.call::<Option<u32>>((&ud, virt_addr, phys_addr, size, value))
             })
             .map_err(|err| annotate_hook_error(hook_name, err))
     }
 
-    fn call_bus_write_pre_hook(
+    fn call_bus_write_pre_hook<const SYSTEM: SystemId>(
         &self,
         hook_name: &str,
         callback: &LuaCallback,
-        emu: &mut GameCube,
+        emu: &mut System<SYSTEM>,
         virt_addr: u32,
         phys_addr: u32,
         size: u8,
@@ -338,18 +343,18 @@ impl LuaHost {
     ) -> LuaResult<Option<u32>> {
         self.lua
             .scope(|scope| {
-                let ud = scope.create_userdata(GameCubeRef(emu as *mut GameCube))?;
+                let ud = scope.create_userdata(SystemRef::<SYSTEM>(emu as *mut System<SYSTEM>))?;
                 let func = callback.resolve(&self.lua)?;
                 func.call::<Option<u32>>((&ud, virt_addr, phys_addr, size, value))
             })
             .map_err(|err| annotate_hook_error(hook_name, err))
     }
 
-    fn call_bus_write_post_hook(
+    fn call_bus_write_post_hook<const SYSTEM: SystemId>(
         &self,
         hook_name: &str,
         callback: &LuaCallback,
-        emu: &mut GameCube,
+        emu: &mut System<SYSTEM>,
         virt_addr: u32,
         phys_addr: u32,
         size: u8,
@@ -357,7 +362,7 @@ impl LuaHost {
     ) -> LuaResult<()> {
         self.lua
             .scope(|scope| {
-                let ud = scope.create_userdata(GameCubeRef(emu as *mut GameCube))?;
+                let ud = scope.create_userdata(SystemRef::<SYSTEM>(emu as *mut System<SYSTEM>))?;
                 let func = callback.resolve(&self.lua)?;
                 func.call::<()>((&ud, virt_addr, phys_addr, size, value))
             })
@@ -437,31 +442,31 @@ fn parse_address_key(value: Value, context: &str) -> LuaResult<u32> {
     }
 }
 
-struct GameCubeRef(*mut GameCube);
+struct SystemRef<const SYSTEM: SystemId>(*mut System<SYSTEM>);
 
-unsafe impl Send for GameCubeRef {}
+unsafe impl<const SYSTEM: SystemId> Send for SystemRef<SYSTEM> {}
 
-impl mlua::UserData for GameCubeRef {
+impl<const SYSTEM: SystemId> mlua::UserData for SystemRef<SYSTEM> {
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
-        LuaHost::register_emu_methods(methods);
+        LuaHost::register_emu_methods::<SYSTEM>(methods);
     }
 }
 
-impl std::ops::Deref for GameCubeRef {
-    type Target = GameCube;
+impl<const SYSTEM: SystemId> std::ops::Deref for SystemRef<SYSTEM> {
+    type Target = System<SYSTEM>;
 
-    fn deref(&self) -> &GameCube {
+    fn deref(&self) -> &System<SYSTEM> {
         unsafe { &*self.0 }
     }
 }
 
-impl std::ops::DerefMut for GameCubeRef {
-    fn deref_mut(&mut self) -> &mut GameCube {
+impl<const SYSTEM: SystemId> std::ops::DerefMut for SystemRef<SYSTEM> {
+    fn deref_mut(&mut self) -> &mut System<SYSTEM> {
         unsafe { &mut *self.0 }
     }
 }
 
-impl Host<{ gecko::system::GC }> for LuaHost {
+impl<const SYSTEM: SystemId> Host<SYSTEM> for LuaHost {
     fn hook_state(&self) -> HookState {
         HookState {
             flags: self.flags,
@@ -490,7 +495,7 @@ impl Host<{ gecko::system::GC }> for LuaHost {
         self.reload_dispatches().map(Some).map_err(|err| err.to_string())
     }
 
-    fn on_cpu_pre(&mut self, emu: &mut GameCube) {
+    fn on_cpu_pre(&mut self, emu: &mut System<SYSTEM>) {
         let pc = emu.gekko.pc;
         if let Some(callback) = self.cpu_pre.get(&pc)
             && let Err(err) = self.call_cpu_hook("cpu_pre", callback, emu)
@@ -499,7 +504,7 @@ impl Host<{ gecko::system::GC }> for LuaHost {
         }
     }
 
-    fn on_cpu_post(&mut self, emu: &mut GameCube) {
+    fn on_cpu_post(&mut self, emu: &mut System<SYSTEM>) {
         let pc = emu.gekko.cia;
         if let Some(callback) = self.cpu_post.get(&pc)
             && let Err(err) = self.call_cpu_hook("cpu_post", callback, emu)
@@ -508,7 +513,7 @@ impl Host<{ gecko::system::GC }> for LuaHost {
         }
     }
 
-    fn on_bus_read_pre(&mut self, emu: &mut GameCube, virt_addr: u32, phys_addr: u32, size: u8) -> Option<u32> {
+    fn on_bus_read_pre(&mut self, emu: &mut System<SYSTEM>, virt_addr: u32, phys_addr: u32, size: u8) -> Option<u32> {
         let callback = self.bus_read_pre.resolve(virt_addr, phys_addr)?;
         match self.call_bus_read_pre_hook("bus_read_pre", callback, emu, virt_addr, phys_addr, size) {
             Ok(value) => value,
@@ -519,7 +524,14 @@ impl Host<{ gecko::system::GC }> for LuaHost {
         }
     }
 
-    fn on_bus_read_post(&mut self, emu: &mut GameCube, virt_addr: u32, phys_addr: u32, size: u8, value: u32) -> u32 {
+    fn on_bus_read_post(
+        &mut self,
+        emu: &mut System<SYSTEM>,
+        virt_addr: u32,
+        phys_addr: u32,
+        size: u8,
+        value: u32,
+    ) -> u32 {
         if let Some(callback) = self.bus_read_post.resolve(virt_addr, phys_addr) {
             match self.call_bus_read_post_hook("bus_read_post", callback, emu, virt_addr, phys_addr, size, value) {
                 Ok(Some(v)) => return v,
@@ -530,7 +542,14 @@ impl Host<{ gecko::system::GC }> for LuaHost {
         value
     }
 
-    fn on_bus_write_pre(&mut self, emu: &mut GameCube, virt_addr: u32, phys_addr: u32, size: u8, value: u32) -> u32 {
+    fn on_bus_write_pre(
+        &mut self,
+        emu: &mut System<SYSTEM>,
+        virt_addr: u32,
+        phys_addr: u32,
+        size: u8,
+        value: u32,
+    ) -> u32 {
         let Some(callback) = self.bus_write_pre.resolve(virt_addr, phys_addr) else {
             return value;
         };
@@ -545,7 +564,7 @@ impl Host<{ gecko::system::GC }> for LuaHost {
         }
     }
 
-    fn on_bus_write_post(&mut self, emu: &mut GameCube, virt_addr: u32, phys_addr: u32, size: u8, value: u32) {
+    fn on_bus_write_post(&mut self, emu: &mut System<SYSTEM>, virt_addr: u32, phys_addr: u32, size: u8, value: u32) {
         if let Some(callback) = self.bus_write_post.resolve(virt_addr, phys_addr)
             && let Err(err) =
                 self.call_bus_write_post_hook("bus_write_post", callback, emu, virt_addr, phys_addr, size, value)

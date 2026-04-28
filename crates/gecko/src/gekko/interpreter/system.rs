@@ -1,15 +1,18 @@
+use crate::gekko::instruction::Instruction;
+use crate::gekko::lut::*;
 use crate::gekko::sr::Sr;
+use crate::system::{System, SystemId};
 
 #[inline(always)]
-pub fn msr<const OP: u32>(ctx: &mut crate::gamecube::GameCube, instr: crate::gekko::instruction::Instruction) {
+pub fn msr<const OP: u32, const SYSTEM: SystemId>(ctx: &mut System<SYSTEM>, instr: Instruction) {
     match OP {
-        crate::gekko::lut::OP_MTMSR => {
+        OP_MTMSR => {
             ctx.gekko.msr = crate::gekko::msr::Msr::from(ctx.gekko.read_gpr(instr.rs()));
         }
-        crate::gekko::lut::OP_MFMSR => {
+        OP_MFMSR => {
             ctx.gekko.write_gpr(instr.rd(), ctx.gekko.msr.raw());
         }
-        crate::gekko::lut::OP_RFI => {
+        OP_RFI => {
             const RFI_MSR_MASK: u32 = 0x0000_FF73;
             ctx.gekko.msr = crate::gekko::msr::Msr::from(
                 (ctx.gekko.msr.raw() & !RFI_MSR_MASK) | (ctx.gekko.spr.srr1 & RFI_MSR_MASK),
@@ -21,19 +24,19 @@ pub fn msr<const OP: u32>(ctx: &mut crate::gamecube::GameCube, instr: crate::gek
 }
 
 #[inline(always)]
-pub fn spr<const OP: u32>(ctx: &mut crate::gamecube::GameCube, instr: crate::gekko::instruction::Instruction) {
+pub fn spr<const OP: u32, const SYSTEM: SystemId>(ctx: &mut System<SYSTEM>, instr: Instruction) {
     match OP {
-        crate::gekko::lut::OP_MTSPR => {
+        OP_MTSPR => {
             let spr_num = instr.spr_swapped();
             let val = ctx.gekko.read_gpr(instr.rs());
             match spr_num {
                 22 => {
-                    ctx.scheduler.cancel(crate::gekko::dec::underflow_handler);
+                    ctx.scheduler.cancel(crate::gekko::dec::underflow_handler::<SYSTEM>);
                     ctx.gekko.dec.write(ctx.scheduler.cycles, val);
                     ctx.gekko.spr.dec = val;
                     ctx.scheduler.schedule_in(
                         crate::gekko::dec::cycles_until_underflow(val),
-                        crate::gekko::dec::underflow_handler,
+                        crate::gekko::dec::underflow_handler::<SYSTEM>,
                     );
                     tracing::debug!(cycles = ctx.scheduler.cycles, value = val, "decrementer set");
                 }
@@ -49,7 +52,7 @@ pub fn spr<const OP: u32>(ctx: &mut crate::gamecube::GameCube, instr: crate::gek
                 _ => ctx.gekko.spr.write(spr_num, val),
             }
         }
-        crate::gekko::lut::OP_MFSPR => {
+        OP_MFSPR => {
             let spr_num = instr.spr_swapped();
             let val = match spr_num {
                 22 => {
@@ -67,12 +70,12 @@ pub fn spr<const OP: u32>(ctx: &mut crate::gamecube::GameCube, instr: crate::gek
 }
 
 #[inline(always)]
-pub fn segment<const OP: u32>(ctx: &mut crate::gamecube::GameCube, instr: crate::gekko::instruction::Instruction) {
+pub fn segment<const OP: u32, const SYSTEM: SystemId>(ctx: &mut System<SYSTEM>, instr: Instruction) {
     match OP {
-        crate::gekko::lut::OP_MTSR => {
+        OP_MTSR => {
             ctx.gekko.sr[instr.sr() as usize] = Sr::from_raw(ctx.gekko.read_gpr(instr.rs()));
         }
-        crate::gekko::lut::OP_MFSR => {
+        OP_MFSR => {
             ctx.gekko.write_gpr(instr.rd(), ctx.gekko.sr[instr.sr() as usize].raw());
         }
         _ => todo!("Segment Register instruction with OP = {OP:#x}"),
@@ -80,19 +83,19 @@ pub fn segment<const OP: u32>(ctx: &mut crate::gamecube::GameCube, instr: crate:
 }
 
 #[inline(always)]
-pub fn mtsrin(ctx: &mut crate::gamecube::GameCube, instr: crate::gekko::instruction::Instruction) {
+pub fn mtsrin<const SYSTEM: SystemId>(ctx: &mut System<SYSTEM>, instr: Instruction) {
     let sr_idx = (ctx.gekko.read_gpr(instr.rb()) >> 28) as usize;
     ctx.gekko.sr[sr_idx] = Sr::from_raw(ctx.gekko.read_gpr(instr.rs()));
 }
 
 #[inline(always)]
-pub fn mfsrin(ctx: &mut crate::gamecube::GameCube, instr: crate::gekko::instruction::Instruction) {
+pub fn mfsrin<const SYSTEM: SystemId>(ctx: &mut System<SYSTEM>, instr: Instruction) {
     let sr_idx = (ctx.gekko.read_gpr(instr.rb()) >> 28) as usize;
     ctx.gekko.write_gpr(instr.rd(), ctx.gekko.sr[sr_idx].raw());
 }
 
 #[inline(always)]
-pub fn mftb(ctx: &mut crate::gamecube::GameCube, instr: crate::gekko::instruction::Instruction) {
+pub fn mftb<const SYSTEM: SystemId>(ctx: &mut System<SYSTEM>, instr: Instruction) {
     let tbr = instr.spr_swapped();
     let val = match tbr {
         268 => ctx.scheduler.timebase_lower(),
@@ -103,7 +106,7 @@ pub fn mftb(ctx: &mut crate::gamecube::GameCube, instr: crate::gekko::instructio
 }
 
 #[inline(always)]
-pub fn twi(ctx: &mut crate::gamecube::GameCube, instr: crate::gekko::instruction::Instruction) {
+pub fn twi<const SYSTEM: SystemId>(ctx: &mut System<SYSTEM>, instr: Instruction) {
     let a = ctx.gekko.read_gpr(instr.ra()) as i32;
     let simm = instr.simm();
     let to = instr.to();
@@ -120,7 +123,7 @@ pub fn twi(ctx: &mut crate::gamecube::GameCube, instr: crate::gekko::instruction
 }
 
 #[inline(always)]
-pub fn tw(ctx: &mut crate::gamecube::GameCube, instr: crate::gekko::instruction::Instruction) {
+pub fn tw<const SYSTEM: SystemId>(ctx: &mut System<SYSTEM>, instr: Instruction) {
     let a = ctx.gekko.read_gpr(instr.ra()) as i32;
     let b = ctx.gekko.read_gpr(instr.rb()) as i32;
     let to = instr.to();
@@ -137,9 +140,9 @@ pub fn tw(ctx: &mut crate::gamecube::GameCube, instr: crate::gekko::instruction:
 }
 
 #[inline(always)]
-pub fn nop<const OP: u32>(_ctx: &mut crate::gamecube::GameCube, _instr: crate::gekko::instruction::Instruction) {}
+pub fn nop<const OP: u32, const SYSTEM: SystemId>(_ctx: &mut System<SYSTEM>, _instr: Instruction) {}
 
 #[inline(always)]
-pub fn sc(ctx: &mut crate::gamecube::GameCube, _instr: crate::gekko::instruction::Instruction) {
+pub fn sc<const SYSTEM: SystemId>(ctx: &mut System<SYSTEM>, _instr: Instruction) {
     ctx.cause_syscall_interrupt();
 }

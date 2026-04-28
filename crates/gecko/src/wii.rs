@@ -1,10 +1,290 @@
 use crate::scheduler::Scheduler;
 use crate::system::{System, WII};
+use image::dvd::DVD_APPLOADER_OFFSET;
 
 pub type Wii = System<{ WII }>;
+
+const APPLOADER_BASE: u32 = 0x8120_0000;
+
+/// Stack pointer for apploader execution matching Dolphin.
+const APPLOADER_STACK: u32 = 0x816F_FFF0;
+
+/// Wii: 0x8000_4000 (GC: 0x8000_3100). TODO: Verify?
+const APPLOADER_ARG_BASE: u32 = 0x8000_4000;
+
+/// Address of the OSReport function pointer passed to apploader's init().
+/// Write a `blr` here to stub it out.
+const OSREPORT_STUB: u32 = 0x8130_0000;
+
+/// PPC `blr` instruction.
+const PPC_BLR: u32 = 0x4E80_0020;
 
 impl Wii {
     pub fn new(entrypoint: u32) -> Self {
         Self::with_scheduler(entrypoint, Scheduler::new_wii())
+    }
+
+    pub fn with_apploader_hle(dvd: Box<dyn image::Dvd>) -> Self {
+        assert!(dvd.header().is_wii(), "apploader HLE only supports Wii discs");
+
+        let game_name = String::from_utf8_lossy(&dvd.header().game_name);
+        let game_name = game_name.trim_end_matches('\0');
+        tracing::info!("Wii boot: {game_name}");
+
+        let apploader_version = String::from_utf8_lossy(&dvd.apploader().timestamp);
+        tracing::info!("Apploader: {apploader_version}");
+
+        let mut emu = Self::new(0);
+
+        Self::setup_bats(&mut emu);
+        Self::setup_msr_hid(&mut emu);
+        Self::setup_low_memory(&mut emu, dvd.as_ref());
+
+        let apploader = *dvd.apploader();
+        let apploader_entry = apploader.entrypoint.get();
+        let apploader_size = (apploader.size.get() + apploader.trailer_size.get()) as usize;
+        let apploader_code_start = DVD_APPLOADER_OFFSET + 0x20;
+        tracing::info!(
+            addr = format!("{apploader_entry:08X}"),
+            size = apploader_size,
+            "loading apploader from disc"
+        );
+
+        {
+            let buffer = emu.mmio.virt_slice_mut(APPLOADER_BASE, apploader_size);
+            dvd.read_disc_into(apploader_code_start, buffer);
+        }
+
+        emu.mmio.virt_write_u32(OSREPORT_STUB, PPC_BLR);
+
+        emu.gekko.gprs[1] = APPLOADER_STACK;
+
+        Self::run_apploader(&mut emu, dvd.as_ref(), apploader_entry);
+
+        emu.insert_dvd(dvd);
+        emu
+    }
+
+    fn setup_bats(emu: &mut Wii) {
+        emu.gekko.spr.ibat0u = 0x8000_1FFF;
+        emu.gekko.spr.ibat0l = 0x0000_0002;
+        emu.gekko.spr.dbat0u = 0x8000_1FFF;
+        emu.gekko.spr.dbat0l = 0x0000_0002;
+
+        emu.gekko.spr.dbat1u = 0xC000_1FFF;
+        emu.gekko.spr.dbat1l = 0x0000_002A;
+
+        emu.gekko.spr.ibat4u = 0x9000_1FFF;
+        emu.gekko.spr.ibat4l = 0x1000_0002;
+        emu.gekko.spr.dbat4u = 0x9000_1FFF;
+        emu.gekko.spr.dbat4l = 0x1000_0002;
+
+        emu.gekko.spr.dbat5u = 0xD000_1FFF;
+        emu.gekko.spr.dbat5l = 0x1000_002A;
+    }
+
+    fn setup_msr_hid(emu: &mut Wii) {
+        emu.gekko.msr.set_floating_point_available(true);
+        emu.gekko.msr.set_data_address_translation(true);
+        emu.gekko.msr.set_instruction_address_translation(true);
+
+        emu.gekko.spr.hid0 = 0x0011_C664;
+        emu.gekko.spr.hid2 = 0xE000_0000;
+        emu.gekko.spr.hid4 = 0x8390_0000;
+    }
+
+    // Cross referenced with beanwii and Dolphin!!
+    fn setup_low_memory(emu: &mut Wii, dvd: &dyn image::Dvd) {
+        let header = dvd.header();
+        let game_id = u32::from_be_bytes(header.game_code);
+        let maker_code = u16::from_be_bytes(header.maker_code);
+
+        // Disc header copies (from boot1).
+        emu.mmio.phys_write_u32(0x0000_0000, game_id);
+        emu.mmio.phys_write_u16(0x0000_0004, maker_code);
+        emu.mmio.phys_write_u8(0x0000_0006, header.disk_id);
+        emu.mmio.phys_write_u8(0x0000_0007, header.version);
+        emu.mmio.phys_write_u8(0x0000_0008, header.audio_streaming);
+        emu.mmio.phys_write_u8(0x0000_0009, header.streaming_buffer_size);
+
+        // Ripped from the apploader.
+        emu.mmio
+            .phys_write_u32(0x0000_0018, u32::from_be_bytes(image::WII_MAGIC));
+
+        // MEM1 size, board model.
+        emu.mmio.phys_write_u32(0x0000_0028, 0x0180_0000);
+        emu.mmio.phys_write_u32(0x0000_002C, 0x0000_0023);
+
+        // Exception handlers and IRQ masks.
+        emu.mmio.phys_write_u32(0x0000_0048, 0x8134_0000);
+        emu.mmio.phys_write_u32(0x0000_00C4, 0xFFFF_FF00);
+
+        // OSVideoMode: 0 = NTSC, 1 = PAL/MPAL.
+        let video_mode: u32 = if header.is_ntsc() { 0 } else { 1 };
+        emu.mmio.phys_write_u32(0x0000_00CC, video_mode);
+
+        // lol.
+        emu.mmio.phys_write_u32(0x0000_00E4, 0x8008_F7B8);
+
+        // Bus/CPU speeds.
+        emu.mmio.phys_write_u32(0x0000_00F8, 0x0E7B_E2C0);
+        emu.mmio.phys_write_u32(0x0000_00FC, 0x2B73_A840);
+
+        // Dolphin shit.
+        emu.mmio.phys_write_u32(0x0000_30D8, 0xFFFF_FFFF);
+
+        // ???
+        emu.mmio.phys_write_u16(0x0000_30E6, 0x8201);
+
+        // MEM1 arena end. Conditionally overwritten by the apploader when the
+        // DOL entry is >= 0x80004000; this is the fallback.
+        emu.mmio.phys_write_u32(0x0000_3110, 0x8180_0000);
+
+        // MEM2 sizing + arena (ref Dolphin).
+        emu.mmio.phys_write_u32(0x0000_3118, 0x0400_0000);
+        emu.mmio.phys_write_u32(0x0000_311C, 0x0400_0000);
+        emu.mmio.phys_write_u32(0x0000_3120, 0x9360_0000);
+        emu.mmio.phys_write_u32(0x0000_3124, 0x9000_0800);
+        emu.mmio.phys_write_u32(0x0000_3128, 0x935E_0000);
+
+        // IPC buffer (ARM <-> PPC shared region).
+        emu.mmio.phys_write_u32(0x0000_3130, 0x935E_0000);
+        emu.mmio.phys_write_u32(0x0000_3134, 0x9360_0000);
+
+        // Hollywood revision (0x11 = retail Wii).
+        emu.mmio.phys_write_u32(0x0000_3138, 0x0000_0011);
+
+        // IOS56.
+        emu.mmio.phys_write_u32(0x0000_3140, 0x0038_161E);
+        emu.mmio.phys_write_u32(0x0000_3144, 0x0003_0310);
+        emu.mmio.phys_write_u32(0x0000_3148, 0x9360_0000);
+        emu.mmio.phys_write_u32(0x0000_314C, 0x9362_0000);
+
+        // GDDR vendor code.
+        emu.mmio.phys_write_u32(0x0000_3158, 0x0000_FF16);
+
+        // Boot flag, devkit boot version.
+        emu.mmio.phys_write_u8(0x0000_315C, 0x80);
+        emu.mmio.phys_write_u16(0x0000_315E, 0x0113);
+
+        // Game ID dup, app type.
+        emu.mmio.phys_write_u32(0x0000_3180, game_id);
+        emu.mmio.phys_write_u8(0x0000_3184, 0x80);
+
+        // Min IOS version requirement.
+        emu.mmio.phys_write_u32(0x0000_3188, 0x0035_1011);
+
+        // Data partition magic + offset (Sonic Colors / NSMBW read these).
+        emu.mmio.phys_write_u32(0x0000_3194, 0x8000_0000);
+        emu.mmio
+            .phys_write_u32(0x0000_3198, (dvd.data_partition_offset() >> 2) as u32);
+    }
+
+    fn run_apploader(emu: &mut Wii, dvd: &dyn image::Dvd, apploader_entry: u32) {
+        let blr_predicate = |sys: &Wii| {
+            use disasm::gekko::GekkoInstruction;
+            let buffer = sys.mmio.virt_slice(sys.gekko.pc, 4);
+            let (instr, _) = GekkoInstruction::decode(buffer).unwrap();
+            matches!(
+                instr,
+                GekkoInstruction::Bclrx {
+                    bo: 20,
+                    bi: 0,
+                    lk: false
+                }
+            )
+        };
+
+        // void __fastcall Apploader_Entry(void **init_func, void **main_func, void **final_func)
+        // {
+        //   *init_func = (void *)0x81200470;
+        //   *main_func = (void *)0x81200490;
+        //   *final_func = (void *)0x812004B0;
+        //   memmove((void *)0x8132FF80, (const void *)0x81200420, 0x4Cu);
+        //   DCStoreRange((void *)0x8132FF80, 0x4Cu);
+        //   ICInvalidateRange((void *)0x8132FF80, 0x4Cu);
+        // }
+        emu.gekko.gprs[3] = APPLOADER_ARG_BASE;
+        emu.gekko.gprs[4] = APPLOADER_ARG_BASE + 4;
+        emu.gekko.gprs[5] = APPLOADER_ARG_BASE + 8;
+        emu.run_until(apploader_entry, blr_predicate);
+
+        let init_ptr = emu.read_u32(APPLOADER_ARG_BASE);
+        let main_ptr = emu.read_u32(APPLOADER_ARG_BASE + 4);
+        let close_ptr = emu.read_u32(APPLOADER_ARG_BASE + 8);
+        tracing::info!(
+            init = format!("{init_ptr:08X}"),
+            main = format!("{main_ptr:08X}"),
+            close = format!("{close_ptr:08X}"),
+            "Apploader_Entry() returned"
+        );
+        assert!(init_ptr != 0 && main_ptr != 0 && close_ptr != 0);
+
+        // unsigned int __fastcall Apploader_Init(void (*report)(const char *fmt, ...))
+        // {
+        //   unsigned int result; // r3
+        //   memset((void *)0x81201C60, 0, 0x20u);
+        //   memset((void *)0x81201C80, 0, 0x100u);
+        //   MEMORY[0x81201D80] = 0;
+        //   MEMORY[0x81201D84] = 0;
+        //   MEMORY[0x81201D88] = 0;
+        //   MEMORY[0x81201C58] = (int (__fastcall *)(_DWORD))report;
+        //   MEMORY[0x81201C54] = 2;
+        //   copy_lowmem_boot_info((void *)0x81201D8C);
+        //   MEMORY[0x81201C58](-2128603796);
+        //   MEMORY[0x81201C58](-2128603768);
+        //   MEMORY[0x8000315D] = 0x80;
+        //   if ( MEMORY[0x8000315E] < 0x107u )
+        //     MEMORY[0x81201C58](-2128603704);
+        //   MEMORY[0x80003188] = 3674906;
+        //   result = MEMORY[0x80000018];
+        //   if ( MEMORY[0x80000018] == 1562156707 )
+        //     MEMORY[0x81201C54] = 0;
+        //   else
+        //     MEMORY[0x81201C54] = 2;
+        //   return result;
+        // }
+        emu.gekko.gprs[3] = OSREPORT_STUB;
+        emu.run_until(init_ptr, blr_predicate);
+        tracing::info!("Apploader_Init() returned");
+
+        // Apploader_Main() loads text, data, set up OS globals, etc.
+        // Returns 1 in r3 if there is more work to do
+        loop {
+            emu.gekko.gprs[3] = APPLOADER_ARG_BASE;
+            emu.gekko.gprs[4] = APPLOADER_ARG_BASE + 4;
+            emu.gekko.gprs[5] = APPLOADER_ARG_BASE + 8;
+            emu.run_until(main_ptr, blr_predicate);
+
+            if emu.gekko.gprs[3] == 0 {
+                break;
+            }
+
+            let addr = emu.read_u32(APPLOADER_ARG_BASE);
+            let length = emu.read_u32(APPLOADER_ARG_BASE + 4) as usize;
+            let offset = (emu.read_u32(APPLOADER_ARG_BASE + 8) as u64) << 2;
+            tracing::debug!(
+                dst = format!("{addr:08X}"),
+                len = length,
+                offset = format!("{offset:X}"),
+                "Apploader_Main() disc read"
+            );
+
+            let buffer = emu.mmio.virt_slice_mut(addr, length);
+            dvd.read_disc_into(offset as usize, buffer);
+        }
+
+        // u32 Apploader_ReturnEpilogue()
+        // {
+        //   return g_apploader_dol.entry_point;
+        // }
+        emu.run_until(close_ptr, blr_predicate);
+        let entrypoint = emu.gekko.gprs[3];
+        assert!(entrypoint != 0, "Apploader_ReturnEpilogue() returned null entrypoint");
+        emu.gekko.pc = entrypoint;
+        tracing::info!(
+            entrypoint = format!("{entrypoint:08X}"),
+            "Apploader_ReturnEpilogue() returned, ready to run game"
+        );
     }
 }

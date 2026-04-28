@@ -4,16 +4,13 @@ pub mod windows;
 #[cfg(not(target_arch = "wasm32"))]
 use std::io::Write;
 
-use gecko::gamecube::GameCube;
 use gecko::scheduler::{CPU_CYCLES_PER_DSP_TICK, DSP_BATCH_SIZE, ScheduledFn, dsp_batch_handler};
-use gecko::system::GC;
-
-type GameCubeScheduledFn = ScheduledFn<{ GC }>;
+use gecko::system::{System, SystemId};
 
 /// Identify the DSP batch handler so the debugger can intercept it for per-instruction tracing.
 #[inline(always)]
-fn is_dsp_batch(f: GameCubeScheduledFn) -> bool {
-    (f as usize) == (dsp_batch_handler as GameCubeScheduledFn as usize)
+fn is_dsp_batch<const SYSTEM: SystemId>(f: ScheduledFn<SYSTEM>) -> bool {
+    (f as usize) == (dsp_batch_handler::<SYSTEM> as ScheduledFn<SYSTEM> as usize)
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -116,7 +113,7 @@ impl Debugger {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    pub fn trace_step(&mut self, emulator: &GameCube) {
+    pub fn trace_step<const SYSTEM: SystemId>(&mut self, emulator: &System<SYSTEM>) {
         if let Some(ref mut writer) = self.trace_writer {
             let line = trace::format_trace_line(emulator);
             let _ = writeln!(writer, "{}", line);
@@ -124,7 +121,7 @@ impl Debugger {
     }
 
     #[cfg(target_arch = "wasm32")]
-    pub fn trace_step(&mut self, _emulator: &GameCube) {}
+    pub fn trace_step<const SYSTEM: SystemId>(&mut self, _emulator: &System<SYSTEM>) {}
 
     #[cfg(not(target_arch = "wasm32"))]
     pub fn is_dsp_tracing(&self) -> bool {
@@ -149,7 +146,7 @@ impl Debugger {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    fn dsp_trace_step(&mut self, emulator: &GameCube) {
+    fn dsp_trace_step<const SYSTEM: SystemId>(&mut self, emulator: &System<SYSTEM>) {
         if let Some(ref mut writer) = self.dsp_trace_writer {
             let line = trace::format_dsp_trace_line(&emulator.dsp);
             let _ = writeln!(writer, "{}", line);
@@ -157,13 +154,13 @@ impl Debugger {
     }
 
     #[cfg(target_arch = "wasm32")]
-    fn dsp_trace_step(&mut self, _emulator: &GameCube) {}
+    fn dsp_trace_step<const SYSTEM: SystemId>(&mut self, _emulator: &System<SYSTEM>) {}
 
     /// Drain and process scheduler events, tracing DSP ticks when active.
     #[inline(always)]
-    fn drain_events(&mut self, emulator: &mut GameCube) {
+    fn drain_events<const SYSTEM: SystemId>(&mut self, emulator: &mut System<SYSTEM>) {
         while let Some(f) = emulator.scheduler.poll() {
-            if is_dsp_batch(f) && self.is_dsp_tracing() {
+            if is_dsp_batch::<SYSTEM>(f) && self.is_dsp_tracing() {
                 for _ in 0..DSP_BATCH_SIZE {
                     self.dsp_trace_step(emulator);
                     if !emulator.step_dsp_instruction() {
@@ -173,7 +170,7 @@ impl Debugger {
                 gecko::flipper::dsp::refresh_interrupts(emulator);
                 emulator
                     .scheduler
-                    .schedule_in(CPU_CYCLES_PER_DSP_TICK * DSP_BATCH_SIZE, dsp_batch_handler);
+                    .schedule_in(CPU_CYCLES_PER_DSP_TICK * DSP_BATCH_SIZE, dsp_batch_handler::<SYSTEM>);
             } else {
                 f(emulator);
             }
@@ -184,10 +181,10 @@ impl Debugger {
     /// processed. Used by `RunUntilDsp` to detect when the DSP is about to
     /// execute.
     #[inline(always)]
-    fn drain_events_until_dsp(&mut self, emulator: &mut GameCube) -> bool {
+    fn drain_events_until_dsp<const SYSTEM: SystemId>(&mut self, emulator: &mut System<SYSTEM>) -> bool {
         let mut dsp_hit = false;
         while let Some(f) = emulator.scheduler.poll() {
-            if is_dsp_batch(f) {
+            if is_dsp_batch::<SYSTEM>(f) {
                 if self.is_dsp_tracing() {
                     for _ in 0..DSP_BATCH_SIZE {
                         self.dsp_trace_step(emulator);
@@ -198,7 +195,7 @@ impl Debugger {
                     gecko::flipper::dsp::refresh_interrupts(emulator);
                     emulator
                         .scheduler
-                        .schedule_in(CPU_CYCLES_PER_DSP_TICK * DSP_BATCH_SIZE, dsp_batch_handler);
+                        .schedule_in(CPU_CYCLES_PER_DSP_TICK * DSP_BATCH_SIZE, dsp_batch_handler::<SYSTEM>);
                 } else {
                     f(emulator);
                 }
@@ -214,7 +211,7 @@ impl Debugger {
     ///
     /// After execution, transient states (`Step`, `RunUntilVsync`, `RunUntilAddress`)
     /// automatically transition to `Paused`.
-    pub fn tick(&mut self, emulator: &mut GameCube) {
+    pub fn tick<const SYSTEM: SystemId>(&mut self, emulator: &mut System<SYSTEM>) {
         match self.state {
             EmulatorState::Running => {
                 if self.is_tracing() || self.is_dsp_tracing() || self.has_active_breakpoints() {

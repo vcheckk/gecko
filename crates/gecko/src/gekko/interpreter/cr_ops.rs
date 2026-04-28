@@ -1,7 +1,10 @@
-use crate::gekko::condition::ConditionField;
+use crate::gekko::condition::{ConditionField, ConditionRegister};
+use crate::gekko::instruction::Instruction;
+use crate::gekko::lut::*;
+use crate::system::{System, SystemId};
 
 #[inline(always)]
-pub fn mcrxr(ctx: &mut crate::gamecube::GameCube, instr: crate::gekko::instruction::Instruction) {
+pub fn mcrxr<const SYSTEM: SystemId>(ctx: &mut System<SYSTEM>, instr: Instruction) {
     let xer = ctx.gekko.spr.xer;
     let field = ConditionField::new()
         .with_lt(xer.summary_overflow())
@@ -13,9 +16,9 @@ pub fn mcrxr(ctx: &mut crate::gamecube::GameCube, instr: crate::gekko::instructi
 }
 
 #[inline(always)]
-pub fn cr_ops<const OP: u32>(ctx: &mut crate::gamecube::GameCube, instr: crate::gekko::instruction::Instruction) {
+pub fn cr_ops<const OP: u32, const SYSTEM: SystemId>(ctx: &mut System<SYSTEM>, instr: Instruction) {
     match OP {
-        crate::gekko::lut::OP_MTCRF => {
+        OP_MTCRF => {
             let crm = instr.crm();
             let rs = ctx.gekko.read_gpr(instr.rs());
             let mut cr = ctx.gekko.cr.raw();
@@ -26,12 +29,12 @@ pub fn cr_ops<const OP: u32>(ctx: &mut crate::gamecube::GameCube, instr: crate::
                     cr = (cr & !mask) | (rs & mask);
                 }
             }
-            ctx.gekko.cr = crate::gekko::condition::ConditionRegister::from(cr);
+            ctx.gekko.cr = ConditionRegister::from(cr);
         }
-        crate::gekko::lut::OP_MFCR => {
+        OP_MFCR => {
             ctx.gekko.write_gpr(instr.rd(), ctx.gekko.cr.raw());
         }
-        crate::gekko::lut::OP_MCRF => {
+        OP_MCRF => {
             let src = ctx.gekko.cr.get_field(instr.crfs());
             ctx.gekko.cr.set_field(instr.crfd(), src);
         }
@@ -40,14 +43,14 @@ pub fn cr_ops<const OP: u32>(ctx: &mut crate::gamecube::GameCube, instr: crate::
             let a = ctx.gekko.cr.get_bit(instr.crba());
             let b = ctx.gekko.cr.get_bit(instr.crbb());
             let result = match OP {
-                crate::gekko::lut::OP_CRXOR => a ^ b,
-                crate::gekko::lut::OP_CROR => a | b,
-                crate::gekko::lut::OP_CRAND => a & b,
-                crate::gekko::lut::OP_CREQV => a == b,
-                crate::gekko::lut::OP_CRNOR => !(a | b),
-                crate::gekko::lut::OP_CRNAND => !(a & b),
-                crate::gekko::lut::OP_CRANDC => a & !b,
-                crate::gekko::lut::OP_CRORC => a | !b,
+                OP_CRXOR => a ^ b,
+                OP_CROR => a | b,
+                OP_CRAND => a & b,
+                OP_CREQV => a == b,
+                OP_CRNOR => !(a | b),
+                OP_CRNAND => !(a & b),
+                OP_CRANDC => a & !b,
+                OP_CRORC => a | !b,
                 _ => todo!("CR instruction with OP = {OP:#x}"),
             };
             ctx.gekko.cr.set_bit(instr.crbd(), result);

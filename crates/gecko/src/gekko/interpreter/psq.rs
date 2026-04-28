@@ -1,3 +1,7 @@
+use crate::gekko::instruction::Instruction;
+use crate::gekko::lut::*;
+use crate::system::{System, SystemId};
+
 // Dequantize lookup table (64 entries, indexed by 6-bit unsigned scale)
 // Scale 0-31: 1.0 / 2^i, Scale 32-63: 2^(64-i) (signed interpretation: -32..-1)
 const DEQUANT_TABLE: [f32; 64] = {
@@ -52,7 +56,7 @@ fn quant_element_size(qtype: u8) -> u32 {
     }
 }
 
-fn dequantize(ctx: &mut crate::gamecube::GameCube, addr: u32, ld_type: u8, ld_scale: u8) -> f64 {
+fn dequantize<const SYSTEM: SystemId>(ctx: &mut System<SYSTEM>, addr: u32, ld_type: u8, ld_scale: u8) -> f64 {
     let scale = DEQUANT_TABLE[ld_scale as usize];
     match ld_type {
         0 => ctx.read_f32(addr),
@@ -64,7 +68,7 @@ fn dequantize(ctx: &mut crate::gamecube::GameCube, addr: u32, ld_type: u8, ld_sc
     }
 }
 
-fn quantize(ctx: &mut crate::gamecube::GameCube, addr: u32, value: f64, st_type: u8, st_scale: u8) {
+fn quantize<const SYSTEM: SystemId>(ctx: &mut System<SYSTEM>, addr: u32, value: f64, st_type: u8, st_scale: u8) {
     let scale = QUANT_TABLE[st_scale as usize];
     match st_type {
         0 => ctx.write_f32(addr, value),
@@ -88,7 +92,7 @@ fn quantize(ctx: &mut crate::gamecube::GameCube, addr: u32, value: f64, st_type:
     }
 }
 
-fn psq_load(ctx: &mut crate::gamecube::GameCube, fd: u8, addr: u32, w: bool, gqr: u32) {
+fn psq_load<const SYSTEM: SystemId>(ctx: &mut System<SYSTEM>, fd: u8, addr: u32, w: bool, gqr: u32) {
     let ld_type = gqr_ld_type(gqr);
     let ld_scale = gqr_ld_scale(gqr);
     let ps0 = dequantize(ctx, addr, ld_type, ld_scale);
@@ -102,7 +106,7 @@ fn psq_load(ctx: &mut crate::gamecube::GameCube, fd: u8, addr: u32, w: bool, gqr
     ctx.gekko.write_ps1(fd, ps1);
 }
 
-fn psq_store(ctx: &mut crate::gamecube::GameCube, fs: u8, addr: u32, w: bool, gqr: u32) {
+fn psq_store<const SYSTEM: SystemId>(ctx: &mut System<SYSTEM>, fs: u8, addr: u32, w: bool, gqr: u32) {
     let st_type = gqr_st_type(gqr);
     let st_scale = gqr_st_scale(gqr);
     let ps0 = ctx.gekko.read_fpr(fs);
@@ -115,12 +119,7 @@ fn psq_store(ctx: &mut crate::gamecube::GameCube, fs: u8, addr: u32, w: bool, gq
 }
 
 #[inline(always)]
-pub fn store_load_psq<const OP: u32>(
-    ctx: &mut crate::gamecube::GameCube,
-    instr: crate::gekko::instruction::Instruction,
-) {
-    use crate::gekko::lut::*;
-
+pub fn store_load_psq<const OP: u32, const SYSTEM: SystemId>(ctx: &mut System<SYSTEM>, instr: Instruction) {
     if !ctx.check_fp_available() {
         return;
     }
