@@ -64,12 +64,12 @@ pub enum FstNode {
 }
 
 impl FstNode {
-    pub fn parse(fst: &[u8]) -> Self {
+    pub fn parse(fst: &[u8], file_offset_shift: u32) -> Self {
         let total_entries = u32::from_be_bytes(fst[8..12].try_into().unwrap()) as usize;
         let string_table = &fst[total_entries * 12..];
 
         let mut index = 1;
-        let children = Self::parse_dir(fst, string_table, &mut index, total_entries);
+        let children = Self::parse_dir(fst, string_table, &mut index, total_entries, file_offset_shift);
 
         Self::Directory {
             name: String::new(),
@@ -77,7 +77,7 @@ impl FstNode {
         }
     }
 
-    fn parse_dir(fst: &[u8], strings: &[u8], index: &mut usize, end: usize) -> Vec<Self> {
+    fn parse_dir(fst: &[u8], strings: &[u8], index: &mut usize, end: usize, file_offset_shift: u32) -> Vec<Self> {
         let mut entries = Vec::new();
         while *index < end {
             let base = *index * 12;
@@ -91,12 +91,12 @@ impl FstNode {
             if flags == 0 {
                 entries.push(Self::File {
                     name,
-                    offset,
+                    offset: offset << file_offset_shift,
                     size: length,
                 });
             } else {
                 let next = length as usize;
-                let children = Self::parse_dir(fst, strings, index, next);
+                let children = Self::parse_dir(fst, strings, index, next, file_offset_shift);
                 entries.push(Self::Directory { name, children });
             }
         }

@@ -11,8 +11,9 @@ pub fn msr<const OP: u32>(ctx: &mut crate::gamecube::GameCube, instr: crate::gek
         }
         crate::gekko::lut::OP_RFI => {
             const RFI_MSR_MASK: u32 = 0x0000_FF73;
-            ctx.gekko.msr =
-                crate::gekko::msr::Msr::from((ctx.gekko.msr.raw() & !RFI_MSR_MASK) | (ctx.gekko.spr.srr1 & RFI_MSR_MASK));
+            ctx.gekko.msr = crate::gekko::msr::Msr::from(
+                (ctx.gekko.msr.raw() & !RFI_MSR_MASK) | (ctx.gekko.spr.srr1 & RFI_MSR_MASK),
+            );
             ctx.gekko.nia = ctx.gekko.spr.srr0.value() << 2;
         }
         _ => todo!("MSR instruction with OP = {OP:#x}"),
@@ -41,7 +42,8 @@ pub fn spr<const OP: u32>(ctx: &mut crate::gamecube::GameCube, instr: crate::gek
                 923 => {
                     ctx.gekko.spr.dmal = crate::gekko::spr::DmaLower::from_raw(val);
                     if ctx.gekko.spr.dmal.trigger() {
-                        ctx.mmio.process_locked_cache_dma(&ctx.gekko.spr.dmau, &ctx.gekko.spr.dmal);
+                        ctx.mmio
+                            .process_locked_cache_dma(&ctx.gekko.spr.dmau, &ctx.gekko.spr.dmal);
                     }
                 }
                 _ => ctx.gekko.spr.write(spr_num, val),

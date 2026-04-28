@@ -1,5 +1,5 @@
-use crate::gekko::IPL_RESET_VECTOR;
 use crate::flipper::exi::macronix::ExiMacronix;
+use crate::gekko::IPL_RESET_VECTOR;
 use crate::ipl::IPL_HLE;
 use crate::scheduler::Scheduler;
 use crate::system::{GC, System};

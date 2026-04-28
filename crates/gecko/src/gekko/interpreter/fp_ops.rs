@@ -111,10 +111,26 @@ pub fn fp_ops<const OP: u32>(ctx: &mut crate::gamecube::GameCube, instr: crate::
             };
             ctx.gekko.cr.set_field(instr.crfd(), cf);
         }
-        crate::gekko::lut::OP_FADDX => fp_write(ctx, &instr, ctx.gekko.read_fpr(instr.ra()) + ctx.gekko.read_fpr(instr.rb())),
-        crate::gekko::lut::OP_FSUBX => fp_write(ctx, &instr, ctx.gekko.read_fpr(instr.ra()) - ctx.gekko.read_fpr(instr.rb())),
-        crate::gekko::lut::OP_FMULX => fp_write(ctx, &instr, ctx.gekko.read_fpr(instr.ra()) * ctx.gekko.read_fpr(instr.fc())),
-        crate::gekko::lut::OP_FDIVX => fp_write(ctx, &instr, ctx.gekko.read_fpr(instr.ra()) / ctx.gekko.read_fpr(instr.rb())),
+        crate::gekko::lut::OP_FADDX => fp_write(
+            ctx,
+            &instr,
+            ctx.gekko.read_fpr(instr.ra()) + ctx.gekko.read_fpr(instr.rb()),
+        ),
+        crate::gekko::lut::OP_FSUBX => fp_write(
+            ctx,
+            &instr,
+            ctx.gekko.read_fpr(instr.ra()) - ctx.gekko.read_fpr(instr.rb()),
+        ),
+        crate::gekko::lut::OP_FMULX => fp_write(
+            ctx,
+            &instr,
+            ctx.gekko.read_fpr(instr.ra()) * ctx.gekko.read_fpr(instr.fc()),
+        ),
+        crate::gekko::lut::OP_FDIVX => fp_write(
+            ctx,
+            &instr,
+            ctx.gekko.read_fpr(instr.ra()) / ctx.gekko.read_fpr(instr.rb()),
+        ),
         crate::gekko::lut::OP_FMADDX => fp_write(
             ctx,
             &instr,
@@ -158,12 +174,14 @@ pub fn fp_ops<const OP: u32>(ctx: &mut crate::gamecube::GameCube, instr: crate::
         crate::gekko::lut::OP_FMADDSX => fp_write_single(
             ctx,
             &instr,
-            (ctx.gekko.read_fpr(instr.ra()) * ctx.gekko.read_fpr(instr.fc()) + ctx.gekko.read_fpr(instr.rb())) as f32 as f64,
+            (ctx.gekko.read_fpr(instr.ra()) * ctx.gekko.read_fpr(instr.fc()) + ctx.gekko.read_fpr(instr.rb())) as f32
+                as f64,
         ),
         crate::gekko::lut::OP_FMSUBSX => fp_write_single(
             ctx,
             &instr,
-            (ctx.gekko.read_fpr(instr.ra()) * ctx.gekko.read_fpr(instr.fc()) - ctx.gekko.read_fpr(instr.rb())) as f32 as f64,
+            (ctx.gekko.read_fpr(instr.ra()) * ctx.gekko.read_fpr(instr.fc()) - ctx.gekko.read_fpr(instr.rb())) as f32
+                as f64,
         ),
         crate::gekko::lut::OP_FNMADDSX => fp_write_single(
             ctx,

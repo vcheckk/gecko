@@ -44,22 +44,23 @@ pub fn registers(curr: &CpuSnapshot, prev: &CpuSnapshot) {
         ("cr7", curr.cr.cr7(), prev.cr.cr7()),
     ];
 
-    let fmt_cr_field =
-        |label: &str, val: gecko::gekko::condition::ConditionField, prev_val: gecko::gekko::condition::ConditionField| {
-            let flags = format!(
-                "{}{}{}{}",
-                if val.lt() { "L" } else { "·" },
-                if val.gt() { "G" } else { "·" },
-                if val.eq() { "Z" } else { "·" },
-                if val.so() { "O" } else { "·" },
-            );
-            let text = format!("{}[{}] ", label, flags);
-            if val.raw() != prev_val.raw() {
-                format!("{}", text.bright_red().bold())
-            } else {
-                format!("{}", text.dimmed())
-            }
-        };
+    let fmt_cr_field = |label: &str,
+                        val: gecko::gekko::condition::ConditionField,
+                        prev_val: gecko::gekko::condition::ConditionField| {
+        let flags = format!(
+            "{}{}{}{}",
+            if val.lt() { "L" } else { "·" },
+            if val.gt() { "G" } else { "·" },
+            if val.eq() { "Z" } else { "·" },
+            if val.so() { "O" } else { "·" },
+        );
+        let text = format!("{}[{}] ", label, flags);
+        if val.raw() != prev_val.raw() {
+            format!("{}", text.bright_red().bold())
+        } else {
+            format!("{}", text.dimmed())
+        }
+    };
 
     let cr_line: String = cr_fields
         .iter()

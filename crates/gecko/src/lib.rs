@@ -1,8 +1,8 @@
 pub mod common;
-pub mod gekko;
 pub mod dvd;
 pub mod flipper;
 pub mod gamecube;
+pub mod gekko;
 pub mod host;
 pub mod idle;
 pub mod ipl;

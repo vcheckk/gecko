@@ -58,10 +58,22 @@ pub fn show_cpu(
                             ui.end_row();
 
                             for (name, getter) in [
-                                ("LT", (|i: u8, c: &Gekko| c.cr.get_field(i).lt()) as fn(u8, &Gekko) -> bool),
-                                ("GT", (|i: u8, c: &Gekko| c.cr.get_field(i).gt()) as fn(u8, &Gekko) -> bool),
-                                ("EQ", (|i: u8, c: &Gekko| c.cr.get_field(i).eq()) as fn(u8, &Gekko) -> bool),
-                                ("SO", (|i: u8, c: &Gekko| c.cr.get_field(i).so()) as fn(u8, &Gekko) -> bool),
+                                (
+                                    "LT",
+                                    (|i: u8, c: &Gekko| c.cr.get_field(i).lt()) as fn(u8, &Gekko) -> bool,
+                                ),
+                                (
+                                    "GT",
+                                    (|i: u8, c: &Gekko| c.cr.get_field(i).gt()) as fn(u8, &Gekko) -> bool,
+                                ),
+                                (
+                                    "EQ",
+                                    (|i: u8, c: &Gekko| c.cr.get_field(i).eq()) as fn(u8, &Gekko) -> bool,
+                                ),
+                                (
+                                    "SO",
+                                    (|i: u8, c: &Gekko| c.cr.get_field(i).so()) as fn(u8, &Gekko) -> bool,
+                                ),
                             ] {
                                 ui.label(name);
                                 for i in 0..8u8 {

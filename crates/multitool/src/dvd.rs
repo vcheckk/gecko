@@ -62,7 +62,8 @@ fn read_filesystem(dvd: &dyn Dvd) -> FstNode {
     let fst_size = header.filesystem_size.get() as usize;
     let mut buf = vec![0u8; fst_size];
     dvd.read_disc_into(fst_offset, &mut buf);
-    FstNode::parse(&buf)
+    let file_offset_shift = if header.magic == [0xC2, 0x33, 0x9F, 0x3D] { 0 } else { 2 };
+    FstNode::parse(&buf, file_offset_shift)
 }
 
 fn build_tree(node: &FstNode) -> Tree<String> {

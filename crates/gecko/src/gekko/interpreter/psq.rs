@@ -115,7 +115,10 @@ fn psq_store(ctx: &mut crate::gamecube::GameCube, fs: u8, addr: u32, w: bool, gq
 }
 
 #[inline(always)]
-pub fn store_load_psq<const OP: u32>(ctx: &mut crate::gamecube::GameCube, instr: crate::gekko::instruction::Instruction) {
+pub fn store_load_psq<const OP: u32>(
+    ctx: &mut crate::gamecube::GameCube,
+    instr: crate::gekko::instruction::Instruction,
+) {
     use crate::gekko::lut::*;
 
     if !ctx.check_fp_available() {

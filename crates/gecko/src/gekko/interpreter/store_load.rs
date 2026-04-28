@@ -209,7 +209,10 @@ pub fn stwcx_dot(ctx: &mut crate::gamecube::GameCube, instr: crate::gekko::instr
 }
 
 #[inline(always)]
-pub fn store_load_fp<const OP: u32>(ctx: &mut crate::gamecube::GameCube, instr: crate::gekko::instruction::Instruction) {
+pub fn store_load_fp<const OP: u32>(
+    ctx: &mut crate::gamecube::GameCube,
+    instr: crate::gekko::instruction::Instruction,
+) {
     if !ctx.check_fp_available() {
         return;
     }

@@ -20,7 +20,8 @@ impl Iso {
 
         let fst_start = header.offset_filesystem.get() as usize;
         let fst_end = fst_start + header.filesystem_size.get() as usize;
-        let filesystem = FstNode::parse(&data[fst_start..fst_end]);
+        let file_offset_shift = if header.magic == [0xC2, 0x33, 0x9F, 0x3D] { 0 } else { 2 };
+        let filesystem = FstNode::parse(&data[fst_start..fst_end], file_offset_shift);
 
         Iso {
             header,

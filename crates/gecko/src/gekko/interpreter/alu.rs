@@ -2,7 +2,10 @@
 pub fn alu<const OP: u32>(ctx: &mut crate::gamecube::GameCube, instr: crate::gekko::instruction::Instruction) {
     match OP {
         crate::gekko::lut::OP_ADDX => {
-            let res = ctx.gekko.read_gpr(instr.ra()).wrapping_add(ctx.gekko.read_gpr(instr.rb()));
+            let res = ctx
+                .gekko
+                .read_gpr(instr.ra())
+                .wrapping_add(ctx.gekko.read_gpr(instr.rb()));
             ctx.gekko.write_gpr(instr.rd(), res);
             if instr.rc() {
                 ctx.gekko.update_cr0(res);
@@ -44,7 +47,10 @@ pub fn alu<const OP: u32>(ctx: &mut crate::gamecube::GameCube, instr: crate::gek
             ctx.gekko.update_cr0(val);
         }
         crate::gekko::lut::OP_SUBFX => {
-            let res = ctx.gekko.read_gpr(instr.rb()).wrapping_sub(ctx.gekko.read_gpr(instr.ra()));
+            let res = ctx
+                .gekko
+                .read_gpr(instr.rb())
+                .wrapping_sub(ctx.gekko.read_gpr(instr.ra()));
             ctx.gekko.write_gpr(instr.rd(), res);
             if instr.rc() {
                 ctx.gekko.update_cr0(res);
@@ -181,8 +187,8 @@ pub fn alu<const OP: u32>(ctx: &mut crate::gamecube::GameCube, instr: crate::gek
             }
         }
         crate::gekko::lut::OP_MULHWX => {
-            let res = ((ctx.gekko.read_gpr(instr.ra()) as i32 as i64 * ctx.gekko.read_gpr(instr.rb()) as i32 as i64) >> 32)
-                as u32;
+            let res = ((ctx.gekko.read_gpr(instr.ra()) as i32 as i64 * ctx.gekko.read_gpr(instr.rb()) as i32 as i64)
+                >> 32) as u32;
             ctx.gekko.write_gpr(instr.rd(), res);
             if instr.rc() {
                 ctx.gekko.update_cr0(res);

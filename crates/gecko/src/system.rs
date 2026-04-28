@@ -1,4 +1,3 @@
-use crate::gekko::Gekko;
 use crate::dvd::DvdInterface;
 use crate::flipper::ai::AudioInterface;
 use crate::flipper::cp::CommandProcessor;
@@ -10,6 +9,7 @@ use crate::flipper::pe::PixelEngine;
 use crate::flipper::pi::ProcessorInterface;
 use crate::flipper::si::{SerialInterface, pad};
 use crate::flipper::vi::VideoInterface;
+use crate::gekko::Gekko;
 #[cfg(feature = "hooks")]
 use crate::hooks::{HookFilters, HookFlags, HookState, Host};
 use crate::host::{EmptyRenderSink, RenderSink};

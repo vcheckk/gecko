@@ -193,7 +193,10 @@ impl<const SYSTEM: SystemId> System<SYSTEM> {
 
         self.gekko.nia = base | IRQ_PROGRAM;
 
-        tracing::debug!(addr = format!("{:08X}", self.gekko.nia), "FP program exception triggered");
+        tracing::debug!(
+            addr = format!("{:08X}", self.gekko.nia),
+            "FP program exception triggered"
+        );
     }
 
     /// Guard for FP instruction dispatch. Returns true if the instruction may

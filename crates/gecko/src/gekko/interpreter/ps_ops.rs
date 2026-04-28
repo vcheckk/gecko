@@ -42,17 +42,17 @@ pub fn ps_ops<const OP: u32>(ctx: &mut crate::gamecube::GameCube, instr: crate::
             ps_write(ctx, &instr, ps0, ps1);
         }
         crate::gekko::lut::OP_PS_NMADD => {
-            let ps0 = -(ctx.gekko.read_fpr(instr.ra()) * ctx.gekko.read_fpr(instr.fc()) + ctx.gekko.read_fpr(instr.rb()))
-                as f32 as f64;
-            let ps1 = -(ctx.gekko.read_ps1(instr.ra()) * ctx.gekko.read_ps1(instr.fc()) + ctx.gekko.read_ps1(instr.rb()))
-                as f32 as f64;
+            let ps0 = -(ctx.gekko.read_fpr(instr.ra()) * ctx.gekko.read_fpr(instr.fc())
+                + ctx.gekko.read_fpr(instr.rb())) as f32 as f64;
+            let ps1 = -(ctx.gekko.read_ps1(instr.ra()) * ctx.gekko.read_ps1(instr.fc())
+                + ctx.gekko.read_ps1(instr.rb())) as f32 as f64;
             ps_write(ctx, &instr, ps0, ps1);
         }
         crate::gekko::lut::OP_PS_NMSUB => {
-            let ps0 = -(ctx.gekko.read_fpr(instr.ra()) * ctx.gekko.read_fpr(instr.fc()) - ctx.gekko.read_fpr(instr.rb()))
-                as f32 as f64;
-            let ps1 = -(ctx.gekko.read_ps1(instr.ra()) * ctx.gekko.read_ps1(instr.fc()) - ctx.gekko.read_ps1(instr.rb()))
-                as f32 as f64;
+            let ps0 = -(ctx.gekko.read_fpr(instr.ra()) * ctx.gekko.read_fpr(instr.fc())
+                - ctx.gekko.read_fpr(instr.rb())) as f32 as f64;
+            let ps1 = -(ctx.gekko.read_ps1(instr.ra()) * ctx.gekko.read_ps1(instr.fc())
+                - ctx.gekko.read_ps1(instr.rb())) as f32 as f64;
             ps_write(ctx, &instr, ps0, ps1);
         }
         crate::gekko::lut::OP_PS_MULS0 => {
@@ -90,7 +90,12 @@ pub fn ps_ops<const OP: u32>(ctx: &mut crate::gamecube::GameCube, instr: crate::
             ps_write(ctx, &instr, ps0, ps1);
         }
         crate::gekko::lut::OP_PS_MR => {
-            ps_write(ctx, &instr, ctx.gekko.read_fpr(instr.rb()), ctx.gekko.read_ps1(instr.rb()));
+            ps_write(
+                ctx,
+                &instr,
+                ctx.gekko.read_fpr(instr.rb()),
+                ctx.gekko.read_ps1(instr.rb()),
+            );
         }
         crate::gekko::lut::OP_PS_NEG => {
             ps_write(
@@ -117,16 +122,36 @@ pub fn ps_ops<const OP: u32>(ctx: &mut crate::gamecube::GameCube, instr: crate::
             );
         }
         crate::gekko::lut::OP_PS_MERGE00 => {
-            ps_write(ctx, &instr, ctx.gekko.read_fpr(instr.ra()), ctx.gekko.read_fpr(instr.rb()));
+            ps_write(
+                ctx,
+                &instr,
+                ctx.gekko.read_fpr(instr.ra()),
+                ctx.gekko.read_fpr(instr.rb()),
+            );
         }
         crate::gekko::lut::OP_PS_MERGE01 => {
-            ps_write(ctx, &instr, ctx.gekko.read_fpr(instr.ra()), ctx.gekko.read_ps1(instr.rb()));
+            ps_write(
+                ctx,
+                &instr,
+                ctx.gekko.read_fpr(instr.ra()),
+                ctx.gekko.read_ps1(instr.rb()),
+            );
         }
         crate::gekko::lut::OP_PS_MERGE10 => {
-            ps_write(ctx, &instr, ctx.gekko.read_ps1(instr.ra()), ctx.gekko.read_fpr(instr.rb()));
+            ps_write(
+                ctx,
+                &instr,
+                ctx.gekko.read_ps1(instr.ra()),
+                ctx.gekko.read_fpr(instr.rb()),
+            );
         }
         crate::gekko::lut::OP_PS_MERGE11 => {
-            ps_write(ctx, &instr, ctx.gekko.read_ps1(instr.ra()), ctx.gekko.read_ps1(instr.rb()));
+            ps_write(
+                ctx,
+                &instr,
+                ctx.gekko.read_ps1(instr.ra()),
+                ctx.gekko.read_ps1(instr.rb()),
+            );
         }
         crate::gekko::lut::OP_PS_SEL => {
             let ps0 = if ctx.gekko.read_fpr(instr.ra()) >= 0.0 {
