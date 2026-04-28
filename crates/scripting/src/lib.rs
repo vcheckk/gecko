@@ -1,9 +1,8 @@
 use std::collections::HashMap;
+use std::path::PathBuf;
 #[cfg(feature = "hooks-mut-traps")]
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
-};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 use gecko::hooks::{AddressFilter, BusAddressFilter, HookFilters, HookFlags, HookState, Host};
 use gecko::system::{System, SystemId};
@@ -163,6 +162,31 @@ impl LuaHost {
             Ok(())
         })?;
         lua.globals().set("log", log_fn)?;
+
+        let script_dirs: Arc<Mutex<Vec<PathBuf>>> = Arc::new(Mutex::new(Vec::new()));
+        if let Some(parent) = std::path::Path::new(name).parent() {
+            script_dirs.lock().unwrap().push(parent.to_path_buf());
+        }
+        let include_dirs = Arc::clone(&script_dirs);
+        let include_fn = lua.create_function(move |lua, path: String| {
+            let resolved = {
+                let stack = include_dirs.lock().unwrap();
+                let base = stack.last().cloned().unwrap_or_default();
+                base.join(&path)
+            };
+            let source = std::fs::read_to_string(&resolved)
+                .map_err(|e| mlua::Error::runtime(format!("include {resolved:?}: {e}")))?;
+            let pushed = resolved.parent().map(|p| p.to_path_buf());
+            if let Some(ref d) = pushed {
+                include_dirs.lock().unwrap().push(d.clone());
+            }
+            let result = lua.load(&source).set_name(resolved.to_string_lossy().as_ref()).exec();
+            if pushed.is_some() {
+                include_dirs.lock().unwrap().pop();
+            }
+            result
+        })?;
+        lua.globals().set("include", include_fn)?;
 
         #[cfg(feature = "hooks-mut-traps")]
         {

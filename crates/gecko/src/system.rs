@@ -284,6 +284,16 @@ impl<const SYSTEM: SystemId> System<SYSTEM> {
         self.hook_host = Some(host);
     }
 
+    #[cfg(feature = "hooks")]
+    pub fn has_hook_host(&self) -> bool {
+        self.hook_host.is_some()
+    }
+
+    #[cfg(not(feature = "hooks"))]
+    pub fn has_hook_host(&self) -> bool {
+        false
+    }
+
     #[cfg(all(feature = "hooks", feature = "hooks-mut-traps"))]
     pub fn refresh_hook_traps(&mut self) -> Result<(), String> {
         let Some(mut host) = self.hook_host.take() else {

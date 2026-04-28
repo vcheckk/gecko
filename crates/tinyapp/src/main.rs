@@ -90,7 +90,15 @@ fn main() {
         let dvd = image::load_dvd(dvd_data);
         if dvd.header().is_wii() {
             println!("Detected Wii disc, booting via apploader HLE");
-            let mut emulator = Wii::with_apploader_hle(dvd);
+            let builder = Wii::apploader_hle(dvd);
+            #[cfg(feature = "scripting")]
+            let builder = if let Some(ref path) = args.script {
+                let host = scripting::LuaHost::from_file(path).expect("failed to load script");
+                builder.lua_host(Box::new(host))
+            } else {
+                builder
+            };
+            let mut emulator = builder.build();
             configure(&mut emulator, &args);
             run(emulator, present_mode);
         } else {
@@ -112,8 +120,12 @@ fn configure<const SYSTEM: SystemId>(emulator: &mut System<SYSTEM>, args: &Args)
 
     #[cfg(feature = "scripting")]
     if let Some(ref path) = args.script {
-        let host = scripting::LuaHost::from_file(path).expect("failed to load script");
-        emulator.set_hook_host(Box::new(host));
+        // Already attached for Wii apploader HLE; only attach here for other
+        // boot paths.
+        if !emulator.has_hook_host() {
+            let host = scripting::LuaHost::from_file(path).expect("failed to load script");
+            emulator.set_hook_host(Box::new(host));
+        }
     }
 
     emulator.add_primary_controller(PadStatus {

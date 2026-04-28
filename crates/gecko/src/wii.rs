@@ -34,7 +34,18 @@ impl Wii {
         Self::with_scheduler(entrypoint, Scheduler::new_wii())
     }
 
-    pub fn with_apploader_hle(dvd: Box<dyn image::Dvd>) -> Self {
+    pub fn apploader_hle(dvd: Box<dyn image::Dvd>) -> ApploaderHleBuilder {
+        ApploaderHleBuilder {
+            dvd,
+            #[cfg(feature = "hooks")]
+            host: None,
+        }
+    }
+
+    fn apploader_hle_run(
+        dvd: Box<dyn image::Dvd>,
+        #[cfg(feature = "hooks")] host: Option<Box<dyn crate::hooks::Host<{ WII }> + Send>>,
+    ) -> Self {
         assert!(dvd.header().is_wii(), "apploader HLE only supports Wii discs");
 
         let game_name = String::from_utf8_lossy(&dvd.header().game_name);
@@ -73,6 +84,11 @@ impl Wii {
         emu.mmio.virt_write_u32(0x8000_0C00, PPC_RFI);
 
         emu.gekko.gprs[1] = APPLOADER_STACK;
+
+        #[cfg(feature = "hooks")]
+        if let Some(host) = host {
+            emu.set_hook_host(host);
+        }
 
         Self::run_apploader(&mut emu, dvd.as_ref(), apploader_entry);
 
@@ -292,5 +308,27 @@ impl Wii {
             entrypoint = format!("{entrypoint:08X}"),
             "Apploader_ReturnEpilogue() returned, ready to run game"
         );
+    }
+}
+
+pub struct ApploaderHleBuilder {
+    dvd: Box<dyn image::Dvd>,
+    #[cfg(feature = "hooks")]
+    host: Option<Box<dyn crate::hooks::Host<{ WII }> + Send>>,
+}
+
+impl ApploaderHleBuilder {
+    #[cfg(feature = "hooks")]
+    pub fn lua_host(mut self, host: Box<dyn crate::hooks::Host<{ WII }> + Send>) -> Self {
+        self.host = Some(host);
+        self
+    }
+
+    pub fn build(self) -> Wii {
+        Wii::apploader_hle_run(
+            self.dvd,
+            #[cfg(feature = "hooks")]
+            self.host,
+        )
     }
 }

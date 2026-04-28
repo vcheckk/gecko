@@ -273,7 +273,7 @@ fn main() {
         let dvd = image::load_dvd(dvd_data);
         if dvd.header().is_wii() {
             eprintln!("Detected Wii disc, booting via apploader HLE");
-            EmulatorVariant::Wii(Wii::with_apploader_hle(dvd))
+            EmulatorVariant::Wii(Wii::apploader_hle(dvd).build())
         } else {
             eprintln!("Detected GameCube disc, booting via IPL HLE");
             EmulatorVariant::Gc(GameCube::with_ipl_hle(dvd))
