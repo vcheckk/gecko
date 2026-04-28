@@ -135,22 +135,37 @@ impl GraphicsProcessor {
         }
     }
 
-    pub fn mmio_write_u8(&mut self, mmio: &mut Mmio, renderer: &mut dyn RenderSink, val: u8) {
+    pub fn mmio_write_u8<const SYSTEM: SystemId>(
+        &mut self,
+        mmio: &mut Mmio<SYSTEM>,
+        renderer: &mut dyn RenderSink,
+        val: u8,
+    ) {
         self.push_u8(val);
         self.drain_fifo(mmio, renderer);
     }
 
-    pub fn mmio_write_u16(&mut self, mmio: &mut Mmio, renderer: &mut dyn RenderSink, val: u16) {
+    pub fn mmio_write_u16<const SYSTEM: SystemId>(
+        &mut self,
+        mmio: &mut Mmio<SYSTEM>,
+        renderer: &mut dyn RenderSink,
+        val: u16,
+    ) {
         self.push_u16(val);
         self.drain_fifo(mmio, renderer);
     }
 
-    pub fn mmio_write_u32(&mut self, mmio: &mut Mmio, renderer: &mut dyn RenderSink, val: u32) {
+    pub fn mmio_write_u32<const SYSTEM: SystemId>(
+        &mut self,
+        mmio: &mut Mmio<SYSTEM>,
+        renderer: &mut dyn RenderSink,
+        val: u32,
+    ) {
         self.push_u32(val);
         self.drain_fifo(mmio, renderer);
     }
 
-    fn drain_fifo(&mut self, mmio: &mut Mmio, renderer: &mut dyn RenderSink) {
+    fn drain_fifo<const SYSTEM: SystemId>(&mut self, mmio: &mut Mmio<SYSTEM>, renderer: &mut dyn RenderSink) {
         for cmd in self.drain() {
             match cmd {
                 FifoCmd::Cp(data) => self.load_cp(&data),
@@ -174,7 +189,12 @@ impl GraphicsProcessor {
         }
     }
 
-    fn execute_display_list(&mut self, mmio: &mut Mmio, renderer: &mut dyn RenderSink, data: &[u8]) {
+    fn execute_display_list<const SYSTEM: SystemId>(
+        &mut self,
+        mmio: &mut Mmio<SYSTEM>,
+        renderer: &mut dyn RenderSink,
+        data: &[u8],
+    ) {
         let saved = std::mem::take(&mut self.fifo);
         self.fifo = data.to_vec();
         self.drain_fifo(mmio, renderer);

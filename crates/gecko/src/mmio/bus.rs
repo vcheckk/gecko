@@ -2,10 +2,10 @@
 use crate::hooks::HookFlags;
 use crate::mmio::constants::{
     AI_BASE, AI_END, CP_BASE, CP_END, DI_BASE, DI_END, DSP_BASE, DSP_END, EXI_BASE, EXI_END, GX_FIFO_BASE, GX_FIFO_END,
-    HW_REG_BASE, HW_REG_END, MI_BASE, MI_END, PE_BASE, PE_END, PI_BASE, PI_END, RAM_END, SI_BASE, SI_END, VI_BASE,
-    VI_END,
+    HOLLYWOOD_IRQ_BASE, HOLLYWOOD_IRQ_END, HW_HOLLYWOOD_BASE, HW_HOLLYWOOD_END, HW_REG_BASE, HW_REG_END, IPC_BASE,
+    IPC_END, MI_BASE, MI_END, PE_BASE, PE_END, PI_BASE, PI_END, RAM_END, SI_BASE, SI_END, VI_BASE, VI_END,
 };
-use crate::system::{System, SystemId};
+use crate::system::{System, SystemId, WII};
 
 macro_rules! bus_read_hooks {
     ($self:ident, $addr:ident, $phys:ident, $size:literal, $body:expr) => {{
@@ -300,22 +300,35 @@ impl<const SYSTEM: SystemId> System<SYSTEM> {
                 );
                 0
             }) as u8,
+            IPC_BASE..=IPC_END if SYSTEM == WII => crate::hollywood::ipc::ipc_read(self, phys, 1).unwrap_or(0) as u8,
+            HOLLYWOOD_IRQ_BASE..=HOLLYWOOD_IRQ_END if SYSTEM == WII => {
+                crate::hollywood::irq::irq_read(self, phys, 1).unwrap_or(0) as u8
+            }
+            HW_HOLLYWOOD_BASE..=HW_HOLLYWOOD_END if SYSTEM == WII => {
+                tracing::warn!(
+                    device = "HOLLYWOOD",
+                    addr = format!("{addr:08X}"),
+                    phys_addr = format!("{phys:08X}"),
+                    size = 1,
+                    "Unimplemented MMIO read"
+                );
+                self.mmio.phys_read_u8(phys)
+            }
             GX_FIFO_BASE..=GX_FIFO_END => {
                 tracing::error!(addr = format!("{:08X}", addr), "Invalid GX FIFO read");
                 0
             }
-            _ => {
-                if (HW_REG_BASE..=HW_REG_END).contains(&phys) {
-                    tracing::warn!(
-                        device = "HW_REG",
-                        addr = format!("{addr:08X}"),
-                        phys_addr = format!("{phys:08X}"),
-                        size = 1,
-                        "Unimplemented MMIO read"
-                    );
-                }
+            HW_REG_BASE..=HW_REG_END => {
+                tracing::warn!(
+                    device = "HW_REG",
+                    addr = format!("{addr:08X}"),
+                    phys_addr = format!("{phys:08X}"),
+                    size = 1,
+                    "Unimplemented MMIO read"
+                );
                 self.mmio.phys_read_u8(phys)
             }
+            _ => self.mmio.phys_read_u8(phys),
         }
     }
 
@@ -422,22 +435,35 @@ impl<const SYSTEM: SystemId> System<SYSTEM> {
                 );
                 0
             }) as u16,
+            IPC_BASE..=IPC_END if SYSTEM == WII => crate::hollywood::ipc::ipc_read(self, phys, 2).unwrap_or(0) as u16,
+            HOLLYWOOD_IRQ_BASE..=HOLLYWOOD_IRQ_END if SYSTEM == WII => {
+                crate::hollywood::irq::irq_read(self, phys, 2).unwrap_or(0) as u16
+            }
+            HW_HOLLYWOOD_BASE..=HW_HOLLYWOOD_END if SYSTEM == WII => {
+                tracing::warn!(
+                    device = "HOLLYWOOD",
+                    addr = format!("{addr:08X}"),
+                    phys_addr = format!("{phys:08X}"),
+                    size = 2,
+                    "Unimplemented MMIO read"
+                );
+                self.mmio.phys_read_u16(phys)
+            }
             GX_FIFO_BASE..=GX_FIFO_END => {
                 tracing::error!(addr = format!("{:08X}", addr), "Invalid GX FIFO read");
                 0
             }
-            _ => {
-                if (HW_REG_BASE..=HW_REG_END).contains(&phys) {
-                    tracing::warn!(
-                        device = "HW_REG",
-                        addr = format!("{addr:08X}"),
-                        phys_addr = format!("{phys:08X}"),
-                        size = 2,
-                        "Unimplemented MMIO read"
-                    );
-                }
+            HW_REG_BASE..=HW_REG_END => {
+                tracing::warn!(
+                    device = "HW_REG",
+                    addr = format!("{addr:08X}"),
+                    phys_addr = format!("{phys:08X}"),
+                    size = 2,
+                    "Unimplemented MMIO read"
+                );
                 self.mmio.phys_read_u16(phys)
             }
+            _ => self.mmio.phys_read_u16(phys),
         }
     }
 
@@ -544,22 +570,35 @@ impl<const SYSTEM: SystemId> System<SYSTEM> {
                 );
                 0
             }),
+            IPC_BASE..=IPC_END if SYSTEM == WII => crate::hollywood::ipc::ipc_read(self, phys, 4).unwrap_or(0),
+            HOLLYWOOD_IRQ_BASE..=HOLLYWOOD_IRQ_END if SYSTEM == WII => {
+                crate::hollywood::irq::irq_read(self, phys, 4).unwrap_or(0)
+            }
+            HW_HOLLYWOOD_BASE..=HW_HOLLYWOOD_END if SYSTEM == WII => {
+                tracing::warn!(
+                    device = "HOLLYWOOD",
+                    addr = format!("{addr:08X}"),
+                    phys_addr = format!("{phys:08X}"),
+                    size = 4,
+                    "Unimplemented MMIO read"
+                );
+                self.mmio.phys_read_u32(phys)
+            }
             GX_FIFO_BASE..=GX_FIFO_END => {
                 tracing::error!(addr = format!("{:08X}", addr), "Invalid GX FIFO read");
                 0
             }
-            _ => {
-                if (HW_REG_BASE..=HW_REG_END).contains(&phys) {
-                    tracing::warn!(
-                        device = "HW_REG",
-                        addr = format!("{addr:08X}"),
-                        phys_addr = format!("{phys:08X}"),
-                        size = 4,
-                        "Unimplemented MMIO read"
-                    );
-                }
+            HW_REG_BASE..=HW_REG_END => {
+                tracing::warn!(
+                    device = "HW_REG",
+                    addr = format!("{addr:08X}"),
+                    phys_addr = format!("{phys:08X}"),
+                    size = 4,
+                    "Unimplemented MMIO read"
+                );
                 self.mmio.phys_read_u32(phys)
             }
+            _ => self.mmio.phys_read_u32(phys),
         }
     }
 
@@ -687,6 +726,23 @@ impl<const SYSTEM: SystemId> System<SYSTEM> {
                     );
                 }
             }
+            IPC_BASE..=IPC_END if SYSTEM == WII => {
+                crate::hollywood::ipc::ipc_write(self, phys, 1, raw);
+            }
+            HOLLYWOOD_IRQ_BASE..=HOLLYWOOD_IRQ_END if SYSTEM == WII => {
+                crate::hollywood::irq::irq_write(self, phys, 1, raw);
+            }
+            HW_HOLLYWOOD_BASE..=HW_HOLLYWOOD_END if SYSTEM == WII => {
+                tracing::warn!(
+                    device = "HOLLYWOOD",
+                    addr = format!("{addr:08X}"),
+                    phys_addr = format!("{phys:08X}"),
+                    val = format!("{raw:08X}"),
+                    size = 1,
+                    "Unimplemented MMIO write"
+                );
+                self.mmio.phys_write_u8(phys, val);
+            }
             GX_FIFO_BASE..=GX_FIFO_END => {
                 let wptr = self.pi.fifo_wptr as usize;
                 self.mmio.ram[wptr] = val;
@@ -696,19 +752,18 @@ impl<const SYSTEM: SystemId> System<SYSTEM> {
                     self.check_gx_pe_interrupts();
                 }
             }
-            _ => {
-                if (HW_REG_BASE..=HW_REG_END).contains(&phys) {
-                    tracing::warn!(
-                        device = "HW_REG",
-                        addr = format!("{addr:08X}"),
-                        phys_addr = format!("{phys:08X}"),
-                        val = format!("{raw:08X}"),
-                        size = 1,
-                        "Unimplemented MMIO write"
-                    );
-                }
+            HW_REG_BASE..=HW_REG_END => {
+                tracing::warn!(
+                    device = "HW_REG",
+                    addr = format!("{addr:08X}"),
+                    phys_addr = format!("{phys:08X}"),
+                    val = format!("{raw:08X}"),
+                    size = 1,
+                    "Unimplemented MMIO write"
+                );
                 self.mmio.phys_write_u8(phys, val);
             }
+            _ => self.mmio.phys_write_u8(phys, val),
         }
     }
 
@@ -836,6 +891,23 @@ impl<const SYSTEM: SystemId> System<SYSTEM> {
                     );
                 }
             }
+            IPC_BASE..=IPC_END if SYSTEM == WII => {
+                crate::hollywood::ipc::ipc_write(self, phys, 2, raw);
+            }
+            HOLLYWOOD_IRQ_BASE..=HOLLYWOOD_IRQ_END if SYSTEM == WII => {
+                crate::hollywood::irq::irq_write(self, phys, 2, raw);
+            }
+            HW_HOLLYWOOD_BASE..=HW_HOLLYWOOD_END if SYSTEM == WII => {
+                tracing::warn!(
+                    device = "HOLLYWOOD",
+                    addr = format!("{addr:08X}"),
+                    phys_addr = format!("{phys:08X}"),
+                    val = format!("{raw:08X}"),
+                    size = 2,
+                    "Unimplemented MMIO write"
+                );
+                self.mmio.phys_write_u16(phys, val);
+            }
             GX_FIFO_BASE..=GX_FIFO_END => {
                 let wptr = self.pi.fifo_wptr as usize;
                 let bytes = val.to_be_bytes();
@@ -846,19 +918,18 @@ impl<const SYSTEM: SystemId> System<SYSTEM> {
                     self.check_gx_pe_interrupts();
                 }
             }
-            _ => {
-                if (HW_REG_BASE..=HW_REG_END).contains(&phys) {
-                    tracing::warn!(
-                        device = "HW_REG",
-                        addr = format!("{addr:08X}"),
-                        phys_addr = format!("{phys:08X}"),
-                        val = format!("{raw:08X}"),
-                        size = 2,
-                        "Unimplemented MMIO write"
-                    );
-                }
+            HW_REG_BASE..=HW_REG_END => {
+                tracing::warn!(
+                    device = "HW_REG",
+                    addr = format!("{addr:08X}"),
+                    phys_addr = format!("{phys:08X}"),
+                    val = format!("{raw:08X}"),
+                    size = 2,
+                    "Unimplemented MMIO write"
+                );
                 self.mmio.phys_write_u16(phys, val);
             }
+            _ => self.mmio.phys_write_u16(phys, val),
         }
     }
 
@@ -985,6 +1056,23 @@ impl<const SYSTEM: SystemId> System<SYSTEM> {
                     );
                 }
             }
+            IPC_BASE..=IPC_END if SYSTEM == WII => {
+                crate::hollywood::ipc::ipc_write(self, phys, 4, val);
+            }
+            HOLLYWOOD_IRQ_BASE..=HOLLYWOOD_IRQ_END if SYSTEM == WII => {
+                crate::hollywood::irq::irq_write(self, phys, 4, val);
+            }
+            HW_HOLLYWOOD_BASE..=HW_HOLLYWOOD_END if SYSTEM == WII => {
+                tracing::warn!(
+                    device = "HOLLYWOOD",
+                    addr = format!("{addr:08X}"),
+                    phys_addr = format!("{phys:08X}"),
+                    val = format!("{val:08X}"),
+                    size = 4,
+                    "Unimplemented MMIO write"
+                );
+                self.mmio.phys_write_u32(phys, val);
+            }
             GX_FIFO_BASE..=GX_FIFO_END => {
                 let wptr = self.pi.fifo_wptr as usize;
                 let bytes = val.to_be_bytes();
@@ -995,19 +1083,18 @@ impl<const SYSTEM: SystemId> System<SYSTEM> {
                     self.check_gx_pe_interrupts();
                 }
             }
-            _ => {
-                if (HW_REG_BASE..=HW_REG_END).contains(&phys) {
-                    tracing::warn!(
-                        device = "HW_REG",
-                        addr = format!("{addr:08X}"),
-                        phys_addr = format!("{phys:08X}"),
-                        val = format!("{val:08X}"),
-                        size = 4,
-                        "Unimplemented MMIO write"
-                    );
-                }
+            HW_REG_BASE..=HW_REG_END => {
+                tracing::warn!(
+                    device = "HW_REG",
+                    addr = format!("{addr:08X}"),
+                    phys_addr = format!("{phys:08X}"),
+                    val = format!("{val:08X}"),
+                    size = 4,
+                    "Unimplemented MMIO write"
+                );
                 self.mmio.phys_write_u32(phys, val);
             }
+            _ => self.mmio.phys_write_u32(phys, val),
         }
     }
 }

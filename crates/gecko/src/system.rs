@@ -28,7 +28,7 @@ pub struct System<const SYSTEM: SystemId> {
     pub vsync_pending: bool,
     pub gekko: Gekko,
     pub scheduler: Scheduler<SYSTEM>,
-    pub mmio: Mmio,
+    pub mmio: Mmio<SYSTEM>,
     pub vi: VideoInterface,
     pub pe: PixelEngine,
     pub pi: ProcessorInterface,

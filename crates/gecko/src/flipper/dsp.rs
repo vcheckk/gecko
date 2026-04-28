@@ -92,7 +92,7 @@ impl Dsp {
         }
     }
 
-    pub fn process_aram_dma(&mut self, mmio: &mut Mmio) {
+    pub fn process_aram_dma<const SYSTEM: SystemId>(&mut self, mmio: &mut Mmio<SYSTEM>) {
         let ram_addr = (self.aram_dma_mmio_addr.raw() & 0x3FFFFFFF) as usize;
         let aram_addr = self.aram_dma_aram_addr.raw() as usize;
         let count = self.aram_dma_control.count() as usize;
@@ -124,7 +124,7 @@ impl Dsp {
         self.csr = self.csr.with_ar_interrupt(true);
     }
 
-    pub fn process_ucode_upload(&mut self, mmio: &mut Mmio) {
+    pub fn process_ucode_upload<const SYSTEM: SystemId>(&mut self, mmio: &mut Mmio<SYSTEM>) {
         const UCODE_ADDR: usize = 0x8100_0000;
         const UCODE_SIZE: usize = 1024;
         let src = mmio.virt_slice(UCODE_ADDR as u32, UCODE_SIZE);
@@ -140,7 +140,7 @@ impl Dsp {
         self.csr.set_dsp_interrupt(true);
     }
 
-    pub fn process_dsp_dma(&mut self, mmio: &mut Mmio) {
+    pub fn process_dsp_dma<const SYSTEM: SystemId>(&mut self, mmio: &mut Mmio<SYSTEM>) {
         let ram_addr = ((self.dma_ram_addr_hi as u32) << 16) | self.dma_ram_addr_lo as u32;
         let dsp_addr = (self.dma_dsp_addr as usize) * 2; // word address -> byte offset
         let len = self.dma_length as usize;

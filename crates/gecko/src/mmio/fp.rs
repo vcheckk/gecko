@@ -1,4 +1,3 @@
-use crate::mmio::Mmio;
 use crate::mmio::constants::RAM_END;
 use crate::system::{System, SystemId};
 
@@ -6,7 +5,7 @@ impl<const SYSTEM: SystemId> System<SYSTEM> {
     // Load a 64-bit double from memory
     #[inline]
     pub fn read_f64(&mut self, addr: u32) -> f64 {
-        let phys = Mmio::virt_to_phys(addr);
+        let phys = crate::mmio::virt_to_phys(addr);
         if phys <= RAM_END - 7 {
             return f64::from_bits(self.mmio.ram_read_u64(phys));
         }
@@ -19,7 +18,7 @@ impl<const SYSTEM: SystemId> System<SYSTEM> {
     /// Store a 64-bit double to memory
     #[inline]
     pub fn write_f64(&mut self, addr: u32, val: f64) {
-        let phys = Mmio::virt_to_phys(addr);
+        let phys = crate::mmio::virt_to_phys(addr);
         let bits = val.to_bits();
         if phys <= RAM_END - 7 {
             self.mmio.ram_write_u64(phys, bits);

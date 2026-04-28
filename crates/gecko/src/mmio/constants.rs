@@ -53,3 +53,20 @@ pub const IPL_END: u32 = 0x3FFF_FFFF;
 pub const LCACHE_BASE: u32 = 0xE000_0000;
 pub const LCACHE_END: u32 = 0xE000_3FFF;
 pub const LCACHE_SIZE: usize = 0x4000;
+
+// [Wii] MEM2 64MB at virt 0x9000_0000 / phys 0x1000_0000
+pub const MEM2_BASE: u32 = 0x1000_0000;
+pub const MEM2_END: u32 = 0x13FF_FFFF;
+pub const MEM2_SIZE: usize = 0x0400_0000;
+
+// [Wii] Hollywood register space
+pub const HW_HOLLYWOOD_BASE: u32 = 0x0D00_0000;
+pub const HW_HOLLYWOOD_END: u32 = 0x0D80_FFFF;
+
+// [Wii] IPC registers (HW_IPC_PPCMSG / PPCCTRL / ARMMSG)
+pub const IPC_BASE: u32 = 0x0D00_0000;
+pub const IPC_END: u32 = 0x0D00_000F;
+
+// [Wii] Hollywood interrupt controller
+pub const HOLLYWOOD_IRQ_BASE: u32 = 0x0D00_0030;
+pub const HOLLYWOOD_IRQ_END: u32 = 0x0D00_003F;

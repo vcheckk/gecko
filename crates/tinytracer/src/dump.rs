@@ -71,7 +71,7 @@ pub fn registers(curr: &CpuSnapshot, prev: &CpuSnapshot) {
     println!();
 }
 
-pub fn memory(mmio: &gecko::mmio::Mmio, addr: u32) {
+pub fn memory<const SYSTEM: gecko::SystemId>(mmio: &gecko::mmio::Mmio<SYSTEM>, addr: u32) {
     let aligned_addr = addr & !0xF;
     let start = aligned_addr.wrapping_sub(0x40);
     let data = mmio.virt_slice(start, 0x80);

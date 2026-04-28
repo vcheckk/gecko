@@ -4,17 +4,19 @@ pub mod fp;
 pub mod macros;
 pub mod traits;
 
+use crate::system::{SystemId, WII};
 use constants::*;
 
-pub struct Mmio {
+pub struct Mmio<const SYSTEM: SystemId> {
     pub ram: Vec<u8>,
     pub efb: Vec<u8>,
     pub hwr: Vec<u8>,
     pub ipl: Vec<u8>,
     pub lcache: Vec<u8>,
+    pub mem2: Vec<u8>,
 }
 
-impl Mmio {
+impl<const SYSTEM: SystemId> Mmio<SYSTEM> {
     pub fn new() -> Self {
         Mmio {
             ram: vec![0; RAM_SIZE],
@@ -22,6 +24,7 @@ impl Mmio {
             hwr: vec![0; HW_REG_SIZE],
             ipl: vec![0; 0],
             lcache: vec![0; LCACHE_SIZE],
+            mem2: if SYSTEM == WII { vec![0; MEM2_SIZE] } else { Vec::new() },
         }
     }
 
@@ -35,6 +38,7 @@ impl Mmio {
             HW_REG_BASE..=HW_REG_END => (&self.hwr, (phys - HW_REG_BASE) as usize),
             IPL_BASE..=IPL_END => (&self.ipl, (phys - IPL_BASE) as usize),
             LCACHE_BASE..=LCACHE_END => (&self.lcache, (phys - LCACHE_BASE) as usize),
+            MEM2_BASE..=MEM2_END if SYSTEM == WII => (&self.mem2, (phys - MEM2_BASE) as usize),
             _ => {
                 tracing::error!(phys_addr = format!("{:08X}", phys), "unmapped physical read");
                 (&self.ram, 0)
@@ -53,6 +57,7 @@ impl Mmio {
             HW_REG_BASE..=HW_REG_END => (&mut self.hwr, (phys - HW_REG_BASE) as usize),
             IPL_BASE..=IPL_END => (&mut self.ipl, (phys - IPL_BASE) as usize),
             LCACHE_BASE..=LCACHE_END => (&mut self.lcache, (phys - LCACHE_BASE) as usize),
+            MEM2_BASE..=MEM2_END if SYSTEM == WII => (&mut self.mem2, (phys - MEM2_BASE) as usize),
             _ => {
                 tracing::error!(phys_addr = format!("{:08X}", phys), "unmapped physical write");
                 (&mut self.ram, 0)
@@ -74,7 +79,7 @@ impl Mmio {
     #[inline(always)]
     pub fn phys_read_u16(&self, addr: u32) -> u16 {
         let (slice, offset) = self.resolve(addr);
-        let value = unsafe { Self::read_be_u16_unchecked(slice.as_ptr().add(offset)) };
+        let value = unsafe { read_be_u16_unchecked(slice.as_ptr().add(offset)) };
         tracing::trace!(
             phys_addr = format!("{:08X}", addr),
             value = format!("{:04X}", value),
@@ -86,7 +91,7 @@ impl Mmio {
     #[inline(always)]
     pub fn phys_read_u32(&self, addr: u32) -> u32 {
         let (slice, offset) = self.resolve(addr);
-        let value = unsafe { Self::read_be_u32_unchecked(slice.as_ptr().add(offset)) };
+        let value = unsafe { read_be_u32_unchecked(slice.as_ptr().add(offset)) };
         tracing::trace!(
             phys_addr = format!("{:08X}", addr),
             value = format!("{:08X}", value),
@@ -114,7 +119,7 @@ impl Mmio {
             value = format!("{:04X}", value),
             "write_u16"
         );
-        unsafe { Self::write_be_u16_unchecked(slice.as_mut_ptr().add(offset), value) };
+        unsafe { write_be_u16_unchecked(slice.as_mut_ptr().add(offset), value) };
     }
 
     #[inline(always)]
@@ -125,37 +130,37 @@ impl Mmio {
             value = format!("{:08X}", value),
             "write_u32"
         );
-        unsafe { Self::write_be_u32_unchecked(slice.as_mut_ptr().add(offset), value) };
+        unsafe { write_be_u32_unchecked(slice.as_mut_ptr().add(offset), value) };
     }
 
     #[inline(always)]
     pub fn virt_read_u8(&self, addr: u32) -> u8 {
-        self.phys_read_u8(Self::virt_to_phys(addr))
+        self.phys_read_u8(virt_to_phys(addr))
     }
 
     #[inline(always)]
     pub fn virt_read_u16(&self, addr: u32) -> u16 {
-        self.phys_read_u16(Self::virt_to_phys(addr))
+        self.phys_read_u16(virt_to_phys(addr))
     }
 
     #[inline(always)]
     pub fn virt_read_u32(&self, addr: u32) -> u32 {
-        self.phys_read_u32(Self::virt_to_phys(addr))
+        self.phys_read_u32(virt_to_phys(addr))
     }
 
     #[inline(always)]
     pub fn virt_write_u8(&mut self, addr: u32, value: u8) {
-        self.phys_write_u8(Self::virt_to_phys(addr), value);
+        self.phys_write_u8(virt_to_phys(addr), value);
     }
 
     #[inline(always)]
     pub fn virt_write_u16(&mut self, addr: u32, value: u16) {
-        self.phys_write_u16(Self::virt_to_phys(addr), value);
+        self.phys_write_u16(virt_to_phys(addr), value);
     }
 
     #[inline(always)]
     pub fn virt_write_u32(&mut self, addr: u32, value: u32) {
-        self.phys_write_u32(Self::virt_to_phys(addr), value);
+        self.phys_write_u32(virt_to_phys(addr), value);
     }
 
     /// Return a slice of physical memory starting at `addr` with length `len`
@@ -176,12 +181,12 @@ impl Mmio {
     /// This is just a thin wrapper around `phys_slice` that applies virtual-to-physical translation
     #[inline(always)]
     pub fn virt_slice(&self, addr: u32, len: usize) -> &[u8] {
-        self.phys_slice(Self::virt_to_phys(addr), len)
+        self.phys_slice(virt_to_phys(addr), len)
     }
 
     #[inline(always)]
     pub fn virt_slice_mut(&mut self, addr: u32, len: usize) -> &mut [u8] {
-        self.phys_slice_mut(Self::virt_to_phys(addr), len)
+        self.phys_slice_mut(virt_to_phys(addr), len)
     }
 
     /// Read a typed MMIO register from its physical address
@@ -206,12 +211,6 @@ impl Mmio {
             4 => self.phys_write_u32(T::ADDR, raw),
             _ => panic!("unsupported register size {}", T::SIZE),
         }
-    }
-
-    // Simple virtual to physical translation that ignores caching and other MMIO features
-    #[inline(always)]
-    pub const fn virt_to_phys(addr: u32) -> u32 {
-        addr & 0x3FFFFFFF
     }
 
     /// Process a locked cache DMA transfer triggered by writing to SPR DMAL (923).
@@ -242,7 +241,7 @@ impl Mmio {
 
     #[inline(always)]
     pub fn fetch_instruction(&self, addr: u32) -> u32 {
-        let phys = Self::virt_to_phys(addr);
+        let phys = virt_to_phys(addr);
         if phys <= RAM_END - 3 {
             self.ram_read_u32(phys)
         } else {
@@ -264,7 +263,7 @@ impl Mmio {
     #[inline(always)]
     pub fn ram_read_u16(&self, phys: u32) -> u16 {
         debug_assert!(phys <= RAM_END - 1);
-        let value = unsafe { Self::read_be_u16_unchecked(self.ram.as_ptr().add(phys as usize)) };
+        let value = unsafe { read_be_u16_unchecked(self.ram.as_ptr().add(phys as usize)) };
         tracing::trace!(
             phys_addr = format!("{:08X}", phys),
             value = format!("{:04X}", value),
@@ -276,7 +275,7 @@ impl Mmio {
     #[inline(always)]
     pub fn ram_read_u32(&self, phys: u32) -> u32 {
         debug_assert!(phys <= RAM_END - 3);
-        let value = unsafe { Self::read_be_u32_unchecked(self.ram.as_ptr().add(phys as usize)) };
+        let value = unsafe { read_be_u32_unchecked(self.ram.as_ptr().add(phys as usize)) };
         tracing::trace!(
             phys_addr = format!("{:08X}", phys),
             value = format!("{:08X}", value),
@@ -288,7 +287,7 @@ impl Mmio {
     #[inline(always)]
     pub fn ram_read_u64(&self, phys: u32) -> u64 {
         debug_assert!(phys <= RAM_END - 7);
-        unsafe { Self::read_be_u64_unchecked(self.ram.as_ptr().add(phys as usize)) }
+        unsafe { read_be_u64_unchecked(self.ram.as_ptr().add(phys as usize)) }
     }
 
     #[inline(always)]
@@ -309,7 +308,7 @@ impl Mmio {
             value = format!("{:04X}", value),
             "write_u16"
         );
-        unsafe { Self::write_be_u16_unchecked(self.ram.as_mut_ptr().add(phys as usize), value) };
+        unsafe { write_be_u16_unchecked(self.ram.as_mut_ptr().add(phys as usize), value) };
     }
 
     #[inline(always)]
@@ -320,42 +319,47 @@ impl Mmio {
             value = format!("{:08X}", value),
             "write_u32"
         );
-        unsafe { Self::write_be_u32_unchecked(self.ram.as_mut_ptr().add(phys as usize), value) };
+        unsafe { write_be_u32_unchecked(self.ram.as_mut_ptr().add(phys as usize), value) };
     }
 
     #[inline(always)]
     pub fn ram_write_u64(&mut self, phys: u32, value: u64) {
         debug_assert!(phys <= RAM_END - 7);
-        unsafe { Self::write_be_u64_unchecked(self.ram.as_mut_ptr().add(phys as usize), value) };
+        unsafe { write_be_u64_unchecked(self.ram.as_mut_ptr().add(phys as usize), value) };
     }
+}
 
-    #[inline(always)]
-    unsafe fn read_be_u16_unchecked(ptr: *const u8) -> u16 {
-        u16::from_be(unsafe { std::ptr::read_unaligned(ptr.cast::<u16>()) })
-    }
+#[inline(always)]
+pub const fn virt_to_phys(addr: u32) -> u32 {
+    addr & 0x3FFFFFFF
+}
 
-    #[inline(always)]
-    unsafe fn read_be_u32_unchecked(ptr: *const u8) -> u32 {
-        u32::from_be(unsafe { std::ptr::read_unaligned(ptr.cast::<u32>()) })
-    }
+#[inline(always)]
+unsafe fn read_be_u16_unchecked(ptr: *const u8) -> u16 {
+    u16::from_be(unsafe { std::ptr::read_unaligned(ptr.cast::<u16>()) })
+}
 
-    #[inline(always)]
-    unsafe fn read_be_u64_unchecked(ptr: *const u8) -> u64 {
-        u64::from_be(unsafe { std::ptr::read_unaligned(ptr.cast::<u64>()) })
-    }
+#[inline(always)]
+unsafe fn read_be_u32_unchecked(ptr: *const u8) -> u32 {
+    u32::from_be(unsafe { std::ptr::read_unaligned(ptr.cast::<u32>()) })
+}
 
-    #[inline(always)]
-    unsafe fn write_be_u16_unchecked(ptr: *mut u8, value: u16) {
-        unsafe { std::ptr::write_unaligned(ptr.cast::<u16>(), value.to_be()) };
-    }
+#[inline(always)]
+unsafe fn read_be_u64_unchecked(ptr: *const u8) -> u64 {
+    u64::from_be(unsafe { std::ptr::read_unaligned(ptr.cast::<u64>()) })
+}
 
-    #[inline(always)]
-    unsafe fn write_be_u32_unchecked(ptr: *mut u8, value: u32) {
-        unsafe { std::ptr::write_unaligned(ptr.cast::<u32>(), value.to_be()) };
-    }
+#[inline(always)]
+unsafe fn write_be_u16_unchecked(ptr: *mut u8, value: u16) {
+    unsafe { std::ptr::write_unaligned(ptr.cast::<u16>(), value.to_be()) };
+}
 
-    #[inline(always)]
-    unsafe fn write_be_u64_unchecked(ptr: *mut u8, value: u64) {
-        unsafe { std::ptr::write_unaligned(ptr.cast::<u64>(), value.to_be()) };
-    }
+#[inline(always)]
+unsafe fn write_be_u32_unchecked(ptr: *mut u8, value: u32) {
+    unsafe { std::ptr::write_unaligned(ptr.cast::<u32>(), value.to_be()) };
+}
+
+#[inline(always)]
+unsafe fn write_be_u64_unchecked(ptr: *mut u8, value: u64) {
+    unsafe { std::ptr::write_unaligned(ptr.cast::<u64>(), value.to_be()) };
 }

@@ -4,6 +4,7 @@ use super::regs::{self, *};
 use super::{GraphicsProcessor, draw};
 use crate::host::{DrawData, DrawVertex, GxAction, LightData, RenderSink};
 use crate::mmio::Mmio;
+use crate::system::SystemId;
 use std::io::{Cursor, Read};
 
 /// Parsed vertex format descriptor from CP/VAT registers.
@@ -40,7 +41,13 @@ struct VertexFormat {
 }
 
 impl GraphicsProcessor {
-    pub fn create_draw_call(&mut self, mmio: &mut Mmio, renderer: &mut dyn RenderSink, cmd: u8, data: Vec<u8>) {
+    pub fn create_draw_call<const SYSTEM: SystemId>(
+        &mut self,
+        mmio: &mut Mmio<SYSTEM>,
+        renderer: &mut dyn RenderSink,
+        cmd: u8,
+        data: Vec<u8>,
+    ) {
         let Some(primitive) = draw::Primitive::from_cmd(cmd) else {
             tracing::error!(cmd, "goofy draw command");
             return;

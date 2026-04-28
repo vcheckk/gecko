@@ -275,7 +275,7 @@ impl LuaHost {
             Ok(())
         });
         methods.add_method("virt_to_phys", |_, _this, addr: u32| {
-            Ok(gecko::mmio::Mmio::virt_to_phys(addr))
+            Ok(gecko::mmio::virt_to_phys(addr))
         });
     }
 

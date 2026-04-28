@@ -1,4 +1,5 @@
 use egui::{Color32, Context, Grid, RichText, ScrollArea};
+use gecko::SystemId;
 use gecko::gekko::Gekko;
 use gecko::mmio::Mmio;
 use image::symbols::SymbolTable;
@@ -6,11 +7,11 @@ use image::symbols::SymbolTable;
 use super::token_color;
 use crate::Breakpoint;
 
-pub fn show_cpu(
+pub fn show_cpu<const SYSTEM: SystemId>(
     ctx: &Context,
     open: &mut bool,
     cpu: &Gekko,
-    mmio: &Mmio,
+    mmio: &Mmio<SYSTEM>,
     symbols: Option<&SymbolTable>,
     breakpoints: &[Breakpoint],
 ) {

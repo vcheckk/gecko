@@ -52,7 +52,7 @@ macro_rules! mmio_device_dispatch {
 macro_rules! mmio_reg {
     ($name:ident : $raw:tt @ $addr:tt) => {
         impl $crate::mmio::traits::MmioRegister for $name {
-            const ADDR: u32 = $crate::mmio::Mmio::virt_to_phys($addr);
+            const ADDR: u32 = $crate::mmio::virt_to_phys($addr);
             const SIZE: usize = ::core::mem::size_of::<$raw>();
             #[inline(always)]
             fn from_raw(raw: u32) -> Self {

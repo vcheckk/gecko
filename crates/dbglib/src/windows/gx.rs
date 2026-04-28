@@ -1,4 +1,5 @@
 use egui::{Context, Grid, ScrollArea};
+use gecko::SystemId;
 use gecko::flipper::gx::GraphicsProcessor;
 use gecko::flipper::gx::draw::{TextureDescriptor, TlutRef};
 use gecko::mmio::Mmio;
@@ -21,11 +22,11 @@ fn texture_preview(ui: &mut egui::Ui, tex: &TextureDescriptor, ram: &[u8], palet
     ui.label(format!("Mag: {:?}  Min: {:?}", tex.mag_filter, tex.min_filter));
 }
 
-pub fn show_gx(
+pub fn show_gx<const SYSTEM: SystemId>(
     ctx: &Context,
     open: &mut bool,
     gx: &GraphicsProcessor,
-    mmio: &Mmio,
+    mmio: &Mmio<SYSTEM>,
     invalidate_caches: &mut bool,
     dump_textures: &mut bool,
 ) {
