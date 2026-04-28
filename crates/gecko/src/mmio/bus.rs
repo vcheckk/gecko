@@ -82,6 +82,11 @@ impl<const SYSTEM: SystemId> System<SYSTEM> {
     /// Falls back to simple masking if no BAT matches.
     #[inline(always)]
     fn translate_addr(&self, ea: u32) -> u32 {
+        Self::reroute_hollywood_mirrors(self.bat_translate(ea))
+    }
+
+    #[inline(always)]
+    fn bat_translate(&self, ea: u32) -> u32 {
         // Fast path: 0x80/0xC0 with simple mask covers most accesses
         let top = ea >> 28;
         if top == 0x8 || top == 0xC {
@@ -127,6 +132,18 @@ impl<const SYSTEM: SystemId> System<SYSTEM> {
 
         // No BAT match, fall back to simple mask
         ea & 0x3FFFFFFF
+    }
+
+    /// Holly wood mirrors DI/SI/EXI/AI at 0x0D006000..0x0D006FFF
+    /// (as per Flipper at 0x0C006xxx).
+    /// Simply route these back.
+    #[inline(always)]
+    fn reroute_hollywood_mirrors(phys: u32) -> u32 {
+        if SYSTEM == WII && matches!(phys, 0x0D00_6000..=0x0D00_6FFF) {
+            phys - 0x0100_0000
+        } else {
+            phys
+        }
     }
 
     // Read fast path for RAM access
