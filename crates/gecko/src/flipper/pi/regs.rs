@@ -48,6 +48,9 @@ pub struct InterruptCause {
     #[bits(13, alias = "hsp")]
     pub highspeed_port: bool,
 
+    #[bits(14, alias = "iop")]
+    pub hollywood: bool,
+
     #[bits(16)]
     pub rswst: bool,
 }
@@ -120,6 +123,9 @@ pub struct InterruptMask {
 
     #[bits(13, alias = "hsp")]
     pub highspeed_port: bool,
+
+    #[bits(14, alias = "iop")]
+    pub hollywood: bool,
 }
 crate::mmio_reg!(InterruptMask: u32 @ 0xCC003004);
 crate::mmio_default_access!(InterruptMask => System.pi.intmr);

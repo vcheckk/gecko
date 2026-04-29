@@ -29,6 +29,7 @@ pub enum InterruptFlag {
     Cp = 1 << 11,
     Debug = 1 << 12,
     Hsp = 1 << 13,
+    Hw = 1 << 14,
 }
 
 impl ProcessorInterface {

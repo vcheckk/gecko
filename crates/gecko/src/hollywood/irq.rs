@@ -19,9 +19,9 @@ impl Irq {
 pub fn route_to_pi<const SYSTEM: SystemId>(sys: &mut System<SYSTEM>) {
     let firing = (sys.hollywood.irq.cause.raw() & sys.hollywood.irq.mask.raw()) != 0;
     if firing {
-        sys.pi.assert_interrupt(crate::flipper::pi::InterruptFlag::Hsp);
+        sys.pi.assert_interrupt(crate::flipper::pi::InterruptFlag::Hw);
     } else {
-        sys.pi.clear_interrupt(crate::flipper::pi::InterruptFlag::Hsp);
+        sys.pi.clear_interrupt(crate::flipper::pi::InterruptFlag::Hw);
     }
 }
 
