@@ -61,3 +61,6 @@ Gecko is being developed alongside other amazing emulators that shaped how Gecko
 
 - [lazuli](https://github.com/vxpm/lazuli) authored by vxpm
 - [solstice](https://codeberg.org/hazelwiss/solstice) authored by hazelwiss
+- [beanwii](https://github.com/zaydlang/beanwii) authored by zayd
+
+Besides these "sister projects", [Dolphin](https://github.com/dolphin-emu/dolphin) has also been a major contributor and the main reference for when things got tricky ;)

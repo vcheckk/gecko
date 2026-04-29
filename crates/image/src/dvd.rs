@@ -9,6 +9,13 @@ pub const DVD_HEADER_OFFSET: usize = 0x00000000;
 pub const DVD_HEADER_INFO_OFFSET: usize = DVD_HEADER_OFFSET + DVD_HEADER_SIZE;
 pub const DVD_APPLOADER_OFFSET: usize = DVD_HEADER_INFO_OFFSET + DVD_HEADER_INFO_SIZE;
 
+/// Offset of the TMD size field within a Wii partition header. The next four
+/// bytes (at +0x2A8) are the TMD body offset >> 2.
+pub const PARTITION_TMD_SIZE_OFFSET: usize = 0x2A4;
+
+/// Offset of the `ios_title_id` field within the TMD body.
+pub const TMD_IOS_TITLE_ID_OFFSET: usize = 0x184;
+
 #[repr(C, packed)]
 #[derive(FromBytes, IntoBytes, Immutable, KnownLayout, Debug, Clone, Copy)]
 pub struct Header {

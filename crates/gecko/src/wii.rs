@@ -1,5 +1,8 @@
+mod ios;
+
 use crate::scheduler::Scheduler;
 use crate::system::{System, WII};
+use image::Executable;
 use image::dvd::DVD_APPLOADER_OFFSET;
 
 pub type Wii = System<{ WII }>;
@@ -32,6 +35,16 @@ const APPLOADER_RETURN_TRAP: u32 = 0x6900_0000;
 impl Wii {
     pub fn new(entrypoint: u32) -> Self {
         Self::with_scheduler(entrypoint, Scheduler::new_wii())
+    }
+
+    pub fn with_image(exe: &impl Executable) -> Self {
+        let mut emu = Self::new(exe.entry_point());
+        Self::setup_bats(&mut emu);
+        Self::setup_msr_hid(&mut emu);
+        // No disc / TMD available: default to IOS56, TODO
+        Self::setup_low_memory_common(&mut emu, ios::ios56());
+        emu.load_image(exe);
+        emu
     }
 
     pub fn apploader_hle(dvd: Box<dyn image::Dvd>) -> ApploaderHleBuilder {
@@ -125,34 +138,18 @@ impl Wii {
     }
 
     // Cross referenced with beanwii and Dolphin!!
-    fn setup_low_memory(emu: &mut Wii, dvd: &dyn image::Dvd) {
-        let header = dvd.header();
-        let game_id = u32::from_be_bytes(header.game_code);
-        let maker_code = u16::from_be_bytes(header.maker_code);
-
-        // Disc header copies (from boot1).
-        emu.mmio.phys_write_u32(0x0000_0000, game_id);
-        emu.mmio.phys_write_u16(0x0000_0004, maker_code);
-        emu.mmio.phys_write_u8(0x0000_0006, header.disk_id);
-        emu.mmio.phys_write_u8(0x0000_0007, header.version);
-        emu.mmio.phys_write_u8(0x0000_0008, header.audio_streaming);
-        emu.mmio.phys_write_u8(0x0000_0009, header.streaming_buffer_size);
-
+    fn setup_low_memory_common(emu: &mut Wii, imv: &ios::MemoryValues) {
         // Ripped from the apploader.
         emu.mmio
             .phys_write_u32(0x0000_0018, u32::from_be_bytes(image::WII_MAGIC));
 
         // MEM1 size, board model.
-        emu.mmio.phys_write_u32(0x0000_0028, 0x0180_0000);
+        emu.mmio.phys_write_u32(0x0000_0028, imv.mem1_physical_size);
         emu.mmio.phys_write_u32(0x0000_002C, 0x0000_0023);
 
         // Exception handlers and IRQ masks.
         emu.mmio.phys_write_u32(0x0000_0048, 0x8134_0000);
         emu.mmio.phys_write_u32(0x0000_00C4, 0xFFFF_FF00);
-
-        // OSVideoMode: 0 = NTSC, 1 = PAL/MPAL.
-        let video_mode: u32 = if header.is_ntsc() { 0 } else { 1 };
-        emu.mmio.phys_write_u32(0x0000_00CC, video_mode);
 
         // lol.
         emu.mmio.phys_write_u32(0x0000_00E4, 0x8008_F7B8);
@@ -167,43 +164,89 @@ impl Wii {
         // ???
         emu.mmio.phys_write_u16(0x0000_30E6, 0x8201);
 
-        // MEM1 arena end. Conditionally overwritten by the apploader when the
-        // DOL entry is >= 0x80004000; this is the fallback.
-        emu.mmio.phys_write_u32(0x0000_3110, 0x8180_0000);
+        // MEM1 layout (kernel writes).
+        emu.mmio.phys_write_u32(0x0000_3100, imv.mem1_physical_size);
+        emu.mmio.phys_write_u32(0x0000_3104, imv.mem1_simulated_size);
+        emu.mmio.phys_write_u32(0x0000_3108, imv.mem1_end);
+        emu.mmio.phys_write_u32(0x0000_310C, imv.mem1_arena_begin);
+        // 0x3110 is conditionally overwritten by the apploader when the DOL
+        // entry is >= 0x80004000; this is the fallback.
+        emu.mmio.phys_write_u32(0x0000_3110, imv.mem1_arena_end);
 
-        // MEM2 sizing + arena (ref Dolphin).
-        emu.mmio.phys_write_u32(0x0000_3118, 0x0400_0000);
-        emu.mmio.phys_write_u32(0x0000_311C, 0x0400_0000);
-        emu.mmio.phys_write_u32(0x0000_3120, 0x9360_0000);
-        emu.mmio.phys_write_u32(0x0000_3124, 0x9000_0800);
-        emu.mmio.phys_write_u32(0x0000_3128, 0x935E_0000);
+        // MEM2 layout.
+        emu.mmio.phys_write_u32(0x0000_3118, imv.mem2_physical_size);
+        emu.mmio.phys_write_u32(0x0000_311C, imv.mem2_simulated_size);
+        emu.mmio.phys_write_u32(0x0000_3120, imv.mem2_end);
+        emu.mmio.phys_write_u32(0x0000_3124, imv.mem2_arena_begin);
+        emu.mmio.phys_write_u32(0x0000_3128, imv.mem2_arena_end);
 
         // IPC buffer (ARM <-> PPC shared region).
-        emu.mmio.phys_write_u32(0x0000_3130, 0x935E_0000);
-        emu.mmio.phys_write_u32(0x0000_3134, 0x9360_0000);
+        emu.mmio.phys_write_u32(0x0000_3130, imv.ipc_buffer_begin);
+        emu.mmio.phys_write_u32(0x0000_3134, imv.ipc_buffer_end);
 
-        // Hollywood revision (0x11 = retail Wii).
-        emu.mmio.phys_write_u32(0x0000_3138, 0x0000_0011);
+        // Hollywood revision.
+        emu.mmio.phys_write_u32(0x0000_3138, imv.hollywood_revision);
 
-        // IOS56.
-        emu.mmio.phys_write_u32(0x0000_3140, 0x0038_161E);
-        emu.mmio.phys_write_u32(0x0000_3144, 0x0003_0310);
-        emu.mmio.phys_write_u32(0x0000_3148, 0x9360_0000);
-        emu.mmio.phys_write_u32(0x0000_314C, 0x9362_0000);
+        // IOS version + date + reserved heap.
+        emu.mmio.phys_write_u32(0x0000_3140, imv.ios_version);
+        emu.mmio.phys_write_u32(0x0000_3144, imv.ios_date);
+        emu.mmio.phys_write_u32(0x0000_3148, imv.ios_reserved_begin);
+        emu.mmio.phys_write_u32(0x0000_314C, imv.ios_reserved_end);
 
         // GDDR vendor code.
-        emu.mmio.phys_write_u32(0x0000_3158, 0x0000_FF16);
+        emu.mmio.phys_write_u32(0x0000_3158, imv.ram_vendor);
 
         // Boot flag, devkit boot version.
         emu.mmio.phys_write_u8(0x0000_315C, 0x80);
         emu.mmio.phys_write_u16(0x0000_315E, 0x0113);
 
-        // Game ID dup, app type.
-        emu.mmio.phys_write_u32(0x0000_3180, game_id);
+        // System menu sync.
+        emu.mmio.phys_write_u32(0x0000_3160, imv.sysmenu_sync);
+
+        // App type.
         emu.mmio.phys_write_u8(0x0000_3184, 0x80);
 
         // Min IOS version requirement.
         emu.mmio.phys_write_u32(0x0000_3188, 0x0035_1011);
+    }
+
+    fn setup_low_memory(emu: &mut Wii, dvd: &dyn image::Dvd) {
+        let header = dvd.header();
+        let game_id = u32::from_be_bytes(header.game_code);
+        let maker_code = u16::from_be_bytes(header.maker_code);
+
+        // Disc header copies (from boot1).
+        emu.mmio.phys_write_u32(0x0000_0000, game_id);
+        emu.mmio.phys_write_u16(0x0000_0004, maker_code);
+        emu.mmio.phys_write_u8(0x0000_0006, header.disk_id);
+        emu.mmio.phys_write_u8(0x0000_0007, header.version);
+        emu.mmio.phys_write_u8(0x0000_0008, header.audio_streaming);
+        emu.mmio.phys_write_u8(0x0000_0009, header.streaming_buffer_size);
+
+        let ios_title_id = dvd.tmd_ios_title_id();
+        let ios_major = ios_title_id as u16;
+        let imv = ios::for_ios(ios_major).unwrap_or_else(|| {
+            tracing::warn!(
+                ios = ios_major,
+                "no MemoryValues row for required IOS, falling back to IOS56"
+            );
+            ios::ios56()
+        });
+        tracing::info!(
+            ios = ios_major,
+            ios_version = format!("{:08X}", imv.ios_version),
+            mem2_end = format!("{:08X}", imv.mem2_end),
+            "Wii IOS lookup"
+        );
+
+        Self::setup_low_memory_common(emu, imv);
+
+        // OSVideoMode: 0 = NTSC, 1 = PAL/MPAL.
+        let video_mode: u32 = if header.is_ntsc() { 0 } else { 1 };
+        emu.mmio.phys_write_u32(0x0000_00CC, video_mode);
+
+        // Game ID dup.
+        emu.mmio.phys_write_u32(0x0000_3180, game_id);
 
         // Data partition magic + offset (Sonic Colors / NSMBW read these).
         emu.mmio.phys_write_u32(0x0000_3194, 0x8000_0000);

@@ -27,6 +27,28 @@ pub trait Dvd: Send {
     fn apploader(&self) -> &Apploader;
     fn read_disc_into(&self, offset: usize, buf: &mut [u8]);
     fn data_partition_offset(&self) -> u64;
+
+    fn read_raw_disc(&self, offset: usize, buf: &mut [u8]);
+
+    fn tmd_ios_title_id(&self) -> u64 {
+        assert!(
+            self.header().is_wii(),
+            "TMD IOS title ID is only applicable to Wii discs"
+        );
+
+        let partition_offset = self.data_partition_offset() as usize;
+
+        // Partition header layout: ticket at +0, TMD descriptor at +0x2A4.
+        // We only need the TMD offset field (>>2).
+        let mut tmd_descriptor = [0u8; 8];
+        self.read_raw_disc(partition_offset + dvd::PARTITION_TMD_SIZE_OFFSET, &mut tmd_descriptor);
+        let tmd_offset_field = u32::from_be_bytes(tmd_descriptor[4..8].try_into().unwrap());
+        let tmd_body = partition_offset + ((tmd_offset_field as usize) << 2);
+
+        let mut ios_title_id = [0u8; 8];
+        self.read_raw_disc(tmd_body + dvd::TMD_IOS_TITLE_ID_OFFSET, &mut ios_title_id);
+        u64::from_be_bytes(ios_title_id)
+    }
 }
 
 impl<T: Dvd + ?Sized> Dvd for Box<T> {
@@ -44,6 +66,14 @@ impl<T: Dvd + ?Sized> Dvd for Box<T> {
 
     fn data_partition_offset(&self) -> u64 {
         (**self).data_partition_offset()
+    }
+
+    fn read_raw_disc(&self, offset: usize, buf: &mut [u8]) {
+        (**self).read_raw_disc(offset, buf)
+    }
+
+    fn tmd_ios_title_id(&self) -> u64 {
+        (**self).tmd_ios_title_id()
     }
 }
 

@@ -766,6 +766,24 @@ impl crate::Dvd for Rvz {
             None => 0,
         }
     }
+
+    fn read_raw_disc(&self, offset: usize, buf: &mut [u8]) {
+        assert!(
+            (offset as u64) + (buf.len() as u64) <= self.iso_size,
+            "read past end of disc image"
+        );
+
+        self::read_into(
+            &self.file_data,
+            &self.disc_header,
+            self.chunk_size,
+            self.compression,
+            &self.raw_data,
+            &self.groups,
+            offset as u64,
+            buf,
+        );
+    }
 }
 
 #[inline(always)]

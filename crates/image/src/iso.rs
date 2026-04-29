@@ -53,4 +53,8 @@ impl crate::Dvd for Iso {
     fn data_partition_offset(&self) -> u64 {
         if self.header.is_wii() { 0xF80_0000 } else { 0 }
     }
+
+    fn read_raw_disc(&self, offset: usize, buf: &mut [u8]) {
+        buf.copy_from_slice(&self.data[offset..offset + buf.len()]);
+    }
 }

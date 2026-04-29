@@ -15,9 +15,13 @@ use winit::keyboard::KeyCode;
 #[derive(Parser)]
 #[command(about = "GameCube/Wii emulator")]
 struct Args {
-    /// Path to the DOL file (GameCube homebrew)
+    /// Path to the DOL file (GameCube homebrew by default)
     #[arg(long)]
     dol: Option<String>,
+
+    /// Boot the DOL as a Wii executable instead of GameCube
+    #[arg(long)]
+    wii: bool,
 
     /// Path to an IPL file (boot the real GameCube IPL)
     #[arg(long)]
@@ -69,13 +73,20 @@ fn main() {
         .init();
 
     // Boot dispatch:
-    //   --dol           : GameCube homebrew (with_image)
+    //   --dol           : GameCube homebrew (with_image), or Wii if --wii
     //   --ipl [+ --dvd] : GameCube real IPL boot (with_ipl)
     //   --dvd <path>    : autodetect Wii vs GC, HLE boot via apploader
     if let Some(ref dol) = args.dol {
-        let mut emulator = GameCube::with_image(&Dol::parse(std::fs::read(dol).expect("failed to read DOL")));
-        configure(&mut emulator, &args);
-        run(emulator, present_mode);
+        let dol = Dol::parse(std::fs::read(dol).expect("failed to read DOL"));
+        if args.wii {
+            let mut emulator = Wii::with_image(&dol);
+            configure(&mut emulator, &args);
+            run(emulator, present_mode);
+        } else {
+            let mut emulator = GameCube::with_image(&dol);
+            configure(&mut emulator, &args);
+            run(emulator, present_mode);
+        }
     } else if let Some(ref ipl_path) = args.ipl {
         let ipl_data = std::fs::read(ipl_path).expect("failed to read IPL");
         let mut emulator = GameCube::with_ipl(&ipl_data, args.skip_ipl);

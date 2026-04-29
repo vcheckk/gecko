@@ -207,9 +207,13 @@ impl ApplicationHandler for App {
 #[derive(Parser)]
 #[command(about = "GameCube/Wii debugger")]
 struct Args {
-    /// Path to the DOL file (GameCube homebrew)
+    /// Path to the DOL file (GameCube homebrew by default)
     #[arg(long)]
     dol: Option<String>,
+
+    /// Boot the DOL as a Wii executable instead of GameCube
+    #[arg(long)]
+    wii: bool,
 
     /// Path to an IPL file (boot the real GameCube IPL)
     #[arg(long)]
@@ -259,9 +263,12 @@ fn main() {
     };
 
     let mut emulator = if let Some(ref dol) = args.dol {
-        EmulatorVariant::Gc(GameCube::with_image(&Dol::parse(
-            std::fs::read(dol).expect("failed to read DOL"),
-        )))
+        let dol = Dol::parse(std::fs::read(dol).expect("failed to read DOL"));
+        if args.wii {
+            EmulatorVariant::Wii(Wii::with_image(&dol))
+        } else {
+            EmulatorVariant::Gc(GameCube::with_image(&dol))
+        }
     } else if let Some(ref ipl) = args.ipl {
         let mut gc = GameCube::with_ipl(&std::fs::read(ipl).expect("failed to read IPL"), args.skip_ipl);
         if let Some(ref dvd) = args.dvd {
