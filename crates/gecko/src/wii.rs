@@ -34,7 +34,9 @@ const APPLOADER_RETURN_TRAP: u32 = 0x6900_0000;
 
 impl Wii {
     pub fn new(entrypoint: u32) -> Self {
-        Self::with_scheduler(entrypoint, Scheduler::new_wii())
+        let mut emu = Self::with_scheduler(entrypoint, Scheduler::new_wii());
+        emu.initialize_starlet_devices();
+        emu
     }
 
     pub fn with_image(exe: &impl Executable) -> Self {

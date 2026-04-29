@@ -1,6 +1,5 @@
 use crate::{
     System, SystemId,
-    hollywood::ipc::IpcState,
     mmio::traits::{MmioAccess, WriteMask},
 };
 
@@ -49,20 +48,17 @@ impl<const SYSTEM: SystemId> MmioAccess<System<SYSTEM>> for PpcCtrl {
         if sys.hollywood.ipc.ppcctrl.execute() {
             let cmd_paddr = sys.hollywood.ipc.ppcmsg.raw();
             sys.hollywood.ipc.ppcctrl = sys.hollywood.ipc.ppcctrl.with_execute(false);
-            sys.hollywood.ipc.state = IpcState::Processing;
             tracing::info!(cmd_paddr = format!("{cmd_paddr:#010X}"), "PPC launched IPC command");
 
-            // TODO: crate::starlet::dispatch_command(sys, cmd_paddr);
+            crate::starlet::dispatch_command(sys, cmd_paddr);
         }
 
-        // PPC has ACKed the response, reset
-        if !sys.hollywood.ipc.ppcctrl.ack_reply()
-            && !sys.hollywood.ipc.ppcctrl.ack_relaunch()
-            && sys.hollywood.ipc.state == IpcState::Done
-        {
-            // TODO: check state here?
-            sys.hollywood.ipc.state = IpcState::Idle;
+        // PPC just ACKed a pending reply
+        let ack_happened =
+            (current.ack_reply() && incoming.ack_reply()) || (current.ack_relaunch() && incoming.ack_relaunch());
+        if ack_happened {
             crate::hollywood::irq::ack_ipc(sys);
+            crate::starlet::schedule_drain(sys);
         }
     }
 }
