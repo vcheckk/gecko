@@ -762,7 +762,9 @@ impl crate::Dvd for Rvz {
 
     fn data_partition_offset(&self) -> u64 {
         match self.data_partition {
-            Some(idx) => (self.partitions[idx].data[0].first_sector as u64) * 0x8000,
+            Some(idx) => {
+                (self.partitions[idx].data[0].first_sector as u64) * WII_BLOCK_TOTAL_SIZE - WII_PARTITION_DATA_OFFSET
+            }
             None => 0,
         }
     }
