@@ -19,12 +19,23 @@ crate::mmio_default_access!(PpcMsg => System.hollywood.ipc.ppcmsg);
 #[derive(Copy, Clone, Debug)]
 #[rustfmt::skip]
 pub struct PpcCtrl {
-    #[bits(0)] pub execute: bool,
-    #[bits(1)] pub ack_reply: bool,
-    #[bits(2)] pub ack_relaunch: bool,
-    #[bits(3)] pub relaunch: bool,
-    #[bits(4)] pub irq_relaunch_enable: bool,
-    #[bits(5)] pub irq_reply_enable: bool,
+    /// X1: PPC writes 1 to launch a command. Self-clearing once Starlet consumes.
+    #[bits(0, alias = "x1")] pub execute: bool,
+
+    /// Y2: Starlet sets to confirm transaction complete. W1C from PPC.
+    #[bits(1, alias = "y2")] pub arm_post_ack: bool,
+
+    /// Y1: Starlet sets to deliver the main response (with data). W1C from PPC.
+    #[bits(2, alias = "y1")] pub arm_response: bool,
+
+    /// X2: PPC writes 1 to acknowledge the Y1 response.
+    #[bits(3, alias = "x2")] pub ack_response: bool,
+
+    /// IY1: enable IRQ when Y1 (arm_response) is set.
+    #[bits(4, alias = "iy1")] pub irq_arm_response: bool,
+
+    /// IY2: enable IRQ when Y2 (arm_post_ack) is set.
+    #[bits(5, alias = "iy2")] pub irq_arm_post_ack: bool,
 }
 crate::mmio_reg!(PpcCtrl: u32 @ 0x0D00_0004);
 
@@ -41,8 +52,8 @@ impl<const SYSTEM: SystemId> MmioAccess<System<SYSTEM>> for PpcCtrl {
 
         // these are write 1 to clear
         sys.hollywood.ipc.ppcctrl = incoming
-            .with_ack_reply(current.ack_reply() && !incoming.ack_reply())
-            .with_ack_relaunch(current.ack_relaunch() && !incoming.ack_relaunch());
+            .with_arm_post_ack(current.arm_post_ack() && !incoming.arm_post_ack())
+            .with_arm_response(current.arm_response() && !incoming.arm_response());
 
         // dispatch via starlet
         if sys.hollywood.ipc.ppcctrl.execute() {
@@ -55,7 +66,7 @@ impl<const SYSTEM: SystemId> MmioAccess<System<SYSTEM>> for PpcCtrl {
 
         // PPC just ACKed a pending reply
         let ack_happened =
-            (current.ack_reply() && incoming.ack_reply()) || (current.ack_relaunch() && incoming.ack_relaunch());
+            (current.arm_post_ack() && incoming.arm_post_ack()) || (current.arm_response() && incoming.arm_response());
         if ack_happened {
             crate::hollywood::irq::ack_ipc(sys);
             crate::starlet::schedule_drain(sys);

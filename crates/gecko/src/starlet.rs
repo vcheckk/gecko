@@ -217,7 +217,7 @@ fn read_c_string(ctx: &mut DeviceContext<'_>, paddr: u32) -> String {
 }
 
 fn deliver_pending<const SYSTEM: SystemId>(sys: &mut System<SYSTEM>) {
-    if sys.hollywood.ipc.ppcctrl.ack_reply() {
+    if sys.hollywood.ipc.ppcctrl.arm_response() {
         // PPC slot still occupied. Wait for the ack.
         return;
     }
