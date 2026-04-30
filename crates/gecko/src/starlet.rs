@@ -4,6 +4,7 @@ use crate::{
     hollywood::ipc::{DeviceContext, IosDevice},
 };
 use std::collections::{HashMap, VecDeque};
+use std::path::PathBuf;
 
 // As per zayd
 const FINALIZE_DELAY_CYCLES: u64 = 10_000;
@@ -14,11 +15,20 @@ pub struct PendingResponse {
     pub result: i32,
 }
 
+/// Backing storage for an open fd. Control devices share state across fds via
+/// a path key into the registry; host backed files own their device instance
+/// directly so each fd has its own cursor.
+enum FdEntry {
+    Shared(String),
+    Owned(Box<dyn IosDevice>),
+}
+
 pub struct Starlet {
     devices: HashMap<String, Box<dyn IosDevice>>,
-    handles: HashMap<i32, String>,
+    handles: HashMap<i32, FdEntry>,
     next_fd: i32,
     pub pending: VecDeque<PendingResponse>,
+    pub host_fs_root: PathBuf,
 }
 
 impl Starlet {
@@ -28,6 +38,7 @@ impl Starlet {
             handles: HashMap::new(),
             next_fd: 1,
             pending: VecDeque::new(),
+            host_fs_root: self::default_host_fs_root(),
         }
     }
 
@@ -36,27 +47,69 @@ impl Starlet {
         self.devices.insert(path.to_owned(), dev);
     }
 
-    /// Allocate a fresh fd and bind it to `path`.
+    /// Allocate a fresh fd bound to a registered (shared) device path.
     pub fn allocate_fd(&mut self, path: &str) -> i32 {
-        let fd = self.next_fd;
-        self.next_fd = self.next_fd.checked_add(1).expect("Starlet fd overflow");
-        self.handles.insert(fd, path.to_owned());
+        let fd = self.fresh_fd();
+        self.handles.insert(fd, FdEntry::Shared(path.to_owned()));
         fd
     }
 
-    /// Drop the fd to path mapping. Returns the path the fd was bound to.
-    pub fn release_fd(&mut self, fd: i32) -> Option<String> {
-        self.handles.remove(&fd)
+    /// Allocate a fresh fd that owns the given device instance. Used for
+    /// per-open resources (host-backed real files).
+    pub fn allocate_owned_fd(&mut self, dev: Box<dyn IosDevice>) -> i32 {
+        let fd = self.fresh_fd();
+        self.handles.insert(fd, FdEntry::Owned(dev));
+        fd
+    }
+
+    fn fresh_fd(&mut self) -> i32 {
+        let fd = self.next_fd;
+        self.next_fd = self.next_fd.checked_add(1).expect("Starlet fd overflow");
+        fd
     }
 
     pub fn device_for_path(&mut self, path: &str) -> Option<&mut Box<dyn IosDevice>> {
         self.devices.get_mut(path)
     }
 
-    pub fn device_for_fd(&mut self, fd: i32) -> Option<&mut Box<dyn IosDevice>> {
-        let path = self.handles.get(&fd)?.clone();
-        self.devices.get_mut(&path)
+    pub fn device_for_fd(&mut self, fd: i32) -> Option<&mut dyn IosDevice> {
+        let path = match self.handles.get(&fd)? {
+            FdEntry::Shared(p) => Some(p.clone()),
+            FdEntry::Owned(_) => None,
+        };
+
+        if let Some(path) = path {
+            return self.devices.get_mut(&path).map(|b| b.as_mut() as &mut dyn IosDevice);
+        }
+
+        match self.handles.get_mut(&fd)? {
+            FdEntry::Owned(dev) => Some(dev.as_mut()),
+            FdEntry::Shared(_) => unreachable!(),
+        }
     }
+
+    /// Drop an fd. Calls `close` on the underlying device first; for owned
+    /// fds the device is dropped after close.
+    pub fn close_fd(&mut self, fd: i32, ctx: &mut DeviceContext<'_>) -> i32 {
+        let Some(entry) = self.handles.remove(&fd) else {
+            return crate::hollywood::ipc::IPC_EINVAL;
+        };
+
+        match entry {
+            FdEntry::Owned(mut dev) => dev.close(ctx),
+            FdEntry::Shared(path) => match self.devices.get_mut(&path) {
+                Some(dev) => dev.close(ctx),
+                None => crate::hollywood::ipc::IPC_EINVAL,
+            },
+        }
+    }
+}
+
+fn default_host_fs_root() -> PathBuf {
+    if let Some(custom) = std::env::var_os("GECKO_FS_ROOT") {
+        return PathBuf::from(custom);
+    }
+    PathBuf::from("fs")
 }
 
 impl System<{ crate::WII }> {
@@ -121,27 +174,24 @@ fn process_command<const SYSTEM: SystemId>(sys: &mut System<SYSTEM>, cmd_paddr: 
             let mode = ctx.mmio.phys_read_u32(cmd_paddr + 0x10);
             let path = self::read_c_string(&mut ctx, path_ptr);
 
-            let Some(dev) = starlet.device_for_path(&path) else {
+            let fd = if let Some(dev) = starlet.device_for_path(&path) {
+                let rc = dev.open(&mut ctx, mode);
+                if rc >= 0 { starlet.allocate_fd(&path) } else { rc }
+            } else if let Some(real) =
+                crate::hollywood::ipc::fs::HostBackedFile::try_open(&starlet.host_fs_root, &path, mode)
+            {
+                starlet.allocate_owned_fd(Box::new(real))
+            } else {
                 tracing::error!(%path, "IOS_Open: no device registered");
-                return IPC_ENOENT;
+                IPC_ENOENT
             };
-            let rc = dev.open(&mut ctx, mode);
-            let fd = if rc >= 0 { starlet.allocate_fd(&path) } else { rc };
             tracing::info!(%path, mode, fd, "IOS_Open");
 
             fd
         }
         IOS_CLOSE => {
             tracing::info!(fd, "IOS_Close");
-
-            let Some(path) = starlet.release_fd(fd) else {
-                return IPC_EINVAL;
-            };
-            let Some(dev) = starlet.device_for_path(&path) else {
-                return IPC_EINVAL;
-            };
-
-            dev.close(&mut ctx)
+            starlet.close_fd(fd, &mut ctx)
         }
         IOS_READ => {
             let out_ptr = ctx.mmio.phys_read_u32(cmd_paddr + 0x0C);

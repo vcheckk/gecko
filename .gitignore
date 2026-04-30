@@ -8,3 +8,4 @@ private/
 *.log
 out/
 __pycache__/
+fs/
