@@ -100,7 +100,7 @@ fn process_command<const SYSTEM: SystemId>(sys: &mut System<SYSTEM>, cmd_paddr: 
     const IOS_IOCTL: u32 = 6;
     const IOS_IOCTLV: u32 = 7;
 
-    debug_assert!(SYSTEM == crate::WII, "Starlet dispatch reached on non-Wii system");
+    assert!(SYSTEM == crate::WII, "Starlet dispatch reached on non-Wii system");
 
     let wii: &mut crate::Wii = unsafe { ::core::mem::transmute(sys) };
     let cmd = wii.mmio.phys_read_u32(cmd_paddr);

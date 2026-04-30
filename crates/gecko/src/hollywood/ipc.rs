@@ -83,6 +83,11 @@ crate::mmio_device_dispatch! {
 pub fn deliver_response<const SYSTEM: SystemId>(sys: &mut System<SYSTEM>, cmd_paddr: u32, result: i32) {
     sys.mmio.phys_write_u32(cmd_paddr + 0x04, result as u32);
     sys.hollywood.ipc.armmsg = ArmMsg::from_raw(cmd_paddr);
-    sys.hollywood.ipc.ppcctrl = sys.hollywood.ipc.ppcctrl.with_arm_response(true);
+    sys.hollywood.ipc.ppcctrl = sys
+        .hollywood
+        .ipc
+        .ppcctrl
+        .with_arm_response(true)
+        .with_arm_post_ack(true);
     crate::hollywood::irq::assert_ipc(sys);
 }
