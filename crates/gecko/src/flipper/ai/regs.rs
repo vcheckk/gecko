@@ -100,7 +100,7 @@ crate::mmio_reg!(AiSampleCounter: u32 @ 0xCC006C08);
 
 impl<const SYSTEM: SystemId> MmioAccess<System<SYSTEM>> for AiSampleCounter {
     fn read(gc: &mut System<SYSTEM>) -> Self {
-        let count = gc.ai.sample_count(gc.scheduler.cycles);
+        let count = gc.ai.sample_count(SYSTEM, gc.scheduler.cycles);
         AiSampleCounter::from_raw(count)
     }
 

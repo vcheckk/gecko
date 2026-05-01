@@ -1,0 +1,72 @@
+# Cross-compiles tinyapp, debugger and multitool for x86_64 Linux and Windows.
+# Produces a debug build and a release build separately. For the release build
+# only, all chipi bindings are switched from fn_ptr_lut to jump_table.
+#
+# Build:
+#   docker build -f Dockerfile.native --output type=local,dest=docker-build .
+#
+# Output:
+#   docker-build/debug/    {tinyapp, debugger, multitool}
+#   docker-build/release/  {tinyapp, debugger, multitool}
+
+FROM rust:latest AS base
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        mingw-w64 \
+        libwayland-dev libxkbcommon-dev libx11-dev libxi-dev libxrandr-dev libxcursor-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN update-alternatives --set x86_64-w64-mingw32-gcc /usr/bin/x86_64-w64-mingw32-gcc-posix \
+ && update-alternatives --set x86_64-w64-mingw32-g++ /usr/bin/x86_64-w64-mingw32-g++-posix
+
+RUN rustup target add x86_64-unknown-linux-gnu x86_64-pc-windows-gnu
+
+ENV CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc \
+    CC_x86_64_pc_windows_gnu=x86_64-w64-mingw32-gcc \
+    CXX_x86_64_pc_windows_gnu=x86_64-w64-mingw32-g++ \
+    AR_x86_64_pc_windows_gnu=x86_64-w64-mingw32-ar
+
+WORKDIR /app
+COPY . .
+
+
+FROM base AS debug-build
+RUN cargo build --profile dev \
+        --target x86_64-unknown-linux-gnu \
+        --package tinyapp --package debugger --package multitool \
+ && cargo build --profile dev \
+        --target x86_64-pc-windows-gnu \
+        --package tinyapp --package debugger --package multitool
+
+RUN mkdir -p /out/debug \
+ && cp target/x86_64-unknown-linux-gnu/debug/tinyapp /out/debug/ \
+ && cp target/x86_64-unknown-linux-gnu/debug/debugger /out/debug/ \
+ && cp target/x86_64-unknown-linux-gnu/debug/multitool /out/debug/ \
+ && cp target/x86_64-pc-windows-gnu/debug/tinyapp.exe /out/debug/ \
+ && cp target/x86_64-pc-windows-gnu/debug/debugger.exe /out/debug/ \
+ && cp target/x86_64-pc-windows-gnu/debug/multitool.exe /out/debug/
+
+
+FROM base AS release-build
+RUN sed -i 's/strategy fn_ptr_lut/strategy jump_table/g' crates/gecko/*.bindings.chipi
+
+RUN cargo build --release \
+        --target x86_64-unknown-linux-gnu \
+        --package tinyapp --package debugger --package multitool \
+ && cargo build --release \
+        --target x86_64-pc-windows-gnu \
+        --package tinyapp --package debugger --package multitool
+
+RUN mkdir -p /out/release \
+ && cp target/x86_64-unknown-linux-gnu/release/tinyapp /out/release/ \
+ && cp target/x86_64-unknown-linux-gnu/release/debugger /out/release/ \
+ && cp target/x86_64-unknown-linux-gnu/release/multitool /out/release/ \
+ && cp target/x86_64-pc-windows-gnu/release/tinyapp.exe /out/release/ \
+ && cp target/x86_64-pc-windows-gnu/release/debugger.exe /out/release/ \
+ && cp target/x86_64-pc-windows-gnu/release/multitool.exe /out/release/
+
+
+FROM scratch AS artifacts
+COPY --from=debug-build /out/debug /debug
+COPY --from=release-build /out/release /release

@@ -1,9 +1,9 @@
 pub mod regs;
 
 use crate::flipper::dsp;
+use crate::scheduler;
 use crate::system::{System, SystemId};
 
-const CPU_CORE_CLOCK: u64 = 486_000_000;
 const AUDIO_DMA_BLOCK_BYTES: u32 = 32;
 const AUDIO_DMA_FRAMES_PER_BLOCK: u64 = 8;
 
@@ -35,7 +35,7 @@ impl AudioInterface {
 
     /// Compute the current sample counter based on elapsed cycles
     #[inline(always)]
-    pub fn sample_count(&self, current_cycles: u64) -> u32 {
+    pub fn sample_count(&self, system: SystemId, current_cycles: u64) -> u32 {
         if self.control.playback_status() != regs::Status::Play {
             return 0;
         }
@@ -45,7 +45,7 @@ impl AudioInterface {
             regs::SampleRate::Rate32KHz => 32_000,
             regs::SampleRate::Rate48KHz => 48_000,
         };
-        ((elapsed as u128 * sample_rate) / CPU_CORE_CLOCK as u128) as u32
+        ((elapsed as u128 * sample_rate) / scheduler::cpu_clock(system) as u128) as u32
     }
 }
 
@@ -143,7 +143,7 @@ fn cycles_per_audio_dma_block<const SYSTEM: SystemId>(gc: &System<SYSTEM>) -> u6
         48_000
     };
 
-    AUDIO_DMA_FRAMES_PER_BLOCK * CPU_CORE_CLOCK / sample_rate
+    AUDIO_DMA_FRAMES_PER_BLOCK * scheduler::cpu_clock(SYSTEM) / sample_rate
 }
 
 #[inline(always)]
@@ -152,7 +152,7 @@ pub fn refresh_interrupts<const SYSTEM: SystemId>(gc: &mut System<SYSTEM>) {
 
     let threshold = gc.ai.interrupt_timing.sample_count();
     if threshold != 0 {
-        let count = gc.ai.sample_count(gc.scheduler.cycles);
+        let count = gc.ai.sample_count(SYSTEM, gc.scheduler.cycles);
         gc.ai.sample_counter = regs::AiSampleCounter::from_raw(count);
         if count >= threshold {
             gc.ai.control = gc.ai.control.with_interrupt(true);

@@ -34,11 +34,11 @@ pub enum RefreshRate {
 
 impl RefreshRate {
     #[inline(always)]
-    pub fn cycles_per_frame(&self) -> u64 {
-        const CPU_CORE_CLOCK: u64 = 486_000_000;
+    pub const fn cycles_per_frame(&self, system: SystemId) -> u64 {
+        let clock = crate::scheduler::cpu_clock(system);
         match self {
-            RefreshRate::Hz60 => CPU_CORE_CLOCK / 60,
-            RefreshRate::Hz50 => CPU_CORE_CLOCK / 50,
+            RefreshRate::Hz60 => clock / 60,
+            RefreshRate::Hz50 => clock / 50,
         }
     }
 }
@@ -312,7 +312,7 @@ crate::mmio_reg!(DisplayPositionHorizontal: u16 @ 0xCC00202E);
 impl<const SYSTEM: SystemId> MmioAccess<System<SYSTEM>> for DisplayPositionHorizontal {
     fn read(gc: &mut System<SYSTEM>) -> Self {
         let cycles = gc.scheduler.cycles;
-        DisplayPositionHorizontal::from_raw(gc.vi.dph_value(cycles))
+        DisplayPositionHorizontal::from_raw(gc.vi.dph_value(SYSTEM, cycles))
     }
 
     fn write(self, _gc: &mut System<SYSTEM>, _: WriteMask) {
@@ -334,7 +334,7 @@ crate::mmio_reg!(DisplayPositionCombined: u32 @ 0xCC00202C);
 impl<const SYSTEM: SystemId> MmioAccess<System<SYSTEM>> for DisplayPositionCombined {
     fn read(gc: &mut System<SYSTEM>) -> Self {
         let dpv = gc.vi.dpv.raw() as u32;
-        let dph = gc.vi.dph_value(gc.scheduler.cycles) as u32;
+        let dph = gc.vi.dph_value(SYSTEM, gc.scheduler.cycles) as u32;
         DisplayPositionCombined::from_raw((dpv << 16) | dph)
     }
 

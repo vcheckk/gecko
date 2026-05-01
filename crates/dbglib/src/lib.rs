@@ -4,7 +4,7 @@ pub mod windows;
 #[cfg(not(target_arch = "wasm32"))]
 use std::io::Write;
 
-use gecko::scheduler::{CPU_CYCLES_PER_DSP_TICK, DSP_BATCH_SIZE, ScheduledFn, dsp_batch_handler};
+use gecko::scheduler::{DSP_BATCH_SIZE, ScheduledFn, cpu_cycles_per_dsp_tick, dsp_batch_handler};
 use gecko::system::{System, SystemId};
 
 /// Identify the DSP batch handler so the debugger can intercept it for per-instruction tracing.
@@ -168,9 +168,10 @@ impl Debugger {
                     }
                 }
                 gecko::flipper::dsp::refresh_interrupts(emulator);
-                emulator
-                    .scheduler
-                    .schedule_in(CPU_CYCLES_PER_DSP_TICK * DSP_BATCH_SIZE, dsp_batch_handler::<SYSTEM>);
+                emulator.scheduler.schedule_in(
+                    cpu_cycles_per_dsp_tick(SYSTEM) * DSP_BATCH_SIZE,
+                    dsp_batch_handler::<SYSTEM>,
+                );
             } else {
                 f(emulator);
             }
@@ -193,9 +194,10 @@ impl Debugger {
                         }
                     }
                     gecko::flipper::dsp::refresh_interrupts(emulator);
-                    emulator
-                        .scheduler
-                        .schedule_in(CPU_CYCLES_PER_DSP_TICK * DSP_BATCH_SIZE, dsp_batch_handler::<SYSTEM>);
+                    emulator.scheduler.schedule_in(
+                        cpu_cycles_per_dsp_tick(SYSTEM) * DSP_BATCH_SIZE,
+                        dsp_batch_handler::<SYSTEM>,
+                    );
                 } else {
                     f(emulator);
                 }

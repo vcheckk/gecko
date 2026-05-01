@@ -1,15 +1,16 @@
 use crate::System;
 use crate::hollywood::ipc::{DeviceContext, IosDevice};
+use crate::scheduler::microseconds_to_cycles;
 use crate::system::SystemId;
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 
-// As per zayd
-const FINALIZE_DELAY_CYCLES: u64 = 10_000;
+// As per zayd. Tuned at GC clock (486 MHz, ~20 us).
+const FINALIZE_DELAY_US: u64 = 20;
 // Give the CPU breathing room between back-to-back IPC IRQs so other interrupt
 // sources (DSP) actually get serviced. The BT stub's "no events" replies
 // would otherwise hammer the IPC handler nonstop and starve the DSP IRQ.
-const ACK_TO_NEXT_DELAY_CYCLES: u64 = 50_000;
+const ACK_TO_NEXT_DELAY_US: u64 = 100;
 
 pub struct PendingResponse {
     pub cmd_paddr: u32,
@@ -144,13 +145,17 @@ impl System<{ crate::WII }> {
 pub fn dispatch_command<const SYSTEM: SystemId>(sys: &mut System<SYSTEM>, cmd_paddr: u32) {
     let result = self::process_command(sys, cmd_paddr);
     sys.starlet.pending.push_back(PendingResponse { cmd_paddr, result });
-    sys.scheduler
-        .schedule_in(FINALIZE_DELAY_CYCLES, self::deliver_pending::<SYSTEM>);
+    sys.scheduler.schedule_in(
+        microseconds_to_cycles(SYSTEM, FINALIZE_DELAY_US),
+        self::deliver_pending::<SYSTEM>,
+    );
 }
 
 pub fn schedule_drain<const SYSTEM: SystemId>(sys: &mut System<SYSTEM>) {
-    sys.scheduler
-        .schedule_in(ACK_TO_NEXT_DELAY_CYCLES, self::deliver_pending::<SYSTEM>);
+    sys.scheduler.schedule_in(
+        microseconds_to_cycles(SYSTEM, ACK_TO_NEXT_DELAY_US),
+        self::deliver_pending::<SYSTEM>,
+    );
 }
 
 fn process_command<const SYSTEM: SystemId>(sys: &mut System<SYSTEM>, cmd_paddr: u32) -> i32 {

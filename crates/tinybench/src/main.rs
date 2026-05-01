@@ -124,8 +124,8 @@ fn run_bench(emulator: &mut GameCube, args: &Args) {
     let total_elapsed = bench_start.elapsed().as_secs_f64();
     let total_fps = frame_count as f64 / total_elapsed;
     let rate = emulator.vi.dcr.video_format().refresh_rate();
-    let emulated_cycles = frame_count * rate.cycles_per_frame();
-    let emulated_seconds = emulated_cycles as f64 / 486_000_000.0;
+    let emulated_cycles = frame_count * rate.cycles_per_frame(gecko::system::GC);
+    let emulated_seconds = emulated_cycles as f64 / gecko::scheduler::cpu_clock(gecko::system::GC) as f64;
     let speed_pct = (emulated_seconds / total_elapsed) * 100.0;
 
     println!();

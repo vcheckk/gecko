@@ -1,8 +1,8 @@
 pub mod regs;
 
+use crate::scheduler;
 use crate::system::{System, SystemId};
 
-const CPU_CORE_CLOCK: u64 = 486_000_000;
 const CLOCK_FREQUENCIES: [u64; 2] = [27_000_000, 54_000_000];
 
 pub struct VideoInterface {
@@ -90,13 +90,13 @@ impl VideoInterface {
         }
     }
 
-    pub fn ticks_per_sample(&self) -> u64 {
+    pub fn ticks_per_sample(&self, system: SystemId) -> u64 {
         let clock_idx = self.viclk.clock_select() as usize & 1;
-        2 * CPU_CORE_CLOCK / CLOCK_FREQUENCIES[clock_idx]
+        2 * scheduler::cpu_clock(system) / CLOCK_FREQUENCIES[clock_idx]
     }
 
-    pub fn ticks_per_half_line(&self) -> u64 {
-        self.ticks_per_sample() * self.htr0.halfline_width() as u64
+    pub fn ticks_per_half_line(&self, system: SystemId) -> u64 {
+        self.ticks_per_sample(system) * self.htr0.halfline_width() as u64
     }
 
     fn half_lines_per_even_field(&self) -> u32 {
@@ -129,9 +129,9 @@ impl VideoInterface {
     }
 
     /// Compute the current DPH value from the cycle count.
-    pub fn dph_value(&self, cycles: u64) -> u16 {
+    pub fn dph_value(&self, system: SystemId, cycles: u64) -> u16 {
         let hl_width = self.htr0.halfline_width() as u64;
-        let ticks_per_hl = self.ticks_per_half_line();
+        let ticks_per_hl = self.ticks_per_half_line(system);
         if ticks_per_hl == 0 || hl_width == 0 {
             return 1;
         }
@@ -267,7 +267,7 @@ crate::mmio_device_dispatch! {
 #[inline(always)]
 pub fn ensure_half_line_scheduled<const SYSTEM: SystemId>(gc: &mut System<SYSTEM>) {
     if !gc.vi.half_line_scheduled {
-        let ticks_per_hl = gc.vi.ticks_per_half_line();
+        let ticks_per_hl = gc.vi.ticks_per_half_line(SYSTEM);
         if ticks_per_hl > 0 {
             gc.vi.half_line_scheduled = true;
             gc.scheduler.schedule_in(ticks_per_hl, |gc| {

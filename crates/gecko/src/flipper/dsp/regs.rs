@@ -334,10 +334,13 @@ impl<const SYSTEM: SystemId> MmioAccess<System<SYSTEM>> for AramDmaControl {
     fn write(self, gc: &mut System<SYSTEM>, _: WriteMask) {
         gc.dsp.aram_dma_control = self;
 
-        const ARAM_DMA_DELAY: u64 = 10_000;
-        gc.scheduler.schedule_in(ARAM_DMA_DELAY, |gc| {
-            gc.dsp.process_aram_dma(&mut gc.mmio);
-            dsp::refresh_interrupts(gc);
-        });
+        const ARAM_DMA_DELAY_US: u64 = 20;
+        gc.scheduler.schedule_in(
+            crate::scheduler::microseconds_to_cycles(SYSTEM, ARAM_DMA_DELAY_US),
+            |gc| {
+                gc.dsp.process_aram_dma(&mut gc.mmio);
+                dsp::refresh_interrupts(gc);
+            },
+        );
     }
 }

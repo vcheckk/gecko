@@ -1,11 +1,35 @@
 use std::collections::VecDeque;
 
 use crate::flipper::vi::regs::RefreshRate;
-use crate::system::{System, SystemId};
+use crate::system::{self, System, SystemId};
 
 pub const TIMEBASE_DIVISOR: u64 = 12;
-pub const CPU_CYCLES_PER_DSP_TICK: u64 = 6; // ~486MHz CPU / ~81MHz DSP
 pub const DSP_BATCH_SIZE: u64 = 1024;
+
+#[inline(always)]
+#[rustfmt::skip]
+pub const fn cpu_clock(system: SystemId) -> u64 {
+    match system {
+        system::WII => 729_000_000,
+        system::GC  => 486_000_000,
+        _ => unreachable!(),
+    }
+}
+
+#[inline(always)]
+#[rustfmt::skip]
+pub const fn cpu_cycles_per_dsp_tick(system: SystemId) -> u64 {
+    match system {
+        system::WII => 9, // 729 MHz / 81 MHz
+        system::GC  => 6, // 486 MHz / 81 MHz
+        _ => unreachable!(),
+    }
+}
+
+#[inline(always)]
+pub const fn microseconds_to_cycles(system: SystemId, us: u64) -> u64 {
+    us * (self::cpu_clock(system) / 1_000_000)
+}
 
 pub type ScheduledFn<const SYSTEM: SystemId> = fn(&mut System<SYSTEM>);
 
@@ -112,9 +136,12 @@ impl<const SYSTEM: SystemId> Scheduler<SYSTEM> {
     fn with_default_events() -> Self {
         let mut s = Self::empty();
         let initial_refresh_rate = RefreshRate::Hz60; // TODO: Detect IPL and schedule accordingly
-        s.schedule_at(initial_refresh_rate.cycles_per_frame(), self::vsync_handler::<SYSTEM>);
         s.schedule_at(
-            CPU_CYCLES_PER_DSP_TICK * DSP_BATCH_SIZE,
+            initial_refresh_rate.cycles_per_frame(SYSTEM),
+            self::vsync_handler::<SYSTEM>,
+        );
+        s.schedule_at(
+            self::cpu_cycles_per_dsp_tick(SYSTEM) * self::DSP_BATCH_SIZE,
             self::dsp_batch_handler::<SYSTEM>,
         );
         s.schedule_at(
@@ -130,14 +157,14 @@ pub fn vsync_handler<const SYSTEM: SystemId>(gc: &mut System<SYSTEM>) {
     gc.vsync_pending = true;
     let rate = gc.vi.dcr.video_format().refresh_rate();
     gc.scheduler
-        .schedule_in(rate.cycles_per_frame(), self::vsync_handler::<SYSTEM>);
+        .schedule_in(rate.cycles_per_frame(SYSTEM), self::vsync_handler::<SYSTEM>);
 }
 
 /// Reschedules itself every DSP batch.
 pub fn dsp_batch_handler<const SYSTEM: SystemId>(gc: &mut System<SYSTEM>) {
     gc.execute_dsp_batch();
     gc.scheduler.schedule_in(
-        self::CPU_CYCLES_PER_DSP_TICK * self::DSP_BATCH_SIZE,
+        self::cpu_cycles_per_dsp_tick(SYSTEM) * self::DSP_BATCH_SIZE,
         self::dsp_batch_handler::<SYSTEM>,
     );
 }

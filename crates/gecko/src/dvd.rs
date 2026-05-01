@@ -124,17 +124,20 @@ pub fn start_transfer<const SYSTEM: SystemId>(gc: &mut System<SYSTEM>) {
     // that the interrupt wont fire until after it has returned and updated the state.
     // Else it will get trapped inside restore_irq, right after mtmsr, executing in a loop
     // of the DVD dispatch handler which in turn re-issues the same command...
-    const DI_TRANSFER_DELAY: u64 = 10_000; // Based off of vxpm and hazel
-    gc.scheduler.schedule_in(DI_TRANSFER_DELAY, |gc| {
-        gc.di.control.set_tstart(false);
-        // DMA length tracks the progress of the transfer, so when it hits 0, the
-        // transfer is complete. On failure, this would denote how many bytes were
-        // not transferred, but we close our eyes and just hope nothing depends on
-        // that!
-        gc.di.dma_length = regs::DiDmaLengthRegister::from_raw(0);
-        gc.di.status.set_transfer_complete(true);
-        self::refresh_interrupts(gc);
-    });
+    const DI_TRANSFER_DELAY_US: u64 = 20; // Based off of vxpm and hazel (~10k cycles at GC clock)
+    gc.scheduler.schedule_in(
+        crate::scheduler::microseconds_to_cycles(SYSTEM, DI_TRANSFER_DELAY_US),
+        |gc| {
+            gc.di.control.set_tstart(false);
+            // DMA length tracks the progress of the transfer, so when it hits 0, the
+            // transfer is complete. On failure, this would denote how many bytes were
+            // not transferred, but we close our eyes and just hope nothing depends on
+            // that!
+            gc.di.dma_length = regs::DiDmaLengthRegister::from_raw(0);
+            gc.di.status.set_transfer_complete(true);
+            self::refresh_interrupts(gc);
+        },
+    );
 }
 
 #[inline(always)]
