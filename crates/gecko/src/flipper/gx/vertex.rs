@@ -3,7 +3,7 @@ use super::math::{Vec3, unpack_rgba};
 use super::regs::{self, *};
 use super::{GraphicsProcessor, draw};
 use crate::host::{DrawData, DrawVertex, GxAction, LightData, RenderSink};
-use crate::mmio::Mmio;
+use crate::mmio::{Mmio, RamView};
 use crate::system::SystemId;
 use std::io::{Cursor, Read};
 
@@ -65,8 +65,9 @@ impl GraphicsProcessor {
         let mut vertices: Vec<draw::Vertex> = Vec::with_capacity(vertex_count);
         let mut cur = Cursor::new(&data);
 
+        let view = mmio.ram_view();
         for i in 0..vertex_count {
-            let vertex = self.decode_vertex(&mut cur, &data, &mmio.ram, &vf, i);
+            let vertex = self.decode_vertex(&mut cur, &data, &view, &vf, i);
             vertices.push(vertex);
         }
 
@@ -339,10 +340,30 @@ impl GraphicsProcessor {
         &self,
         cur: &mut Cursor<&Vec<u8>>,
         data: &[u8],
-        ram: &[u8],
+        ram: &RamView<'_>,
         vf: &VertexFormat,
         vertex_idx: usize,
     ) -> draw::Vertex {
+        // Resolve an indexed vertex attribute (positions, normals, colors,
+        // texcoords) to a slice in whichever bank holds it. If the address
+        // falls outside both MEM1 and MEM2, fall back to a zero-filled
+        // buffer.
+        fn fetch<'a>(view: &'a RamView<'_>, addr: usize, len: usize, scratch: &'a mut [u8]) -> &'a [u8] {
+            if let Some(s) = view.slice(addr, len) {
+                s
+            } else {
+                tracing::warn!(
+                    addr = format!("{addr:#010X}"),
+                    len,
+                    "vertex attribute fetch unmapped, using zeros"
+                );
+                let n = len.min(scratch.len());
+                scratch[..n].fill(0);
+                &scratch[..n]
+            }
+        }
+
+        let mut scratch = [0u8; 32];
         // Read per-vertex position/normal matrix index, or use register default
         let pos_mtx_idx = if vf.has_pnmtxidx {
             let mut buf = [0u8; 1];
@@ -376,7 +397,7 @@ impl GraphicsProcessor {
         } else {
             let pos_index = read_index(cur, vf.pos_attr);
             let pos_addr = vf.pos_base + pos_index * vf.pos_stride;
-            decode_position(&ram[pos_addr..pos_addr + vf.pos_data_size], &vf.vat_a)
+            decode_position(fetch(ram, pos_addr, vf.pos_data_size, &mut scratch), &vf.vat_a)
         };
 
         // Read normal
@@ -394,7 +415,7 @@ impl GraphicsProcessor {
                 cur.set_position(cur.position() + (2 * idx_size) as u64);
             }
             let nrm_addr = vf.nrm_base_addr + nrm_index * vf.nrm_stride;
-            decode_normal(&ram[nrm_addr..nrm_addr + vf.nrm_data_size], &vf.vat_a)
+            decode_normal(fetch(ram, nrm_addr, vf.nrm_data_size, &mut scratch), &vf.vat_a)
         } else {
             [0.0, 0.0, 1.0]
         };
@@ -414,7 +435,7 @@ impl GraphicsProcessor {
             let clr0_index = read_index(cur, vf.clr0_attr);
             let clr0_addr = vf.clr0_base + clr0_index * vf.clr0_stride;
             decode_color(
-                &ram[clr0_addr..clr0_addr + vf.clr0_data_size],
+                fetch(ram, clr0_addr, vf.clr0_data_size, &mut scratch),
                 vf.vat_a.clr0_fmt(),
                 vf.vat_a.clr0_cnt(),
             )
@@ -435,7 +456,7 @@ impl GraphicsProcessor {
             let clr1_index = read_index(cur, vf.clr1_attr);
             let clr1_addr = vf.clr1_base + clr1_index * vf.clr1_stride;
             decode_color(
-                &ram[clr1_addr..clr1_addr + vf.clr1_data_size],
+                fetch(ram, clr1_addr, vf.clr1_data_size, &mut scratch),
                 vf.vat_a.clr1_fmt(),
                 vf.vat_a.clr1_cnt(),
             )
@@ -462,7 +483,7 @@ impl GraphicsProcessor {
                 let tc_index = read_index(cur, tc_attr);
                 let tc_addr = vf.tex_bases[tc] + tc_index * vf.tex_strides[tc];
                 decode_texcoord(
-                    &ram[tc_addr..tc_addr + tc_data_size],
+                    fetch(ram, tc_addr, tc_data_size, &mut scratch),
                     vf.tex_fmts[tc],
                     vf.tex_shifts[tc],
                     vf.tex_cnts[tc],

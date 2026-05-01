@@ -1,6 +1,5 @@
-use crate::GpuVertex;
 use crate::pipeline::PipelineKey;
-use crate::{BindGroupCacheKey, DrawUniforms, FrameUniforms, GxRenderer, SamplerKey, helpers};
+use crate::{BindGroupCacheKey, DrawUniforms, FrameUniforms, GpuVertex, GxRenderer, SamplerKey, helpers};
 use encase::{ShaderType as _, UniformBuffer};
 use gecko::flipper::gx::regs::{MagFilter, MinFilter, WrapMode};
 use gecko::host::{DrawData, GxAction};

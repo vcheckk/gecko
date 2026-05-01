@@ -1,9 +1,7 @@
 pub mod regs;
 
-use crate::{
-    flipper::dsp,
-    system::{System, SystemId},
-};
+use crate::flipper::dsp;
+use crate::system::{System, SystemId};
 
 const CPU_CORE_CLOCK: u64 = 486_000_000;
 const AUDIO_DMA_BLOCK_BYTES: u32 = 32;

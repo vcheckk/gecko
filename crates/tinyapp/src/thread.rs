@@ -1,5 +1,6 @@
 use crossbeam_channel::Sender;
-use gecko::flipper::{si::pad::PadStatus, vi::regs::RefreshRate};
+use gecko::flipper::si::pad::PadStatus;
+use gecko::flipper::vi::regs::RefreshRate;
 use gecko::system::{System, SystemId};
 use std::sync::{Arc, Mutex};
 use winit::event_loop::EventLoopProxy;

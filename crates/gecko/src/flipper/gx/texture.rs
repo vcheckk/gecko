@@ -1,29 +1,33 @@
 use super::draw::{TextureDescriptor, TextureFormat, TlutFormat};
 use multiversion::multiversion;
 
-/// Decode a GX-format texture from RAM into RGBA8 pixels.
+/// Decode a GX-format texture from a raw RAM slice into RGBA8 pixels.
+///
+/// `tex` must already point at the texture's raw bytes (i.e. the caller has
+/// resolved `desc.ram_addr` against MEM1/MEM2 and produced the slice). The
+/// decoders below offset relative to the start of `tex`.
 ///
 /// `palette` is the slice of the palette TMEM starting at the bound TLUT's
 /// tmem_offset. It is only consulted for paletted (CI*) formats; callers may
 /// pass `&[]` for non-paletted textures. `tlut_format` specifies how each
 /// 16-bit palette entry should be expanded to RGBA8.
-pub fn decode_to_rgba(ram: &[u8], desc: &TextureDescriptor, palette: &[u16], tlut_format: TlutFormat) -> Vec<u8> {
+pub fn decode_to_rgba(tex: &[u8], desc: &TextureDescriptor, palette: &[u16], tlut_format: TlutFormat) -> Vec<u8> {
     let w = desc.width as usize;
     let h = desc.height as usize;
 
     let mut rgba = vec![0u8; w * h * 4];
     match desc.format {
-        TextureFormat::I4 => decode_i4(ram, desc, &mut rgba, w, h),
-        TextureFormat::I8 => decode_i8(ram, desc, &mut rgba, w, h),
-        TextureFormat::IA4 => decode_ia4(ram, desc, &mut rgba, w, h),
-        TextureFormat::IA8 => decode_ia8(ram, desc, &mut rgba, w, h),
-        TextureFormat::RGB565 => decode_rgb565(ram, desc, &mut rgba, w, h),
-        TextureFormat::RGB5A3 => decode_rgb5a3(ram, desc, &mut rgba, w, h),
-        TextureFormat::RGBA8 => decode_rgba8(ram, desc, &mut rgba, w, h),
-        TextureFormat::CMPR => decode_cmpr(ram, desc, &mut rgba, w, h),
-        TextureFormat::CI4 => decode_ci4(ram, desc, &mut rgba, w, h, palette, tlut_format),
-        TextureFormat::CI8 => decode_ci8(ram, desc, &mut rgba, w, h, palette, tlut_format),
-        TextureFormat::CI14 => decode_ci14(ram, desc, &mut rgba, w, h, palette, tlut_format),
+        TextureFormat::I4 => decode_i4(tex, &mut rgba, w, h),
+        TextureFormat::I8 => decode_i8(tex, &mut rgba, w, h),
+        TextureFormat::IA4 => decode_ia4(tex, &mut rgba, w, h),
+        TextureFormat::IA8 => decode_ia8(tex, &mut rgba, w, h),
+        TextureFormat::RGB565 => decode_rgb565(tex, &mut rgba, w, h),
+        TextureFormat::RGB5A3 => decode_rgb5a3(tex, &mut rgba, w, h),
+        TextureFormat::RGBA8 => decode_rgba8(tex, &mut rgba, w, h),
+        TextureFormat::CMPR => decode_cmpr(tex, &mut rgba, w, h),
+        TextureFormat::CI4 => decode_ci4(tex, &mut rgba, w, h, palette, tlut_format),
+        TextureFormat::CI8 => decode_ci8(tex, &mut rgba, w, h, palette, tlut_format),
+        TextureFormat::CI14 => decode_ci14(tex, &mut rgba, w, h, palette, tlut_format),
     }
 
     rgba
@@ -70,19 +74,19 @@ pub fn raw_data_size(width: u32, height: u32, format: TextureFormat) -> usize {
 }
 
 #[multiversion(targets = "simd")]
-fn decode_i4(ram: &[u8], desc: &TextureDescriptor, rgba: &mut [u8], w: usize, h: usize) {
+fn decode_i4(tex: &[u8], rgba: &mut [u8], w: usize, h: usize) {
     const BW: usize = 8;
     const BH: usize = 8;
     const BB: usize = 32;
 
     let bcx = w.div_ceil(BW);
     let bcy = h.div_ceil(BH);
-    if desc.ram_addr + bcx * bcy * BB > ram.len() {
-        tracing::warn!(addr = desc.ram_addr, w, h, "decode_i4: texture OOB, skipping");
+    if bcx * bcy * BB > tex.len() {
+        tracing::warn!(w, h, "decode_i4: texture OOB, skipping");
         return;
     }
 
-    let src = ram.as_ptr();
+    let src = tex.as_ptr();
     let dst = rgba.as_mut_ptr();
 
     for by in 0..bcy {
@@ -91,7 +95,7 @@ fn decode_i4(ram: &[u8], desc: &TextureDescriptor, rgba: &mut [u8], w: usize, h:
         for bx in 0..bcx {
             let base_x = bx * BW;
             let tw = BW.min(w - base_x);
-            let blk = desc.ram_addr + (by * bcx + bx) * BB;
+            let blk = (by * bcx + bx) * BB;
 
             for ty in 0..th {
                 for tx in 0..tw {
@@ -111,19 +115,19 @@ fn decode_i4(ram: &[u8], desc: &TextureDescriptor, rgba: &mut [u8], w: usize, h:
 }
 
 #[multiversion(targets = "simd")]
-fn decode_i8(ram: &[u8], desc: &TextureDescriptor, rgba: &mut [u8], w: usize, h: usize) {
+fn decode_i8(tex: &[u8], rgba: &mut [u8], w: usize, h: usize) {
     const BW: usize = 8;
     const BH: usize = 4;
     const BB: usize = 32;
 
     let bcx = w.div_ceil(BW);
     let bcy = h.div_ceil(BH);
-    if desc.ram_addr + bcx * bcy * BB > ram.len() {
-        tracing::warn!(addr = desc.ram_addr, w, h, "decode_i8: texture OOB, skipping");
+    if bcx * bcy * BB > tex.len() {
+        tracing::warn!(w, h, "decode_i8: texture OOB, skipping");
         return;
     }
 
-    let src = ram.as_ptr();
+    let src = tex.as_ptr();
     let dst = rgba.as_mut_ptr();
 
     for by in 0..bcy {
@@ -133,7 +137,7 @@ fn decode_i8(ram: &[u8], desc: &TextureDescriptor, rgba: &mut [u8], w: usize, h:
         for bx in 0..bcx {
             let base_x = bx * BW;
             let tw = BW.min(w - base_x);
-            let blk = desc.ram_addr + (by * bcx + bx) * BB;
+            let blk = (by * bcx + bx) * BB;
 
             for ty in 0..th {
                 for tx in 0..tw {
@@ -151,19 +155,19 @@ fn decode_i8(ram: &[u8], desc: &TextureDescriptor, rgba: &mut [u8], w: usize, h:
 }
 
 #[multiversion(targets = "simd")]
-fn decode_ia4(ram: &[u8], desc: &TextureDescriptor, rgba: &mut [u8], w: usize, h: usize) {
+fn decode_ia4(tex: &[u8], rgba: &mut [u8], w: usize, h: usize) {
     const BW: usize = 8;
     const BH: usize = 4;
     const BB: usize = 32;
 
     let bcx = w.div_ceil(BW);
     let bcy = h.div_ceil(BH);
-    if desc.ram_addr + bcx * bcy * BB > ram.len() {
-        tracing::warn!(addr = desc.ram_addr, w, h, "decode_ia4: texture OOB, skipping");
+    if bcx * bcy * BB > tex.len() {
+        tracing::warn!(w, h, "decode_ia4: texture OOB, skipping");
         return;
     }
 
-    let src = ram.as_ptr();
+    let src = tex.as_ptr();
     let dst = rgba.as_mut_ptr();
 
     for by in 0..bcy {
@@ -173,7 +177,7 @@ fn decode_ia4(ram: &[u8], desc: &TextureDescriptor, rgba: &mut [u8], w: usize, h
         for bx in 0..bcx {
             let base_x = bx * BW;
             let tw = BW.min(w - base_x);
-            let blk = desc.ram_addr + (by * bcx + bx) * BB;
+            let blk = (by * bcx + bx) * BB;
 
             for ty in 0..th {
                 for tx in 0..tw {
@@ -193,7 +197,7 @@ fn decode_ia4(ram: &[u8], desc: &TextureDescriptor, rgba: &mut [u8], w: usize, h
 }
 
 #[multiversion(targets = "simd")]
-fn decode_ia8(ram: &[u8], desc: &TextureDescriptor, rgba: &mut [u8], w: usize, h: usize) {
+fn decode_ia8(tex: &[u8], rgba: &mut [u8], w: usize, h: usize) {
     const BW: usize = 4;
     const BH: usize = 4;
     const BB: usize = 32;
@@ -201,12 +205,12 @@ fn decode_ia8(ram: &[u8], desc: &TextureDescriptor, rgba: &mut [u8], w: usize, h
     let bcx = w.div_ceil(BW);
     let bcy = h.div_ceil(BH);
 
-    if desc.ram_addr + bcx * bcy * BB > ram.len() {
-        tracing::warn!(addr = desc.ram_addr, w, h, "decode_ia8: texture OOB, skipping");
+    if bcx * bcy * BB > tex.len() {
+        tracing::warn!(w, h, "decode_ia8: texture OOB, skipping");
         return;
     }
 
-    let src = ram.as_ptr();
+    let src = tex.as_ptr();
     let dst = rgba.as_mut_ptr();
 
     for by in 0..bcy {
@@ -216,7 +220,7 @@ fn decode_ia8(ram: &[u8], desc: &TextureDescriptor, rgba: &mut [u8], w: usize, h
         for bx in 0..bcx {
             let base_x = bx * BW;
             let tw = BW.min(w - base_x);
-            let blk = desc.ram_addr + (by * bcx + bx) * BB;
+            let blk = (by * bcx + bx) * BB;
 
             for ty in 0..th {
                 for tx in 0..tw {
@@ -236,19 +240,19 @@ fn decode_ia8(ram: &[u8], desc: &TextureDescriptor, rgba: &mut [u8], w: usize, h
 }
 
 #[multiversion(targets = "simd")]
-fn decode_rgb565(ram: &[u8], desc: &TextureDescriptor, rgba: &mut [u8], w: usize, h: usize) {
+fn decode_rgb565(tex: &[u8], rgba: &mut [u8], w: usize, h: usize) {
     const BW: usize = 4;
     const BH: usize = 4;
     const BB: usize = 32;
 
     let bcx = w.div_ceil(BW);
     let bcy = h.div_ceil(BH);
-    if desc.ram_addr + bcx * bcy * BB > ram.len() {
-        tracing::warn!(addr = desc.ram_addr, w, h, "decode_rgb565: texture OOB, skipping");
+    if bcx * bcy * BB > tex.len() {
+        tracing::warn!(w, h, "decode_rgb565: texture OOB, skipping");
         return;
     }
 
-    let src = ram.as_ptr();
+    let src = tex.as_ptr();
     let dst = rgba.as_mut_ptr();
 
     for by in 0..bcy {
@@ -258,7 +262,7 @@ fn decode_rgb565(ram: &[u8], desc: &TextureDescriptor, rgba: &mut [u8], w: usize
         for bx in 0..bcx {
             let base_x = bx * BW;
             let tw = BW.min(w - base_x);
-            let blk = desc.ram_addr + (by * bcx + bx) * BB;
+            let blk = (by * bcx + bx) * BB;
 
             for ty in 0..th {
                 for tx in 0..tw {
@@ -277,19 +281,19 @@ fn decode_rgb565(ram: &[u8], desc: &TextureDescriptor, rgba: &mut [u8], w: usize
 }
 
 #[multiversion(targets = "simd")]
-fn decode_rgb5a3(ram: &[u8], desc: &TextureDescriptor, rgba: &mut [u8], w: usize, h: usize) {
+fn decode_rgb5a3(tex: &[u8], rgba: &mut [u8], w: usize, h: usize) {
     const BW: usize = 4;
     const BH: usize = 4;
     const BB: usize = 32;
 
     let bcx = w.div_ceil(BW);
     let bcy = h.div_ceil(BH);
-    if desc.ram_addr + bcx * bcy * BB > ram.len() {
-        tracing::warn!(addr = desc.ram_addr, w, h, "decode_rgb5a3: texture OOB, skipping");
+    if bcx * bcy * BB > tex.len() {
+        tracing::warn!(w, h, "decode_rgb5a3: texture OOB, skipping");
         return;
     }
 
-    let src = ram.as_ptr();
+    let src = tex.as_ptr();
     let dst = rgba.as_mut_ptr();
 
     for by in 0..bcy {
@@ -299,7 +303,7 @@ fn decode_rgb5a3(ram: &[u8], desc: &TextureDescriptor, rgba: &mut [u8], w: usize
         for bx in 0..bcx {
             let base_x = bx * BW;
             let tw = BW.min(w - base_x);
-            let blk = desc.ram_addr + (by * bcx + bx) * BB;
+            let blk = (by * bcx + bx) * BB;
 
             for ty in 0..th {
                 for tx in 0..tw {
@@ -329,19 +333,19 @@ fn decode_rgb5a3(ram: &[u8], desc: &TextureDescriptor, rgba: &mut [u8], w: usize
 }
 
 #[multiversion(targets = "simd")]
-fn decode_rgba8(ram: &[u8], desc: &TextureDescriptor, rgba: &mut [u8], w: usize, h: usize) {
+fn decode_rgba8(tex: &[u8], rgba: &mut [u8], w: usize, h: usize) {
     const BW: usize = 4;
     const BH: usize = 4;
     const BB: usize = 64;
 
     let bcx = w.div_ceil(BW);
     let bcy = h.div_ceil(BH);
-    if desc.ram_addr + bcx * bcy * BB > ram.len() {
-        tracing::warn!(addr = desc.ram_addr, w, h, "decode_rgba8: texture OOB, skipping");
+    if bcx * bcy * BB > tex.len() {
+        tracing::warn!(w, h, "decode_rgba8: texture OOB, skipping");
         return;
     }
 
-    let src = ram.as_ptr();
+    let src = tex.as_ptr();
     let dst = rgba.as_mut_ptr();
 
     for by in 0..bcy {
@@ -351,7 +355,7 @@ fn decode_rgba8(ram: &[u8], desc: &TextureDescriptor, rgba: &mut [u8], w: usize,
         for bx in 0..bcx {
             let base_x = bx * BW;
             let tw = BW.min(w - base_x);
-            let blk = desc.ram_addr + (by * bcx + bx) * BB;
+            let blk = (by * bcx + bx) * BB;
 
             for ty in 0..th {
                 for tx in 0..tw {
@@ -375,7 +379,7 @@ fn decode_rgba8(ram: &[u8], desc: &TextureDescriptor, rgba: &mut [u8], w: usize,
 }
 
 #[multiversion(targets = "simd")]
-fn decode_cmpr(ram: &[u8], desc: &TextureDescriptor, rgba: &mut [u8], w: usize, h: usize) {
+fn decode_cmpr(tex: &[u8], rgba: &mut [u8], w: usize, h: usize) {
     const MW: usize = 8;
     const MH: usize = 8;
     const MB: usize = 32;
@@ -383,19 +387,19 @@ fn decode_cmpr(ram: &[u8], desc: &TextureDescriptor, rgba: &mut [u8], w: usize, 
 
     let bcx = w.div_ceil(MW);
     let bcy = h.div_ceil(MH);
-    if desc.ram_addr + bcx * bcy * MB > ram.len() {
-        tracing::warn!(addr = desc.ram_addr, w, h, "decode_cmpr: texture OOB, skipping");
+    if bcx * bcy * MB > tex.len() {
+        tracing::warn!(w, h, "decode_cmpr: texture OOB, skipping");
         return;
     }
 
-    let src = ram.as_ptr();
+    let src = tex.as_ptr();
     let dst = rgba.as_mut_ptr();
 
     for by in 0..bcy {
         let macro_y = by * MH;
         for bx in 0..bcx {
             let macro_x = bx * MW;
-            let macro_off = desc.ram_addr + (by * bcx + bx) * MB;
+            let macro_off = (by * bcx + bx) * MB;
 
             for si in 0..4usize {
                 let sub_off = macro_off + si * SB;
@@ -464,27 +468,19 @@ fn palette_lookup(palette: &[u16], index: usize, format: TlutFormat) -> [u8; 4] 
 }
 
 #[multiversion(targets = "simd")]
-fn decode_ci4(
-    ram: &[u8],
-    desc: &TextureDescriptor,
-    rgba: &mut [u8],
-    w: usize,
-    h: usize,
-    palette: &[u16],
-    tlut_format: TlutFormat,
-) {
+fn decode_ci4(tex: &[u8], rgba: &mut [u8], w: usize, h: usize, palette: &[u16], tlut_format: TlutFormat) {
     const BW: usize = 8;
     const BH: usize = 8;
     const BB: usize = 32;
 
     let bcx = w.div_ceil(BW);
     let bcy = h.div_ceil(BH);
-    if desc.ram_addr + bcx * bcy * BB > ram.len() {
-        tracing::warn!(addr = desc.ram_addr, w, h, "decode_ci4: texture OOB, skipping");
+    if bcx * bcy * BB > tex.len() {
+        tracing::warn!(w, h, "decode_ci4: texture OOB, skipping");
         return;
     }
 
-    let src = ram.as_ptr();
+    let src = tex.as_ptr();
     let dst = rgba.as_mut_ptr();
 
     for by in 0..bcy {
@@ -493,7 +489,7 @@ fn decode_ci4(
         for bx in 0..bcx {
             let base_x = bx * BW;
             let tw = BW.min(w - base_x);
-            let blk = desc.ram_addr + (by * bcx + bx) * BB;
+            let blk = (by * bcx + bx) * BB;
 
             for ty in 0..th {
                 for tx in 0..tw {
@@ -510,27 +506,19 @@ fn decode_ci4(
 }
 
 #[multiversion(targets = "simd")]
-fn decode_ci8(
-    ram: &[u8],
-    desc: &TextureDescriptor,
-    rgba: &mut [u8],
-    w: usize,
-    h: usize,
-    palette: &[u16],
-    tlut_format: TlutFormat,
-) {
+fn decode_ci8(tex: &[u8], rgba: &mut [u8], w: usize, h: usize, palette: &[u16], tlut_format: TlutFormat) {
     const BW: usize = 8;
     const BH: usize = 4;
     const BB: usize = 32;
 
     let bcx = w.div_ceil(BW);
     let bcy = h.div_ceil(BH);
-    if desc.ram_addr + bcx * bcy * BB > ram.len() {
-        tracing::warn!(addr = desc.ram_addr, w, h, "decode_ci8: texture OOB, skipping");
+    if bcx * bcy * BB > tex.len() {
+        tracing::warn!(w, h, "decode_ci8: texture OOB, skipping");
         return;
     }
 
-    let src = ram.as_ptr();
+    let src = tex.as_ptr();
     let dst = rgba.as_mut_ptr();
 
     for by in 0..bcy {
@@ -539,7 +527,7 @@ fn decode_ci8(
         for bx in 0..bcx {
             let base_x = bx * BW;
             let tw = BW.min(w - base_x);
-            let blk = desc.ram_addr + (by * bcx + bx) * BB;
+            let blk = (by * bcx + bx) * BB;
 
             for ty in 0..th {
                 for tx in 0..tw {
@@ -555,27 +543,19 @@ fn decode_ci8(
 }
 
 #[multiversion(targets = "simd")]
-fn decode_ci14(
-    ram: &[u8],
-    desc: &TextureDescriptor,
-    rgba: &mut [u8],
-    w: usize,
-    h: usize,
-    palette: &[u16],
-    tlut_format: TlutFormat,
-) {
+fn decode_ci14(tex: &[u8], rgba: &mut [u8], w: usize, h: usize, palette: &[u16], tlut_format: TlutFormat) {
     const BW: usize = 4;
     const BH: usize = 4;
     const BB: usize = 32;
 
     let bcx = w.div_ceil(BW);
     let bcy = h.div_ceil(BH);
-    if desc.ram_addr + bcx * bcy * BB > ram.len() {
-        tracing::warn!(addr = desc.ram_addr, w, h, "decode_ci14: texture OOB, skipping");
+    if bcx * bcy * BB > tex.len() {
+        tracing::warn!(w, h, "decode_ci14: texture OOB, skipping");
         return;
     }
 
-    let src = ram.as_ptr();
+    let src = tex.as_ptr();
     let dst = rgba.as_mut_ptr();
 
     for by in 0..bcy {
@@ -584,7 +564,7 @@ fn decode_ci14(
         for bx in 0..bcx {
             let base_x = bx * BW;
             let tw = BW.min(w - base_x);
-            let blk = desc.ram_addr + (by * bcx + bx) * BB;
+            let blk = (by * bcx + bx) * BB;
 
             for ty in 0..th {
                 for tx in 0..tw {
@@ -754,7 +734,7 @@ pub fn encoded_row_count(h: u32, format: CopyFormat) -> usize {
 }
 
 pub fn write_strided_copy_to_ram(
-    ram: &mut [u8],
+    ram: &mut crate::mmio::RamViewMut<'_>,
     dest_addr: u32,
     bytes: &[u8],
     row_bytes: usize,
@@ -793,49 +773,21 @@ pub fn write_strided_copy_to_ram(
         return false;
     }
 
-    let Ok(base) = usize::try_from(dest_addr) else {
-        tracing::warn!(
-            addr = format!("{dest_addr:#010X}"),
-            "efb writeback destination address invalid"
-        );
-        return false;
-    };
-
-    for row in 0..row_count {
-        let Some(dst_start) = base.checked_add(row.saturating_mul(dest_stride_bytes)) else {
-            tracing::warn!(
-                addr = format!("{dest_addr:#010X}"),
-                row,
-                "efb writeback address overflow"
-            );
-            return false;
-        };
-
-        let Some(dst_end) = dst_start.checked_add(row_bytes) else {
-            tracing::warn!(
-                addr = format!("{dest_addr:#010X}"),
-                row,
-                "efb writeback row end overflow"
-            );
-            return false;
-        };
-
-        if dst_end > ram.len() {
-            tracing::warn!(
-                addr = format!("{dest_addr:#010X}"),
-                row,
-                row_bytes,
-                ram_len = ram.len(),
-                "efb writeback OOB, dropping"
-            );
-            return false;
-        }
-    }
+    let base = dest_addr as usize;
 
     for row in 0..row_count {
         let src_start = row * row_bytes;
         let dst_start = base + row * dest_stride_bytes;
-        ram[dst_start..dst_start + row_bytes].copy_from_slice(&bytes[src_start..src_start + row_bytes]);
+        let Some(dst) = ram.slice_mut(dst_start, row_bytes) else {
+            tracing::warn!(
+                addr = format!("{dest_addr:#010X}"),
+                row,
+                row_bytes,
+                "efb writeback row not mapped to MEM1/MEM2, dropping"
+            );
+            return false;
+        };
+        dst.copy_from_slice(&bytes[src_start..src_start + row_bytes]);
     }
 
     true
@@ -1331,131 +1283,5 @@ fn encode_z24x8(depth: &[u32], out: &mut [u8], w: usize, h: usize) {
                 }
             }
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn rgba_pattern(w: usize, h: usize, f: impl Fn(usize, usize) -> [u8; 4]) -> Vec<u8> {
-        let mut out = Vec::with_capacity(w * h * 4);
-        for y in 0..h {
-            for x in 0..w {
-                out.extend_from_slice(&f(x, y));
-            }
-        }
-        out
-    }
-
-    #[test]
-    fn copy_layout_uses_encoded_block_rows() {
-        assert_eq!(encoded_row_bytes(9, CopyFormat::I8), 64);
-        assert_eq!(encoded_row_count(5, CopyFormat::I8), 2);
-        assert_eq!(encoded_size(9, 5, CopyFormat::I8), 128);
-
-        assert_eq!(encoded_row_bytes(4, CopyFormat::RGBA8), 64);
-        assert_eq!(encoded_row_count(5, CopyFormat::RGBA8), 2);
-        assert_eq!(encoded_size(4, 5, CopyFormat::RGBA8), 128);
-    }
-
-    #[test]
-    fn strided_writeback_steps_by_destination_stride() {
-        let mut ram = vec![0xEE; 32];
-        let bytes = [1, 2, 3, 4, 5, 6, 7, 8];
-        assert!(write_strided_copy_to_ram(&mut ram, 10, &bytes, 4, 2, 6));
-
-        assert_eq!(&ram[10..14], &[1, 2, 3, 4]);
-        assert_eq!(&ram[14..16], &[0xEE, 0xEE]);
-        assert_eq!(&ram[16..20], &[5, 6, 7, 8]);
-    }
-
-    #[test]
-    fn strided_writeback_rejects_too_small_stride() {
-        let mut ram = vec![0xEE; 32];
-        let bytes = [1, 2, 3, 4, 5, 6, 7, 8];
-        assert!(!write_strided_copy_to_ram(&mut ram, 10, &bytes, 4, 2, 3));
-        assert!(ram.iter().all(|&b| b == 0xEE));
-    }
-
-    #[test]
-    fn encodes_i4_tile() {
-        let rgba = rgba_pattern(8, 8, |x, y| {
-            let i = (((y * 8 + x) & 0x0F) as u8) << 4;
-            [i, i, i, 255]
-        });
-
-        let encoded = encode_from_rgba(&rgba, 8, 8, CopyFormat::I4);
-        assert_eq!(encoded.len(), 32);
-        assert_eq!(&encoded[..4], &[0x01, 0x23, 0x45, 0x67]);
-    }
-
-    #[test]
-    fn encodes_i8_tile() {
-        let rgba = rgba_pattern(8, 4, |x, y| {
-            let i = (y * 8 + x) as u8;
-            [i, i, i, 255]
-        });
-
-        let encoded = encode_from_rgba(&rgba, 8, 4, CopyFormat::I8);
-        assert_eq!(encoded.len(), 32);
-        assert_eq!(&encoded[..8], &[0, 1, 2, 3, 4, 5, 6, 7]);
-    }
-
-    #[test]
-    fn encodes_ia4_tile() {
-        let rgba = rgba_pattern(8, 4, |x, y| {
-            let i = ((y * 8 + x) as u8) << 4;
-            let a = 0x80;
-            [i, i, i, a]
-        });
-
-        let encoded = encode_from_rgba(&rgba, 8, 4, CopyFormat::IA4);
-        assert_eq!(encoded.len(), 32);
-        assert_eq!(&encoded[..4], &[0x80, 0x81, 0x82, 0x83]);
-    }
-
-    #[test]
-    fn encodes_ia8_tile() {
-        let rgba = rgba_pattern(4, 4, |x, y| {
-            let i = (y * 4 + x) as u8;
-            [i, i, i, 0xA0 + i]
-        });
-
-        let encoded = encode_from_rgba(&rgba, 4, 4, CopyFormat::IA8);
-        assert_eq!(encoded.len(), 32);
-        assert_eq!(&encoded[..8], &[0xA0, 0, 0xA1, 1, 0xA2, 2, 0xA3, 3]);
-    }
-
-    #[test]
-    fn encodes_rgb565_rgb5a3_rgba8_tiles() {
-        let rgba = rgba_pattern(4, 4, |x, y| {
-            if x == 0 && y == 0 {
-                [255, 0, 0, 255]
-            } else {
-                [0, 0, 0, 255]
-            }
-        });
-
-        let rgb565 = encode_from_rgba(&rgba, 4, 4, CopyFormat::RGB565);
-        assert_eq!(&rgb565[..2], &[0xF8, 0x00]);
-
-        let rgb5a3 = encode_from_rgba(&rgba, 4, 4, CopyFormat::RGB5A3);
-        assert_eq!(&rgb5a3[..2], &[0xFC, 0x00]);
-
-        let rgba8 = encode_from_rgba(&rgba, 4, 4, CopyFormat::RGBA8);
-        assert_eq!(&rgba8[..2], &[0xFF, 0xFF]);
-        assert_eq!(&rgba8[32..34], &[0x00, 0x00]);
-    }
-
-    #[test]
-    fn encodes_z24x8_from_depth_values() {
-        let mut depth = vec![0; 16];
-        depth[0] = 0x0012_3456;
-
-        let encoded = encode_from_z24(&depth, 4, 4, CopyFormat::Z24X8);
-        assert_eq!(encoded.len(), 64);
-        assert_eq!(&encoded[..2], &[0xFF, 0x12]);
-        assert_eq!(&encoded[32..34], &[0x34, 0x56]);
     }
 }

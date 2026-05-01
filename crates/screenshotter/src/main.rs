@@ -1,5 +1,4 @@
-use backend_wgpu::GxRenderer;
-use backend_wgpu::capture;
+use backend_wgpu::{GxRenderer, capture};
 use gecko::flipper::si::pad;
 use gecko::flipper::si::pad::PadStatus;
 use gecko::flipper::vi::regs::RefreshRate;

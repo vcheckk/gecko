@@ -1,5 +1,4 @@
-use crate::GpuVertex;
-use crate::{GxRenderer, helpers};
+use crate::{GpuVertex, GxRenderer, helpers};
 use gecko::flipper::gx::regs::{BlendFactor, CompareFunc, CullMode};
 
 #[derive(Clone, Copy, Hash, PartialEq, Eq)]

@@ -1,9 +1,8 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use crate::GxRenderer;
-use crate::align_up;
 use crate::capture::{self, CapturedFrame};
+use crate::{GxRenderer, align_up};
 
 impl GxRenderer {
     pub(crate) fn dump_textures(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, dir: &Path) {

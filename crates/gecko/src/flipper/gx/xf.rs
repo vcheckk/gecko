@@ -2,6 +2,7 @@ use super::constants::*;
 use super::math::Vec3;
 use super::{GraphicsProcessor, draw};
 use crate::host::{GxAction, RenderSink};
+use crate::mmio::RamView;
 
 impl GraphicsProcessor {
     pub fn xf_transform_3x4(&self, base: usize, v: [f32; 3]) -> Vec3 {
@@ -136,7 +137,7 @@ impl GraphicsProcessor {
     pub fn load_indexed_xf(
         &mut self,
         renderer: &mut dyn RenderSink,
-        ram: &[u8],
+        ram: &RamView<'_>,
         cp_array_index: u8,
         index: u16,
         xf_addr: u16,
@@ -150,14 +151,17 @@ impl GraphicsProcessor {
         let n = xf_count as usize;
         let end = dst_addr + n;
 
+        let Some(src) = ram.slice(src_addr, n * 4) else {
+            tracing::warn!(
+                src_addr = format!("{src_addr:#010X}"),
+                bytes = n * 4,
+                "load_indexed_xf: source not mapped to MEM1/MEM2, skipping"
+            );
+            return;
+        };
         for i in 0..n {
-            let ram_offset = src_addr + i * 4;
-            let val = u32::from_be_bytes([
-                ram[ram_offset],
-                ram[ram_offset + 1],
-                ram[ram_offset + 2],
-                ram[ram_offset + 3],
-            ]);
+            let off = i * 4;
+            let val = u32::from_be_bytes([src[off], src[off + 1], src[off + 2], src[off + 3]]);
             let reg = dst_addr + i;
             if reg < self.xf_mem.len() {
                 self.xf_mem[reg] = val;

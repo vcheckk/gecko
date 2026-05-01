@@ -1,8 +1,6 @@
+use crate::System;
+use crate::hollywood::ipc::{DeviceContext, IosDevice};
 use crate::system::SystemId;
-use crate::{
-    System,
-    hollywood::ipc::{DeviceContext, IosDevice},
-};
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 

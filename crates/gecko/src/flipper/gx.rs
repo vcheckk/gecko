@@ -170,19 +170,33 @@ impl GraphicsProcessor {
             match cmd {
                 FifoCmd::Cp(data) => self.load_cp(&data),
                 FifoCmd::Xf(data) => self.load_xf(renderer, &data),
-                FifoCmd::Bp(data) => self.load_bp(renderer, &mut mmio.ram, &data),
+                FifoCmd::Bp(data) => {
+                    let mut view = mmio.ram_view_mut();
+                    self.load_bp(renderer, &mut view, &data);
+                }
                 FifoCmd::LoadIndexedXf {
                     cp_array_index,
                     index,
                     xf_addr,
                     xf_count,
                 } => {
-                    self.load_indexed_xf(renderer, &mmio.ram, cp_array_index, index, xf_addr, xf_count);
+                    let view = mmio.ram_view();
+                    self.load_indexed_xf(renderer, &view, cp_array_index, index, xf_addr, xf_count);
                 }
                 FifoCmd::CallDisplayList { phys_addr, nbytes } => {
                     let addr = (phys_addr & 0x3FFFFFFF) as usize;
                     let len = nbytes as usize;
-                    self.execute_display_list(mmio, renderer, &mmio.ram[addr..addr + len].to_vec());
+                    let view = mmio.ram_view();
+                    let Some(slice) = view.slice(addr, len) else {
+                        tracing::warn!(
+                            addr = format!("{addr:#010X}"),
+                            len,
+                            "CallDisplayList: source not mapped to MEM1/MEM2, skipping"
+                        );
+                        continue;
+                    };
+                    let dl = slice.to_vec();
+                    self.execute_display_list(mmio, renderer, &dl);
                 }
                 FifoCmd::DrawCall(cmd, data) => self.create_draw_call(mmio, renderer, cmd, data),
             }

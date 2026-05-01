@@ -16,6 +16,63 @@ pub struct Mmio<const SYSTEM: SystemId> {
     pub mem2: Vec<u8>,
 }
 
+/// Read-only view over MEM1 plus (on Wii) MEM2, addressed by physical
+/// address. Lets GP code that doesn't care about the bank just pass the
+/// view through and call `.slice(addr, len)` to resolve.
+pub struct RamView<'a> {
+    pub mem1: &'a [u8],
+    pub mem2: &'a [u8],
+}
+
+impl<'a> RamView<'a> {
+    /// Resolve `[addr..addr+len]` to a slice in whichever bank holds it.
+    /// Returns `None` when the range is outside both banks or crosses a
+    /// bank boundary.
+    #[inline(always)]
+    pub fn slice(&self, addr: usize, len: usize) -> Option<&'a [u8]> {
+        let end = addr.checked_add(len)?;
+        if addr < self.mem1.len() {
+            (end <= self.mem1.len()).then(|| &self.mem1[addr..end])
+        } else if (MEM2_BASE as usize..).contains(&addr) {
+            let off = addr - MEM2_BASE as usize;
+            let end_off = off.checked_add(len)?;
+            (end_off <= self.mem2.len()).then(|| &self.mem2[off..end_off])
+        } else {
+            None
+        }
+    }
+}
+
+/// Mutable counterpart of `RamView`. Used by EFB writeback into RAM.
+pub struct RamViewMut<'a> {
+    pub mem1: &'a mut [u8],
+    pub mem2: &'a mut [u8],
+}
+
+impl<'a> RamViewMut<'a> {
+    #[inline(always)]
+    pub fn as_view(&self) -> RamView<'_> {
+        RamView {
+            mem1: self.mem1,
+            mem2: self.mem2,
+        }
+    }
+
+    #[inline(always)]
+    pub fn slice_mut(&mut self, addr: usize, len: usize) -> Option<&mut [u8]> {
+        let end = addr.checked_add(len)?;
+        if addr < self.mem1.len() {
+            (end <= self.mem1.len()).then(|| &mut self.mem1[addr..end])
+        } else if (MEM2_BASE as usize..).contains(&addr) {
+            let off = addr - MEM2_BASE as usize;
+            let end_off = off.checked_add(len)?;
+            (end_off <= self.mem2.len()).then(|| &mut self.mem2[off..end_off])
+        } else {
+            None
+        }
+    }
+}
+
 impl<const SYSTEM: SystemId> Mmio<SYSTEM> {
     pub fn new() -> Self {
         Mmio {
@@ -175,6 +232,25 @@ impl<const SYSTEM: SystemId> Mmio<SYSTEM> {
     pub fn phys_slice_mut(&mut self, addr: u32, len: usize) -> &mut [u8] {
         let (slice, offset) = self.resolve_mut(addr);
         &mut slice[offset..offset + len]
+    }
+
+    /// Read-only view spanning MEM1 and (on Wii) MEM2. Used by the GP path
+    /// so texture / vertex / TLUT reads can resolve addresses in either bank.
+    #[inline(always)]
+    pub fn ram_view(&self) -> RamView<'_> {
+        RamView {
+            mem1: &self.ram,
+            mem2: &self.mem2,
+        }
+    }
+
+    /// Mutable counterpart.
+    #[inline(always)]
+    pub fn ram_view_mut(&mut self) -> RamViewMut<'_> {
+        RamViewMut {
+            mem1: &mut self.ram,
+            mem2: &mut self.mem2,
+        }
     }
 
     /// Copy `size_of::<T>()` bytes starting at `addr` into a fresh `T`. The

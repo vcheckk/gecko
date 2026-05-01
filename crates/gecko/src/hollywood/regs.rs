@@ -1,7 +1,5 @@
-use crate::{
-    System, SystemId,
-    mmio::traits::{MmioAccess, WriteMask},
-};
+use crate::mmio::traits::{MmioAccess, WriteMask};
+use crate::{System, SystemId};
 
 // 0x0D00_0000 PPCMSG
 #[chapa::bitfield(u32, order = lsb0)]

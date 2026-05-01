@@ -1,5 +1,4 @@
-use crate::{FrameUniforms, GxRenderer};
-use crate::{GpuVertex, align_up};
+use crate::{FrameUniforms, GpuVertex, GxRenderer, align_up};
 use encase::ShaderType as _;
 use gecko::common::Address;
 #[cfg(feature = "efb-writeback")]

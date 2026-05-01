@@ -3,11 +3,12 @@ use super::regs::*;
 use super::{GraphicsProcessor, draw, texture};
 use crate::common::Address;
 use crate::host::{GxAction, RenderSink};
+use crate::mmio::{RamView, RamViewMut};
 #[cfg(feature = "efb-writeback")]
 use std::time::Duration;
 
 impl GraphicsProcessor {
-    pub fn load_bp(&mut self, renderer: &mut dyn RenderSink, ram: &mut [u8], data: &[u8]) {
+    pub fn load_bp(&mut self, renderer: &mut dyn RenderSink, ram: &mut RamViewMut<'_>, data: &[u8]) {
         let idx = data[0] as usize;
         let val = u32::from_be_bytes([0, data[1], data[2], data[3]]);
         self.bp_regs[idx] = val;
@@ -29,7 +30,7 @@ impl GraphicsProcessor {
         };
 
         if let Some(slot) = texture_slot {
-            self.snapshot_texture(renderer, ram, slot, val);
+            self.snapshot_texture(renderer, &ram.as_view(), slot, val);
         }
 
         // TX_SETTLUT: per-texture-slot binding of the palette (tmem offset +
@@ -46,7 +47,7 @@ impl GraphicsProcessor {
         };
         if let Some(slot) = tlut_slot {
             self.cur_tluts[slot] = draw::TlutRef::from_raw(val);
-            self.resnapshot_paletted_slot(renderer, ram, slot);
+            self.resnapshot_paletted_slot(renderer, &ram.as_view(), slot);
         }
 
         // LOADTLUT: writing TLUT1 triggers a copy from main RAM (address in
@@ -56,9 +57,9 @@ impl GraphicsProcessor {
         // the load, so rescan all bound paletted slots (saw this in Dolphin @
         // TMEM::InvalidateAll on LOADTLUT1).
         if idx == BP_LOAD_TLUT1 {
-            self.load_tlut(ram, val);
+            self.load_tlut(&ram.as_view(), val);
             for slot in 0..self.cur_textures.len() {
-                self.resnapshot_paletted_slot(renderer, ram, slot);
+                self.resnapshot_paletted_slot(renderer, &ram.as_view(), slot);
             }
         }
 
@@ -201,7 +202,7 @@ impl GraphicsProcessor {
         }
     }
 
-    fn snapshot_texture(&mut self, renderer: &mut dyn RenderSink, ram: &[u8], slot: usize, image3_val: u32) {
+    fn snapshot_texture(&mut self, renderer: &mut dyn RenderSink, ram: &RamView<'_>, slot: usize, image3_val: u32) {
         let image0_reg = if slot < 4 {
             BP_TX_SETIMAGE0_I0 + slot
         } else {
@@ -237,16 +238,26 @@ impl GraphicsProcessor {
         let tlut = self.cur_tluts[slot];
         let palette = slot_palette(&self.palette_mem, tlut.tmem_offset);
 
-        let changed = self::texture_data_changed(
-            &mut self.texture_hashes,
-            ram,
-            ram_addr,
-            width,
-            height,
-            format,
-            palette,
-            tlut,
-        );
+        // Resolve the texture's raw bytes once, against MEM1 or MEM2. If the
+        // address doesn't fall in either bank, leave the slot's last binding
+        // alone but skip the decode (the renderer will keep its previous
+        // texture for this id).
+        let raw_size = texture::raw_data_size(width, height, format);
+        let tex_slice = ram.slice(ram_addr, raw_size);
+
+        let changed = match tex_slice {
+            Some(tex) => {
+                self::texture_data_changed(&mut self.texture_hashes, tex, ram_addr as u32, palette, tlut, format)
+            }
+            None => {
+                tracing::warn!(
+                    addr = format!("{ram_addr:#010X}"),
+                    raw_size,
+                    "texture: address not mapped to MEM1/MEM2, skipping decode"
+                );
+                false
+            }
+        };
 
         if changed {
             let desc = draw::TextureDescriptor {
@@ -264,7 +275,7 @@ impl GraphicsProcessor {
                 width,
                 height,
                 fmt: format,
-                rgba: texture::decode_to_rgba(ram, &desc, palette, tlut.format),
+                rgba: texture::decode_to_rgba(tex_slice.unwrap(), &desc, palette, tlut.format),
             });
         }
 
@@ -292,7 +303,7 @@ impl GraphicsProcessor {
     /// If the slot currently binds a paletted texture, rerun the snapshot
     /// pipeline so `texture_data_changed` rehashes the (now possibly fresh)
     /// palette bytes + TLUT format and decodes a new RGBA if anything moved.
-    fn resnapshot_paletted_slot(&mut self, renderer: &mut dyn RenderSink, ram: &[u8], slot: usize) {
+    fn resnapshot_paletted_slot(&mut self, renderer: &mut dyn RenderSink, ram: &RamView<'_>, slot: usize) {
         let Some(desc) = self.cur_textures[slot] else {
             return;
         };
@@ -374,7 +385,7 @@ impl GraphicsProcessor {
         }
     }
 
-    fn efb_copy(&mut self, renderer: &mut dyn RenderSink, ram: &mut [u8], trigger: u32) {
+    fn efb_copy(&mut self, renderer: &mut dyn RenderSink, ram: &mut RamViewMut<'_>, trigger: u32) {
         let src = EfbCopySrc::from_raw(self.bp_regs[BP_PE_COPY_SRC]);
         let dims = EfbCopyDims::from_raw(self.bp_regs[BP_PE_COPY_DIMS]);
         let src_x = src.left() as u32;
@@ -555,24 +566,18 @@ fn slot_palette(palette_mem: &[u16], tmem_offset: u16) -> &[u16] {
     palette_mem.get(base..).unwrap_or(&[])
 }
 
-/// Returns `true` when the raw texture data in RAM differs from the last
-/// hash recorded for the given address.
+/// Returns `true` when the raw texture data in `tex` differs from the last
+/// hash recorded for the given address. `tex` is the already resolved slice
+/// for the texture (caller has already mapped MEM1/MEM2).
 fn texture_data_changed(
     hashes: &mut rustc_hash::FxHashMap<u32, u64>,
-    ram: &[u8],
-    addr: usize,
-    width: u32,
-    height: u32,
-    format: draw::TextureFormat,
+    tex: &[u8],
+    addr: u32,
     palette: &[u16],
     tlut: draw::TlutRef,
+    format: draw::TextureFormat,
 ) -> bool {
-    let size = texture::raw_data_size(width, height, format);
-    let Some(slice) = ram.get(addr..addr + size) else {
-        tracing::warn!(addr, size, "texture_changed: RAM slice OOB, assuming changed");
-        return true;
-    };
-    let mut hash = twox_hash::xxhash3_64::Hasher::oneshot(slice);
+    let mut hash = twox_hash::xxhash3_64::Hasher::oneshot(tex);
     if format.is_paletted() {
         let max_entries = match format {
             draw::TextureFormat::CI4 => 16,
@@ -587,18 +592,19 @@ fn texture_data_changed(
         // into the hash or a format switch alone wouldn't force a redecode.
         hash ^= tlut.format as u64;
     }
-    let prev = hashes.insert(addr as u32, hash);
+    let prev = hashes.insert(addr, hash);
     prev != Some(hash)
 }
 
 impl GraphicsProcessor {
     /// Service a write to BP_LOAD_TLUT1: pulls `count * 16` big-endian u16
     /// palette entries from main RAM (source address is BP_LOAD_TLUT0 << 5)
-    /// into palette TMEM starting at `tmem_offset * 256`.
-    fn load_tlut(&mut self, ram: &[u8], load_val: u32) {
+    /// into palette TMEM starting at `tmem_offset * 256`. The source address
+    /// can fall in either MEM1 or MEM2 on Wii titles.
+    fn load_tlut(&mut self, ram: &RamView<'_>, load_val: u32) {
         let tmem_offset = (load_val & 0x3FF) as usize;
         let count = ((load_val >> 10) & 0x7FF) as usize;
-        let ram_base = ((self.bp_regs[BP_LOAD_TLUT0] as usize) << 5) & 0x01FF_FFFF;
+        let ram_base = (self.bp_regs[BP_LOAD_TLUT0] as usize) << 5;
         let entries = count * TLUT_LOAD_ENTRIES_PER_UNIT;
         let byte_count = entries * 2;
         let dst_base = tmem_offset * TLUT_ENTRIES_PER_UNIT;
@@ -606,14 +612,14 @@ impl GraphicsProcessor {
         if entries == 0 {
             return;
         }
-        if ram_base.saturating_add(byte_count) > ram.len() {
+        let Some(src) = ram.slice(ram_base, byte_count) else {
             tracing::warn!(
                 ram_base = format!("{ram_base:#010X}"),
                 byte_count,
-                "LOADTLUT: source RAM range OOB, skipping"
+                "LOADTLUT: source address not mapped to MEM1/MEM2, skipping"
             );
             return;
-        }
+        };
         if dst_base.saturating_add(entries) > self.palette_mem.len() {
             tracing::warn!(
                 dst_base,
@@ -624,7 +630,6 @@ impl GraphicsProcessor {
             return;
         }
 
-        let src = &ram[ram_base..ram_base + byte_count];
         let dst = &mut self.palette_mem[dst_base..dst_base + entries];
         for (entry, chunk) in dst.iter_mut().zip(src.chunks_exact(2)) {
             *entry = u16::from_be_bytes([chunk[0], chunk[1]]);
