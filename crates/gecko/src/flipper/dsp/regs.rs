@@ -292,6 +292,21 @@ impl<const SYSTEM: SystemId> MmioAccess<System<SYSTEM>> for AudioDmaControl {
     }
 }
 
+// 0xCC00503A 2 [R] Audio DMA Blocks Remaining
+
+#[chapa::bitfield(u16, order = lsb0)]
+#[derive(Copy, Clone, Debug)]
+pub struct AudioDmaBlocksLeft {}
+crate::mmio_reg!(AudioDmaBlocksLeft: u16 @ 0xCC00503A);
+
+impl<const SYSTEM: SystemId> MmioAccess<System<SYSTEM>> for AudioDmaBlocksLeft {
+    fn read(gc: &mut System<SYSTEM>) -> Self {
+        Self::from_raw(gc.ai.audio_dma_remaining_blocks.saturating_sub(1))
+    }
+
+    fn write(self, _: &mut System<SYSTEM>, _: WriteMask) {}
+}
+
 // 0xCC005028 4 [R/W] ARAM DMA Count/Control
 
 #[derive(BitEnum, Debug, PartialEq, Eq)]

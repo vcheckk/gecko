@@ -127,6 +127,7 @@ impl System<{ crate::WII }> {
         self.starlet.register("/dev/es", Box::new(ipc::es::ETicketServices));
         self.starlet
             .register("/dev/usb/oh1/57e/305", Box::new(ipc::usb::Bluetooth::new()));
+        self.starlet.register("/dev/sdio/slot0", Box::new(ipc::sdio::SdCard));
     }
 
     pub fn create_device_context(&mut self) -> (&mut Starlet, DeviceContext<'_>) {

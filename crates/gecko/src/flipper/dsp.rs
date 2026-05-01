@@ -265,6 +265,7 @@ crate::mmio_device_dispatch! {
         regs::AramDmaControl,
         regs::AudioDmaStartAddr,
         regs::AudioDmaControl,
+        regs::AudioDmaBlocksLeft,
     ],
 }
 
