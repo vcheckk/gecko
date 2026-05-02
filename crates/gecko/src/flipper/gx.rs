@@ -15,7 +15,7 @@ use crate::flipper::gx::draw::Matrix4;
 use crate::flipper::gx::regs::{AlphaCompare, BlendMode, TevAlphaEnv, TevColorEnv, TevRegisterH, TevRegisterL, ZMode};
 #[cfg(feature = "efb-writeback")]
 use crate::host::EfbWriteback;
-use crate::host::{GxAction, RenderSink, XfbPart};
+use crate::host::{GxAction, RenderSink, TextureKey, XfbPart};
 use crate::mmio::Mmio;
 use crate::system::{System, SystemId};
 use rustc_hash::FxHashMap;
@@ -70,11 +70,11 @@ pub struct GraphicsProcessor {
     // XFB copies accumulated since the last vblank. `present_xfb()` drains
     // this at each field boundary to emit a PresentXfb action.
     pub xfb_copies: Vec<XfbCopy>,
-    // Hash of the raw texture data at each (ram_addr, tlut_variant) cache id;
-    // used to detect when texture content changes and avoid redundant
-    // decodes + LoadTexture sends. Keyed by the same u64 cache id sent to
-    // the renderer in [`GxAction::LoadTexture`].
-    pub texture_hashes: FxHashMap<u64, u64>,
+    // Hash of the raw texture data at each cache key; used to detect when
+    // texture content changes and avoid redundant decodes + LoadTexture
+    // sends. Keyed by the same `TextureKey` sent to the renderer in
+    // [`GxAction::LoadTexture`].
+    pub texture_hashes: FxHashMap<TextureKey, u64>,
     // Receiver for encoded EFB-to-texture bytes coming back from the
     // renderer worker. `efb_copy` drains this synchronously right after
     // emitting the copy action, so the next FIFO command in the same burst

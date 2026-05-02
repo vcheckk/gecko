@@ -27,7 +27,7 @@ impl GxRenderer {
 
             if tex.format() != wgpu::TextureFormat::Rgba8Unorm {
                 tracing::warn!(
-                    cache_id = *cache_id,
+                    cache_id = ?cache_id,
                     wgpu_fmt = ?tex.format(),
                     "dump_textures: skipping non-Rgba8Unorm texture"
                 );
@@ -75,7 +75,7 @@ impl GxRenderer {
                 submission_index: None,
                 timeout: Some(Duration::from_secs(5)),
             }) {
-                tracing::warn!(cache_id = *cache_id, ?err, "dump_textures: device poll failed");
+                tracing::warn!(cache_id = ?cache_id, ?err, "dump_textures: device poll failed");
                 continue;
             }
 
@@ -92,9 +92,11 @@ impl GxRenderer {
             }
             staging.unmap();
 
-            let ram_addr = (*cache_id) as u32;
-            let variant = (*cache_id >> 32) as u32;
-            let filename = format!("{millis}_{ram_addr:08X}_{variant:08X}_{fmt:?}_{width}x{height}.png");
+            let filename = format!(
+                "{millis}_{ram_addr:08X}_{variant:08X}_{fmt:?}_{width}x{height}.png",
+                ram_addr = cache_id.ram_addr,
+                variant = cache_id.variant,
+            );
             let path: PathBuf = dir.join(filename);
             capture::save_png_async(path, CapturedFrame { width, height, rgba }, false);
             saved += 1;

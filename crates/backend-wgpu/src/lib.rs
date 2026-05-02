@@ -14,6 +14,7 @@ use gecko::flipper::gx::draw::{Scissor, TextureFormat, Viewport};
 use gecko::flipper::gx::regs::{AlphaCompare, BlendMode, CompareFunc, CullMode, MagFilter, MinFilter, WrapMode, ZMode};
 #[cfg(feature = "efb-writeback")]
 use gecko::host::EfbWriteback;
+use gecko::host::TextureKey;
 use glam::Mat4;
 use pipeline::PipelineKey;
 use rustc_hash::FxHashMap;
@@ -41,13 +42,6 @@ pub(crate) fn align_up(value: u64, alignment: u64) -> u64 {
 }
 
 type SamplerKey = (WrapMode, WrapMode, MagFilter, MinFilter);
-
-pub(crate) type TextureKey = u64;
-
-#[inline(always)]
-pub(crate) fn ram_addr_of(key: TextureKey) -> Address {
-    key as Address
-}
 
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub(crate) struct BindGroupCacheKey {

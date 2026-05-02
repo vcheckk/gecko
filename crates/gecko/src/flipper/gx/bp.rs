@@ -1,7 +1,7 @@
 use super::constants::*;
 use super::regs::*;
 use super::{GraphicsProcessor, draw, texture};
-use crate::host::{GxAction, RenderSink};
+use crate::host::{GxAction, RenderSink, TextureKey};
 use crate::mmio::{RamView, RamViewMut};
 #[cfg(feature = "efb-writeback")]
 use std::time::Duration;
@@ -237,12 +237,14 @@ impl GraphicsProcessor {
         let tlut = self.cur_tluts[slot];
         let palette = slot_palette(&self.palette_mem, tlut.tmem_offset);
 
-        // Cache id mixes the bound TLUT identity into the high 32 bits so
-        // the same CI* texture bound with two different palettes (FFCC
-        // title logo binds the same RAM bytes via slot 0 RGB5A3@512 and
-        // slot 1 IA8@528 every frame) doesn't clobber a single GPU side
-        // entry on each rebind.
-        let cache_id = self::texture_cache_id(ram_addr, format, tlut);
+        // Cache id mixes a hash of the bound palette content + tlut identity
+        // into the high 32 bits so each distinct palette state for a CI*
+        // texture lands in its own renderer cache slot. Without that, games
+        // (FFCC title logo) that load several palettes per frame at the same
+        // tmem_offset would silently let the latest load clobber the earlier
+        // ones, since bind groups are built lazily and resolve to whichever
+        // GPU texture is current at render-pass time.
+        let cache_id = self::texture_cache_id(ram_addr, format, tlut, palette);
 
         // Resolve the texture's raw bytes once, against MEM1 or MEM2. If the
         // address doesn't fall in either bank, leave the slot's last binding
@@ -500,10 +502,7 @@ impl GraphicsProcessor {
             // Writeback overwrites RAM, so drop every cached hash that
             // points at this ram_addr (any TLUT variant) to force a redecode.
             #[cfg(feature = "efb-writeback")]
-            {
-                let dest_addr_lo = dest_addr as u64;
-                self.texture_hashes.retain(|k, _| (*k & 0xFFFFFFFF) != dest_addr_lo);
-            }
+            self.texture_hashes.retain(|k, _| k.ram_addr != dest_addr);
             let _ = ram;
 
             // With `efb-writeback`: block until the renderer finishes the
@@ -574,30 +573,50 @@ fn slot_palette(palette_mem: &[u16], tmem_offset: u16) -> &[u16] {
     palette_mem.get(base..).unwrap_or(&[])
 }
 
-/// Mint the `(ram_addr, tlut_variant)` cache key sent to the renderer.
-/// Low 32 bits = ram_addr, high 32 bits = TLUT identity (0 for non-paletted).
-/// Variant fits in 12 bits (10 for tmem_offset, 2 for format) but we leave
-/// room for future expansion.
+/// Mint the renderer cache key for the given texture binding.
+///
+/// `variant` is `0` for non-paletted formats. For paletted (CI*) formats it's
+/// a 32-bit hash of `(palette content, tlut.format, tmem_offset)` so the
+/// same RAM index stream sampled through different palettes lands
+/// in distinct cache slots. FFCC's title-logo fade animation alternates
+/// between palettes at a fixed `tmem_offset`; without the variant in the
+/// key, later uploads would silently overwrite earlier ones in the
+/// renderer's cache and bind groups built at render-pass time would all
+/// resolve to whichever decode landed last.
 #[inline(always)]
-fn texture_cache_id(ram_addr: usize, format: draw::TextureFormat, tlut: draw::TlutRef) -> u64 {
-    let lo = (ram_addr as u32) as u64;
-    let hi = if format.is_paletted() {
-        ((tlut.format as u32) << 16 | (tlut.tmem_offset as u32 & 0x3FF)) as u64
+fn texture_cache_id(ram_addr: usize, format: draw::TextureFormat, tlut: draw::TlutRef, palette: &[u16]) -> TextureKey {
+    let variant = if format.is_paletted() {
+        let max_entries = match format {
+            draw::TextureFormat::CI4 => 16,
+            draw::TextureFormat::CI8 => 256,
+            draw::TextureFormat::CI14 => 16384,
+            _ => 0,
+        };
+        let take = max_entries.min(palette.len());
+        let palette_bytes: &[u8] = bytemuck::cast_slice(&palette[..take]);
+        let mut h = twox_hash::xxhash3_64::Hasher::oneshot(palette_bytes);
+        h ^= tlut.format as u64;
+        h ^= (tlut.tmem_offset as u64) << 8;
+        // Fold the 64-bit hash to 32 bits.
+        (h ^ (h >> 32)) as u32
     } else {
         0
     };
-    (hi << 32) | lo
+    TextureKey {
+        ram_addr: ram_addr as u32,
+        variant,
+    }
 }
 
 /// Returns `true` when the raw texture data in `tex` differs from the last
-/// hash recorded for this cache id. `tex` is the already resolved slice for
+/// hash recorded for this cache key. `tex` is the already resolved slice for
 /// the texture (caller has already mapped MEM1/MEM2). The hash is keyed by
-/// cache_id so paletted textures bound with multiple TLUTs are tracked
+/// `cache_id` so paletted textures bound with multiple TLUTs are tracked
 /// independently.
 fn texture_data_changed(
-    hashes: &mut rustc_hash::FxHashMap<u64, u64>,
+    hashes: &mut rustc_hash::FxHashMap<TextureKey, u64>,
     tex: &[u8],
-    cache_id: u64,
+    cache_id: TextureKey,
     palette: &[u16],
     tlut: draw::TlutRef,
     format: draw::TextureFormat,

@@ -4,6 +4,27 @@ use crate::flipper::gx::regs::{AlphaCompare, BlendMode, ChanCtrl, CullMode, MagF
 #[cfg(not(target_arch = "wasm32"))]
 use std::path::PathBuf;
 
+/// Renderer-side texture cache key. Identifies one unique decoded RGBA
+/// texture: same `ram_addr` sampled through different palettes must occupy
+/// distinct cache slots, otherwise alternating palette uploads (FFCC fade /
+/// settle animations swap palette content at a fixed `tmem_offset` each
+/// frame) silently overwrite each other and bind groups built lazily at
+/// render-pass time all resolve to whichever decode landed last.
+///
+/// `variant` is `0` for non-paletted formats and a 32-bit hash of
+/// `(palette content, tlut.format, tmem_offset)` for paletted ones.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct TextureKey {
+    pub ram_addr: Address,
+    pub variant: u32,
+}
+
+impl TextureKey {
+    pub const fn non_paletted(ram_addr: Address) -> Self {
+        Self { ram_addr, variant: 0 }
+    }
+}
+
 #[derive(Debug)]
 pub enum GxAction {
     // XF
@@ -22,14 +43,8 @@ pub enum GxAction {
 
     /// Upload pre-decoded texture data. Emitted when texture content at a
     /// given address changes (detected by hash).
-    ///
-    /// `id` is the renderer side cache key. The low 32 bits are the source
-    /// `ram_addr`; for paletted (CI*) textures the high 32 bits encode the
-    /// bound TLUT (format + tmem_offset), so the same RAM-resident index
-    /// stream bound with two different palettes occupies two distinct cache
-    /// entries instead of clobbering each other.
     LoadTexture {
-        id: u64,
+        id: TextureKey,
         width: u32,
         height: u32,
         fmt: TextureFormat,
@@ -51,7 +66,7 @@ pub enum GxAction {
     /// the cache key used in [`Self::LoadTexture`].
     SetTexture {
         slot: usize,
-        id: u64,
+        id: TextureKey,
         wrap_s: WrapMode,
         wrap_t: WrapMode,
         mag_filter: MagFilter,

@@ -1,5 +1,5 @@
 use crate::pipeline::PipelineKey;
-use crate::{BindGroupCacheKey, DrawUniforms, FrameUniforms, GpuVertex, GxRenderer, SamplerKey, helpers, ram_addr_of};
+use crate::{BindGroupCacheKey, DrawUniforms, FrameUniforms, GpuVertex, GxRenderer, SamplerKey, helpers};
 use encase::{ShaderType as _, UniformBuffer};
 use gecko::flipper::gx::regs::{MagFilter, MinFilter, WrapMode};
 use gecko::host::{DrawData, GxAction};
@@ -76,7 +76,10 @@ impl GxRenderer {
                 fmt,
                 rgba,
             } => {
-                let texture_label = format!("gx_tex id={:#018x} fmt={:?} size={}x{}", *id, *fmt, *width, *height);
+                let texture_label = format!(
+                    "gx_tex addr={:#010x}/{:08x} fmt={:?} size={}x{}",
+                    id.ram_addr, id.variant, *fmt, *width, *height
+                );
                 let tex = device.create_texture(&wgpu::TextureDescriptor {
                     label: Some(&texture_label),
                     size: wgpu::Extent3d {
@@ -118,10 +121,8 @@ impl GxRenderer {
                 // A fresh RAM upload means the game wrote this address
                 // after a prior EFB copy. Return the stale GPU copy to
                 // its pool and let the RAM-decoded entry win. EFB copies
-                // are keyed by the bare ram_addr, so strip the TLUT
-                // variant bits before looking up.
-                let ram_addr = ram_addr_of(tid);
-                if let Some((old_tex, old_view)) = self.efb_copy_cache.remove(&ram_addr) {
+                // are keyed by bare ram_addr (no TLUT variant).
+                if let Some((old_tex, old_view)) = self.efb_copy_cache.remove(&tid.ram_addr) {
                     self.return_to_pool(old_tex, old_view);
                 }
 
@@ -390,10 +391,11 @@ impl GxRenderer {
 
                 for slot in 0..8 {
                     if let Some(tid) = &bg_key.tex_keys[slot] {
-                        let ram_addr = ram_addr_of(*tid);
+                        // EFB copies (keyed by bare ram_addr) win over the
+                        // RAM-decoded `texture_cache` (keyed by full TextureKey).
                         let view = self
                             .efb_copy_cache
-                            .get(&ram_addr)
+                            .get(&tid.ram_addr)
                             .map(|(_, v)| v)
                             .or_else(|| self.texture_cache.get(tid).map(|(_, _, v)| v));
                         if let Some(view) = view {
