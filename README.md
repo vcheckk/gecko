@@ -13,7 +13,7 @@ A WIP GameCube/Wii emulator and debugger written in Rust.
 
 ## Status
 
-Gecko is still in development. Support may vary, while many games work perfectly (to my estimation at least), most will likely have varying degrees of visual glitches or be outright broken. Refer to the [screenshot database](https://emu.layle.dev/gecko/) to gauge compatiblity.
+Gecko is still in development. Support may vary, while many games work perfectly (to my estimation at least), most will likely have varying degrees of visual glitches or be outright broken. Refer to the [screenshot database](https://emu.layle.dev/gecko/) to gauge compatiblity. Gecko is developed with homebrew development and reverse engineering in mind.
 
 - PowerPC interpreter
 - DSP LLE interpreter
