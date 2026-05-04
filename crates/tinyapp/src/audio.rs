@@ -124,7 +124,10 @@ pub fn open(emulated_rate: u32) -> Result<CpalBackend, String> {
         .default_output_device()
         .ok_or_else(|| "no default output audio device".to_string())?;
 
-    let device_name = device.name().unwrap_or_else(|_| "<unknown>".into());
+    let device_name = device
+        .description()
+        .map(|d| d.name().to_string())
+        .unwrap_or_else(|_| "<unknown>".into());
     let supported = pick_supported_config(&device, emulated_rate)?;
     let sample_format = supported.sample_format();
     let host_rate = supported.sample_rate();
