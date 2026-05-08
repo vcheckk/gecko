@@ -51,7 +51,7 @@ impl<const SYSTEM: SystemId> DspJitHandle for jit::JitEngine<SYSTEM> {
         #[cfg(feature = "jit-stats")]
         Self::dump_hot_blocks(self, _top_k);
         #[cfg(not(feature = "jit-stats"))]
-        eprintln!("[dsp-jit-stats] feature `jit-stats` is not enabled. Rebuild with `--features jit-stats`.");
+        tracing::warn!("feature `jit-stats` is not enabled. Rebuild with `--features jit-stats`.");
     }
     fn dump_top_clif(&mut self, _top_k: usize, _iram: &[u8], _irom: &[u8]) {
         #[cfg(feature = "jit-stats")]
@@ -59,12 +59,12 @@ impl<const SYSTEM: SystemId> DspJitHandle for jit::JitEngine<SYSTEM> {
             let mut pcs: Vec<(u16, u64)> = self.hits.iter().map(|(&pc, &n)| (pc, n)).collect();
             pcs.sort_by(|a, b| b.1.cmp(&a.1));
             for (pc, hits) in pcs.into_iter().take(_top_k) {
-                eprintln!("\n[dsp-jit-stats] hits={hits} pc={pc:04X}");
+                tracing::info!("hits={hits} pc={pc:04X}");
                 self.dump_block_clif(pc, _iram, _irom);
             }
         }
         #[cfg(not(feature = "jit-stats"))]
-        eprintln!("[dsp-jit-stats] feature `jit-stats` is not enabled. Rebuild with `--features jit-stats`.");
+        tracing::warn!("feature `jit-stats` is not enabled. Rebuild with `--features jit-stats`.");
     }
 }
 
