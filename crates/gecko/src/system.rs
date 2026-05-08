@@ -11,6 +11,8 @@ use crate::flipper::pe::PixelEngine;
 use crate::flipper::pi::ProcessorInterface;
 use crate::flipper::si::SerialInterface;
 use crate::flipper::vi::VideoInterface;
+#[cfg(feature = "fps-counter")]
+use crate::fps::FpsCounter;
 use crate::gekko::Gekko;
 use crate::hollywood::Hollywood;
 #[cfg(feature = "hooks")]
@@ -62,6 +64,9 @@ pub struct System<const SYSTEM: SystemId> {
 
     #[cfg(feature = "jit")]
     pub jit: Option<Box<crate::gekko::jit::JitEngine<SYSTEM>>>,
+
+    #[cfg(feature = "fps-counter")]
+    pub fps_counter: FpsCounter,
 }
 
 impl<const SYSTEM: SystemId> System<SYSTEM> {
@@ -98,6 +103,9 @@ impl<const SYSTEM: SystemId> System<SYSTEM> {
 
             #[cfg(feature = "jit")]
             jit: None,
+
+            #[cfg(feature = "fps-counter")]
+            fps_counter: FpsCounter::new(),
         }
     }
 

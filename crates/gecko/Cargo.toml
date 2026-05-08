@@ -24,6 +24,7 @@ jit = [
     "dep:cranelift-native",
 ]
 jit-stats = ["jit"]
+fps-counter = []
 
 [build-dependencies]
 chipi-build = "0.9.1"

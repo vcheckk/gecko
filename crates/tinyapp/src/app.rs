@@ -1,12 +1,12 @@
-use crate::thread::FrameMessage;
 use backend_wgpu::capture::{self, CaptureRequest, ScreenshotControl};
-use crossbeam_channel::Receiver;
 use egui::ViewportId;
 use gecko::HostInput;
+#[cfg(feature = "fps-counter")]
+use gecko::fps::{self, FpsShared};
 use gecko::hollywood::ipc::usb;
-use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+#[cfg(not(feature = "fps-counter"))]
 use std::time::Instant;
 use winit::application::ApplicationHandler;
 use winit::event::{MouseButton, WindowEvent};
@@ -24,11 +24,11 @@ pub struct State {
     egui_ctx: egui::Context,
     egui_renderer: egui_wgpu::Renderer,
     egui_winit: egui_winit::State,
-    fps_history: VecDeque<[f64; 2]>,
-    start_time: Instant,
+    #[cfg(not(feature = "fps-counter"))]
     last_frame: Instant,
-    last_native_hz: f64,
     screenshots: ScreenshotControl,
+    #[cfg(feature = "fps-counter")]
+    fps_shared: FpsShared,
 }
 
 impl State {
@@ -39,6 +39,7 @@ impl State {
         surface: wgpu::Surface<'static>,
         surface_config: wgpu::SurfaceConfiguration,
         renderer: backend_wgpu::sink::Renderer,
+        #[cfg(feature = "fps-counter")] fps_shared: FpsShared,
     ) -> Self {
         let egui_ctx = egui::Context::default();
         let egui_renderer =
@@ -54,11 +55,11 @@ impl State {
             egui_ctx,
             egui_renderer,
             egui_winit,
-            fps_history: VecDeque::new(),
-            start_time: Instant::now(),
+            #[cfg(not(feature = "fps-counter"))]
             last_frame: Instant::now(),
-            last_native_hz: 60.0,
             screenshots: ScreenshotControl::new(),
+            #[cfg(feature = "fps-counter")]
+            fps_shared,
         }
     }
 
@@ -78,25 +79,15 @@ impl State {
         self.surface.configure(&self.device, &self.surface_config);
     }
 
-    fn render(&mut self, frame_rx: &Receiver<FrameMessage>, window: &Window) {
-        let mut msg: Option<FrameMessage> = None;
-        while let Ok(newer) = frame_rx.try_recv() {
-            msg = Some(newer);
-        }
-
-        let Some(msg) = msg else { return };
-
-        // FPS bookkeeping
-        let delta = self.last_frame.elapsed().as_secs_f64();
-        self.last_frame = Instant::now();
-        let fps = if delta > 0.0 { 1.0 / delta } else { 0.0 };
-        let elapsed = self.start_time.elapsed().as_secs_f64();
-        self.fps_history.push_back([elapsed, fps]);
-        while self.fps_history.front().is_some_and(|e| elapsed - e[0] > 5.0) {
-            self.fps_history.pop_front();
-        }
-        self.last_native_hz = msg.native_hz;
-        let native_pct = (fps / self.last_native_hz) * 100.0;
+    fn render(&mut self, window: &Window) {
+        #[cfg(feature = "fps-counter")]
+        let (fps, native_pct) = fps::read(&self.fps_shared);
+        #[cfg(not(feature = "fps-counter"))]
+        let fps = {
+            let delta = self.last_frame.elapsed().as_secs_f64();
+            self.last_frame = Instant::now();
+            if delta > 0.0 { 1.0 / delta } else { 0.0 }
+        };
 
         let frame = match self.surface.get_current_texture() {
             Ok(f) => f,
@@ -126,7 +117,6 @@ impl State {
 
         // egui overlay
         let raw_input = self.egui_winit.take_egui_input(window);
-        let fps_points: Vec<[f64; 2]> = self.fps_history.iter().copied().collect();
         let full_output = self.egui_ctx.run_ui(raw_input, |ui| {
             let ctx = ui.ctx().clone();
             let frame =
@@ -138,21 +128,10 @@ impl State {
                 .anchor(egui::Align2::RIGHT_TOP, [-8.0, 8.0])
                 .frame(frame)
                 .show(&ctx, |ui| {
+                    #[cfg(feature = "fps-counter")]
                     ui.label(egui::RichText::new(format!("{fps:.1} FPS  {native_pct:.1}%")).monospace());
-                    egui_plot::Plot::new("fps_plot")
-                        .height(60.0)
-                        .width(180.0)
-                        .show_axes(false)
-                        .show_grid(false)
-                        .allow_zoom(false)
-                        .allow_drag(false)
-                        .allow_scroll(false)
-                        .show(ui, |plot_ui| {
-                            plot_ui.line(
-                                egui_plot::Line::new("fps", egui_plot::PlotPoints::from(fps_points.clone()))
-                                    .color(egui::Color32::from_rgb(100, 200, 100)),
-                            );
-                        });
+                    #[cfg(not(feature = "fps-counter"))]
+                    ui.label(egui::RichText::new(format!("{fps:.1} FPS")).monospace());
                 });
         });
 
@@ -213,7 +192,6 @@ impl State {
 }
 
 pub struct App {
-    pub frame_rx: Receiver<FrameMessage>,
     pub input: Arc<Mutex<HostInput>>,
     pub window: Option<Arc<Window>>,
     pub state: Option<State>,
@@ -221,6 +199,8 @@ pub struct App {
     pub init: Option<AppInit>,
     pub _audio_stream: Option<cpal::Stream>,
     pub shutdown_requested: Arc<AtomicBool>,
+    #[cfg(feature = "fps-counter")]
+    pub fps_shared: FpsShared,
 }
 
 pub struct AppInit {
@@ -284,6 +264,8 @@ impl ApplicationHandler for App {
             surface,
             surface_config,
             init.renderer,
+            #[cfg(feature = "fps-counter")]
+            self.fps_shared.clone(),
         );
         window.request_redraw();
         self.window = Some(window);
@@ -361,7 +343,7 @@ impl ApplicationHandler for App {
             }
             WindowEvent::RedrawRequested => {
                 if let (Some(state), Some(window)) = (&mut self.state, &self.window) {
-                    state.render(&self.frame_rx, window);
+                    state.render(window);
                 }
             }
             _ => {}

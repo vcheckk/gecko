@@ -148,6 +148,8 @@ impl<const SYSTEM: SystemId> Scheduler<SYSTEM> {
             crate::flipper::cp::PUMP_INTERVAL_CYCLES,
             crate::flipper::cp::pump_handler::<SYSTEM>,
         );
+        #[cfg(feature = "fps-counter")]
+        s.schedule_at(self::cpu_clock(SYSTEM), crate::fps::fps_handler::<SYSTEM>);
         s
     }
 }
@@ -155,6 +157,10 @@ impl<const SYSTEM: SystemId> Scheduler<SYSTEM> {
 /// Reschedules itself every frame.
 pub fn vsync_handler<const SYSTEM: SystemId>(sys: &mut System<SYSTEM>) {
     sys.vsync_pending = true;
+    #[cfg(feature = "fps-counter")]
+    {
+        sys.fps_counter.vsync_count += 1;
+    }
     let rate = sys.vi.dcr.video_format().refresh_rate();
     sys.scheduler
         .schedule_in(rate.cycles_per_frame(SYSTEM), self::vsync_handler::<SYSTEM>);

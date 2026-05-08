@@ -2,6 +2,8 @@ pub mod audio;
 pub mod common;
 pub mod dvd;
 pub mod flipper;
+#[cfg(feature = "fps-counter")]
+pub mod fps;
 pub mod gamecube;
 pub mod gekko;
 pub mod hollywood;

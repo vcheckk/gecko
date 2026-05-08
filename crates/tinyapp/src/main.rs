@@ -4,7 +4,6 @@ mod thread;
 
 use backend_wgpu::sink::TargetAspect;
 use clap::Parser;
-use crossbeam_channel::bounded;
 use gecko::HostInput;
 #[cfg(feature = "audio-wav-dump")]
 use gecko::audio::WavAudioSink;
@@ -102,13 +101,20 @@ fn main() {
         wgpu::PresentMode::Fifo
     };
 
+    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn"))
+        .add_directive("cranelift_jit=warn".parse().unwrap())
+        .add_directive("cranelift_codegen=warn".parse().unwrap())
+        .add_directive("cranelift_frontend=warn".parse().unwrap())
+        .add_directive("regalloc2=warn".parse().unwrap())
+        .add_directive("wgpu_core=warn".parse().unwrap())
+        .add_directive("wgpu_hal=warn".parse().unwrap())
+        .add_directive("naga=warn".parse().unwrap());
+
     tracing_subscriber::fmt()
         .without_time()
         .with_ansi(!args.no_ansi)
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn")),
-        )
+        .with_env_filter(env_filter)
         .init();
 
     // Boot dispatch:
@@ -216,9 +222,10 @@ fn run<const SYSTEM: SystemId>(mut emulator: System<SYSTEM>, present_mode: wgpu:
 
     let audio_stream = install_audio_sink(args, &mut emulator);
 
-    let input = Arc::new(Mutex::new(HostInput::neutral_for(SYSTEM)));
+    #[cfg(feature = "fps-counter")]
+    let fps_shared = emulator.fps_counter.shared();
 
-    let (frame_tx, frame_rx) = bounded::<thread::FrameMessage>(2);
+    let input = Arc::new(Mutex::new(HostInput::neutral_for(SYSTEM)));
 
     let event_loop = EventLoop::new().unwrap();
     let proxy = event_loop.create_proxy();
@@ -247,11 +254,10 @@ fn run<const SYSTEM: SystemId>(mut emulator: System<SYSTEM>, present_mode: wgpu:
     let emu_input = input.clone();
     let emu_handle = std::thread::Builder::new()
         .name("emu".into())
-        .spawn(move || thread::emu_thread::<SYSTEM>(emulator, frame_tx, emu_input, proxy))
+        .spawn(move || thread::emu_thread::<SYSTEM>(emulator, emu_input, proxy))
         .expect("failed to spawn emulator thread");
 
     let mut app = app::App {
-        frame_rx,
         input,
         window: None,
         state: None,
@@ -266,6 +272,8 @@ fn run<const SYSTEM: SystemId>(mut emulator: System<SYSTEM>, present_mode: wgpu:
         }),
         _audio_stream: audio_stream,
         shutdown_requested,
+        #[cfg(feature = "fps-counter")]
+        fps_shared,
     };
     event_loop.run_app(&mut app).unwrap();
 
