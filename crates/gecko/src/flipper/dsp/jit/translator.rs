@@ -112,22 +112,36 @@ pub fn translate(
             .icmp_imm(cranelift_codegen::ir::condcodes::IntCC::NotEqual, loop_ptr, 0);
         let slow_block = builder.create_block();
         let fast_block = builder.create_block();
-        let join_block = builder.create_block();
+        let continue_block = builder.create_block();
         builder.ins().brif(in_loop, slow_block, &[], fast_block, &[]);
 
         builder.switch_to_block(fast_block);
         builder.seal_block(fast_block);
         let nia_v = builder.ins().load(types::I16, MemFlags::trusted(), ctx_ptr, nia_offset);
         builder.ins().store(MemFlags::trusted(), nia_v, ctx_ptr, pc_offset);
-        builder.ins().jump(join_block, &[]);
+        builder.ins().jump(continue_block, &[]);
 
         builder.switch_to_block(slow_block);
         builder.seal_block(slow_block);
         builder.ins().call(loop_tail_ref, &[ctx_ptr]);
-        builder.ins().jump(join_block, &[]);
+        // After loop_tail, PC may have been redirected (jump back from loop iteration).
+        // If PC != natural_nia, exit the block early so the chain link can dispatch
+        // the correct next block. Otherwise, fall through to the next instruction.
+        let pc_after = builder.ins().load(types::I16, MemFlags::trusted(), ctx_ptr, pc_offset);
+        let expected = builder.ins().iconst(types::I16, natural_nia as i64);
+        let same = builder
+            .ins()
+            .icmp(cranelift_codegen::ir::condcodes::IntCC::Equal, pc_after, expected);
+        let exit_block = builder.create_block();
+        builder.ins().brif(same, continue_block, &[], exit_block, &[]);
 
-        builder.switch_to_block(join_block);
-        builder.seal_block(join_block);
+        builder.switch_to_block(exit_block);
+        builder.seal_block(exit_block);
+        let pc_u32 = builder.ins().uextend(types::I32, pc_after);
+        builder.ins().return_(&[pc_u32]);
+
+        builder.switch_to_block(continue_block);
+        builder.seal_block(continue_block);
     }
 
     let block_sig_ref = builder.import_signature(block_signature(pointer_type));
