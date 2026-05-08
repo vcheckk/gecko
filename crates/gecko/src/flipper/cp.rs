@@ -4,6 +4,7 @@ use crate::flipper::pi::InterruptFlag;
 use crate::system::{System, SystemId};
 
 pub const GP_BURST: u32 = 32;
+pub const PUMP_INTERVAL_CYCLES: u64 = 1 << 16;
 
 const GP_PIPE_CAPACITY: usize = 64;
 
@@ -176,7 +177,6 @@ pub fn refresh_interrupts<const SYSTEM: SystemId>(sys: &mut System<SYSTEM>) {
 pub fn ack_breakpoint<const SYSTEM: SystemId>(sys: &mut System<SYSTEM>) {
     sys.cp.status = sys.cp.status.with_bp_interrupt(false);
     self::refresh_interrupts(sys);
-    self::pump_fifo(sys);
 }
 
 #[inline(always)]
@@ -255,8 +255,12 @@ pub fn gather_pipe_bursted<const SYSTEM: SystemId>(sys: &mut System<SYSTEM>) {
         sys.cp.refresh_status();
         refresh_interrupts(sys);
     }
+}
 
-    pump_fifo(sys);
+pub fn pump_handler<const SYSTEM: SystemId>(sys: &mut System<SYSTEM>) {
+    self::pump_fifo(sys);
+    sys.scheduler
+        .schedule_in(PUMP_INTERVAL_CYCLES, self::pump_handler::<SYSTEM>);
 }
 
 pub fn pump_fifo<const SYSTEM: SystemId>(sys: &mut System<SYSTEM>) {

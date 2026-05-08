@@ -66,7 +66,6 @@ impl<const SYSTEM: SystemId> MmioAccess<System<SYSTEM>> for CpControl {
     fn write(self, sys: &mut System<SYSTEM>, _: WriteMask) {
         sys.cp.control = self;
         cp::refresh_interrupts(sys);
-        cp::pump_fifo(sys);
     }
 }
 

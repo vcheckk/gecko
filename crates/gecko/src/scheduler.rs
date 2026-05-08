@@ -144,6 +144,10 @@ impl<const SYSTEM: SystemId> Scheduler<SYSTEM> {
             crate::gekko::dec::cycles_until_underflow(u32::MAX),
             crate::gekko::dec::underflow_handler::<SYSTEM>,
         );
+        s.schedule_at(
+            crate::flipper::cp::PUMP_INTERVAL_CYCLES,
+            crate::flipper::cp::pump_handler::<SYSTEM>,
+        );
         s
     }
 }
