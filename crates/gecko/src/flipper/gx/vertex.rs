@@ -427,9 +427,6 @@ impl GraphicsProcessor {
             decode_normal(&data[start..start + vf.nrm_data_size], &vf.vat_a)
         } else if vf.nrm_attr != AttributeType::None {
             let nrm_index = read_index(cur, vf.nrm_attr);
-            // When nrm_index3 && NBT, the stream contains 3 separate indices
-            // (normal, binormal, tangent). Skip the extra 2, only the normal
-            // vector (first index) is needed for lighting.
             if vf.vat_a.nrm_index3() && vf.vat_a.nrm_cnt() == regs::NrmCount::Nbt {
                 let idx_size = if vf.nrm_attr == AttributeType::Index8 { 1 } else { 2 };
                 cur.set_position(cur.position() + (2 * idx_size) as u64);
@@ -610,47 +607,73 @@ fn read_index(cur: &mut Cursor<&Vec<u8>>, attr: AttributeType) -> usize {
     }
 }
 
+#[inline]
 fn decode_position(data: &[u8], vat: &VatA) -> [f32; 3] {
     let num = vat.pos_cnt().components();
-    let fmt = vat.pos_fmt();
-    let divisor = (1u32 << vat.pos_shift()) as f32;
-    let mut result = [0.0f32; 3];
-    let mut off = 0;
+    let recip = 1.0f32 / ((1u32 << vat.pos_shift()) as f32);
+    self::decode_components::<3>(data, num, vat.pos_fmt(), recip)
+}
 
-    for i in 0..num {
-        result[i] = match fmt {
-            ComponentFormat::U8 => {
-                let v = data[off] as f32 / divisor;
-                off += 1;
-                v
+#[inline]
+fn decode_normal(data: &[u8], vat: &VatA) -> [f32; 3] {
+    let cnt = vat.nrm_cnt().components().min(3);
+    let fmt = vat.nrm_fmt();
+    let recip = match fmt {
+        ComponentFormat::U8 | ComponentFormat::S8 => 1.0f32 / 64.0,
+        ComponentFormat::U16 | ComponentFormat::S16 => 1.0f32 / 16384.0,
+        ComponentFormat::F32 => 1.0f32,
+    };
+    self::decode_components::<3>(data, cnt, fmt, recip)
+}
+
+#[inline]
+fn decode_texcoord(data: &[u8], fmt: ComponentFormat, shift: u8, cnt: TexCount) -> [f32; 2] {
+    let num = cnt.components();
+    let recip = 1.0f32 / ((1u32 << shift) as f32);
+    let r3 = self::decode_components::<3>(data, num, fmt, recip);
+    [r3[0], r3[1]]
+}
+
+#[inline(always)]
+fn decode_components<const N: usize>(data: &[u8], num: usize, fmt: ComponentFormat, recip: f32) -> [f32; N] {
+    let mut result = [0.0f32; N];
+    
+    match fmt {
+        ComponentFormat::U8 => {
+            for i in 0..num {
+                result[i] = data[i] as f32 * recip;
             }
-            ComponentFormat::S8 => {
-                let v = data[off] as i8 as f32 / divisor;
-                off += 1;
-                v
+        }
+        ComponentFormat::S8 => {
+            for i in 0..num {
+                result[i] = (data[i] as i8) as f32 * recip;
             }
-            ComponentFormat::U16 => {
-                let v = u16::from_be_bytes([data[off], data[off + 1]]) as f32 / divisor;
-                off += 2;
-                v
+        }
+        ComponentFormat::U16 => {
+            for i in 0..num {
+                let off = i * 2;
+                result[i] = u16::from_be_bytes([data[off], data[off + 1]]) as f32 * recip;
             }
-            ComponentFormat::S16 => {
-                let v = i16::from_be_bytes([data[off], data[off + 1]]) as f32 / divisor;
-                off += 2;
-                v
+        }
+        ComponentFormat::S16 => {
+            for i in 0..num {
+                let off = i * 2;
+                result[i] = i16::from_be_bytes([data[off], data[off + 1]]) as f32 * recip;
             }
-            ComponentFormat::F32 => {
-                let v = f32::from_bits(u32::from_be_bytes([
+        }
+        ComponentFormat::F32 => {
+            for i in 0..num {
+                let off = i * 4;
+                result[i] = f32::from_bits(u32::from_be_bytes([
                     data[off],
                     data[off + 1],
                     data[off + 2],
                     data[off + 3],
                 ]));
-                off += 4;
-                v
             }
-        };
+        }
     }
+
     result
 }
 
@@ -702,93 +725,3 @@ fn decode_color(data: &[u8], fmt: regs::ColorFormat, cnt: regs::ColorCount) -> [
     }
 }
 
-fn decode_normal(data: &[u8], vat: &VatA) -> [f32; 3] {
-    let cnt = vat.nrm_cnt().components().min(3);
-    let fmt = vat.nrm_fmt();
-    let mut result = [0.0f32; 3];
-    let mut off = 0;
-
-    // Hardware uses fixed-point: 6 fractional bits for byte types, 14 for word types.
-    const SHIFT_BYTE: f32 = (1u32 << 6) as f32; // 64.0
-    const SHIFT_WORD: f32 = (1u32 << 14) as f32; // 16384.0
-
-    for i in 0..cnt {
-        result[i] = match fmt {
-            ComponentFormat::U8 => {
-                let v = data[off] as f32 / SHIFT_BYTE;
-                off += 1;
-                v
-            }
-            ComponentFormat::S8 => {
-                let v = data[off] as i8 as f32 / SHIFT_BYTE;
-                off += 1;
-                v
-            }
-            ComponentFormat::U16 => {
-                let v = u16::from_be_bytes([data[off], data[off + 1]]) as f32 / SHIFT_WORD;
-                off += 2;
-                v
-            }
-            ComponentFormat::S16 => {
-                let v = i16::from_be_bytes([data[off], data[off + 1]]) as f32 / SHIFT_WORD;
-                off += 2;
-                v
-            }
-            ComponentFormat::F32 => {
-                let v = f32::from_bits(u32::from_be_bytes([
-                    data[off],
-                    data[off + 1],
-                    data[off + 2],
-                    data[off + 3],
-                ]));
-                off += 4;
-                v
-            }
-        };
-    }
-
-    result
-}
-
-fn decode_texcoord(data: &[u8], fmt: ComponentFormat, shift: u8, cnt: TexCount) -> [f32; 2] {
-    let num = cnt.components();
-    let divisor = (1u32 << shift) as f32;
-    let mut result = [0.0f32; 2];
-    let mut off = 0;
-
-    for i in 0..num {
-        result[i] = match fmt {
-            ComponentFormat::U8 => {
-                let v = data[off] as f32 / divisor;
-                off += 1;
-                v
-            }
-            ComponentFormat::S8 => {
-                let v = data[off] as i8 as f32 / divisor;
-                off += 1;
-                v
-            }
-            ComponentFormat::U16 => {
-                let v = u16::from_be_bytes([data[off], data[off + 1]]) as f32 / divisor;
-                off += 2;
-                v
-            }
-            ComponentFormat::S16 => {
-                let v = i16::from_be_bytes([data[off], data[off + 1]]) as f32 / divisor;
-                off += 2;
-                v
-            }
-            ComponentFormat::F32 => {
-                let v = f32::from_bits(u32::from_be_bytes([
-                    data[off],
-                    data[off + 1],
-                    data[off + 2],
-                    data[off + 3],
-                ]));
-                off += 4;
-                v
-            }
-        };
-    }
-    result
-}
