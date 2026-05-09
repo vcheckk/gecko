@@ -48,6 +48,9 @@ impl GraphicsProcessor {
         cmd: u8,
         data: Vec<u8>,
     ) {
+        #[cfg(feature = "gx-stats")]
+        let _gx_stats_t0 = std::time::Instant::now();
+
         let Some(primitive) = draw::Primitive::from_cmd(cmd) else {
             tracing::error!(cmd, "goofy draw command");
             return;
@@ -62,20 +65,30 @@ impl GraphicsProcessor {
 
         let vertex_count = data.len() / vf.vertex_stride;
 
-        let mut vertices: Vec<draw::Vertex> = Vec::with_capacity(vertex_count);
+        #[cfg(feature = "gx-stats")]
+        {
+            self.stats.draw_calls += 1;
+            self.stats.vertices += vertex_count as u64;
+            self.stats.fifo_bytes += data.len() as u64;
+            self.stats.draws_by_primitive[(primitive as usize) & 0x7] += 1;
+        }
+
+        self.vertices_scratch.clear();
+        self.vertices_scratch.reserve(vertex_count);
+        
         let mut cur = Cursor::new(&data);
 
         let view = mmio.ram_view();
         for i in 0..vertex_count {
             let vertex = self.decode_vertex(&mut cur, &data, &view, &vf, i);
-            vertices.push(vertex);
+            self.vertices_scratch.push(vertex);
         }
 
         let modelview = self.build_modelview_matrix(vf.default_pos_mtx_idx);
 
         tracing::debug!(
             primitive = format!("{:?}", primitive),
-            vertices = format!("{:?}", vertices),
+            vertices = format!("{:?}", self.vertices_scratch),
             pos_mtx_idx = vf.default_pos_mtx_idx,
             modelview = format!("{:?}", modelview),
             projection = format!("{:?}", self.projection),
@@ -110,18 +123,19 @@ impl GraphicsProcessor {
             unpack_rgba(self.xf_mem[XF_MATERIAL_COLOR1]),
         ];
 
-        // Emit action to the render sink
-        let draw_vertices: Vec<DrawVertex> = vertices
-            .iter()
-            .map(|v| DrawVertex {
+        self.draw_vertices_scratch.clear();
+        self.draw_vertices_scratch.reserve(self.vertices_scratch.len());
+        for v in &self.vertices_scratch {
+            self.draw_vertices_scratch.push(DrawVertex {
                 position: v.position,
                 normal: v.normal,
                 color0: v.color0,
                 color1: v.color1,
                 pos_view: v.pos_view,
                 texcoords: std::array::from_fn(|i| v.texcoords[i].unwrap_or([0.0, 0.0, 1.0])),
-            })
-            .collect();
+            });
+        }
+        let draw_vertices = std::mem::take(&mut self.draw_vertices_scratch);
 
         let lights: [LightData; 8] = std::array::from_fn(|i| LightData {
             color: light_colors[i],
@@ -164,10 +178,10 @@ impl GraphicsProcessor {
             primitive,
             vertices: draw_vertices,
             modelview: modelview.0,
-            tev_color_env: self.cur_tev_color_env.iter().map(|e| e.raw()).collect(),
-            tev_alpha_env: self.cur_tev_alpha_env.iter().map(|e| e.raw()).collect(),
-            tev_orders: tev_orders.iter().map(|o| o.raw()).collect(),
-            tev_ksel: (0..8).map(|i| self.bp_regs[BP_TEV_KSEL_0 + i]).collect(),
+            tev_color_env: std::array::from_fn(|i| self.cur_tev_color_env[i].raw()),
+            tev_alpha_env: std::array::from_fn(|i| self.cur_tev_alpha_env[i].raw()),
+            tev_orders: std::array::from_fn(|i| tev_orders[i].raw()),
+            tev_ksel: std::array::from_fn(|i| self.bp_regs[BP_TEV_KSEL_0 + i]),
             tev_color_regs,
             tev_konst_colors: self.cur_tev_konst_colors,
             num_tev_stages: self.cur_num_tev_stages,
@@ -176,13 +190,18 @@ impl GraphicsProcessor {
             indirect_refs: self.cur_indirect_refs.raw(),
             num_indirect_stages: self.cur_num_indirect_stages,
             bump_imask: self.cur_bump_imask,
-            tev_indirect: self.cur_tev_indirect.iter().map(|c| c.raw()).collect(),
+            tev_indirect: std::array::from_fn(|i| self.cur_tev_indirect[i].raw()),
             color_ctrl,
             alpha_ctrl,
             ambient_color,
             material_color,
             lights,
         }));
+
+        #[cfg(feature = "gx-stats")]
+        {
+            self.stats.create_draw_call_ns += _gx_stats_t0.elapsed().as_nanos() as u64;
+        }
     }
 
     fn build_vertex_format(&self, cmd: u8) -> VertexFormat {

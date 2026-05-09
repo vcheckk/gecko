@@ -2,6 +2,9 @@ mod app;
 mod audio;
 mod thread;
 
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 use backend_wgpu::sink::TargetAspect;
 use clap::Parser;
 use gecko::HostInput;

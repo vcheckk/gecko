@@ -25,6 +25,7 @@ jit = [
 ]
 jit-stats = ["jit", "dep:backtrace"]
 fps-counter = []
+gx-stats = []
 profile = ["dep:backtrace", "dep:windows-sys"]
 
 [build-dependencies]

@@ -15,7 +15,7 @@ use crate::flipper::gx::draw::Matrix4;
 use crate::flipper::gx::regs::{AlphaCompare, BlendMode, TevAlphaEnv, TevColorEnv, TevRegisterH, TevRegisterL, ZMode};
 #[cfg(feature = "efb-writeback")]
 use crate::host::EfbWriteback;
-use crate::host::{GxAction, RenderSink, TextureKey, XfbPart};
+use crate::host::{DrawVertex, GxAction, RenderSink, TextureKey, XfbPart};
 use crate::mmio::Mmio;
 use crate::system::{System, SystemId};
 use rustc_hash::FxHashMap;
@@ -70,6 +70,10 @@ pub struct GraphicsProcessor {
     // XFB copies accumulated since the last vblank. `present_xfb()` drains
     // this at each field boundary to emit a PresentXfb action.
     pub xfb_copies: Vec<XfbCopy>,
+    pub vertices_scratch: Vec<draw::Vertex>,
+    pub draw_vertices_scratch: Vec<DrawVertex>,
+    #[cfg(feature = "gx-stats")]
+    pub(crate) stats: GxStats,
     // Hash of the raw texture data at each cache key; used to detect when
     // texture content changes and avoid redundant decodes + LoadTexture
     // sends. Keyed by the same `TextureKey` sent to the renderer in
@@ -89,6 +93,20 @@ pub struct XfbCopy {
     pub dest_addr: u32,
     pub dest_stride: u32,
     pub src_h: u32,
+}
+
+#[cfg(feature = "gx-stats")]
+#[derive(Default, Clone)]
+pub(crate) struct GxStats {
+    pub draw_calls: u64,
+    pub vertices: u64,
+    pub fifo_bytes: u64,
+    pub create_draw_call_ns: u64,
+    pub draws_by_primitive: [u64; 8],
+    pub texture_loads: u64,
+    pub xfb_presents: u64,
+    pub bp_writes: u64,
+    pub xf_writes: u64,
 }
 
 impl GraphicsProcessor {
@@ -130,6 +148,10 @@ impl GraphicsProcessor {
             cur_scissor_offset_x: 0,
             cur_scissor_offset_y: 0,
             xfb_copies: Vec::new(),
+            vertices_scratch: Vec::with_capacity(256),
+            draw_vertices_scratch: Vec::with_capacity(256),
+            #[cfg(feature = "gx-stats")]
+            stats: GxStats::default(),
             texture_hashes: FxHashMap::default(),
             #[cfg(feature = "efb-writeback")]
             efb_writeback_rx: None,
@@ -152,6 +174,11 @@ impl GraphicsProcessor {
 pub fn present_xfb<const SYSTEM: SystemId>(sys: &mut System<SYSTEM>) {
     if sys.gx.xfb_copies.is_empty() {
         return;
+    }
+
+    #[cfg(feature = "gx-stats")]
+    {
+        sys.gx.stats.xfb_presents += 1;
     }
 
     let (frame_w, frame_h) = sys.vi.frame_dimensions();

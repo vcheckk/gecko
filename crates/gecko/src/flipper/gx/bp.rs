@@ -12,6 +12,11 @@ impl GraphicsProcessor {
         let val = u32::from_be_bytes([0, data[1], data[2], data[3]]);
         self.bp_regs[idx] = val;
 
+        #[cfg(feature = "gx-stats")]
+        {
+            self.stats.bp_writes += 1;
+        }
+
         tracing::debug!(
             reg_idx = format!("{idx:02X}"),
             value = format!("{val:08X}"),
@@ -276,6 +281,12 @@ impl GraphicsProcessor {
                 mag_filter: mode0.mag_filter(),
                 min_filter: mode0.min_filter(),
             };
+
+            #[cfg(feature = "gx-stats")]
+            {
+                self.stats.texture_loads += 1;
+            }
+            
             renderer.exec(GxAction::LoadTexture {
                 id: cache_id,
                 width,

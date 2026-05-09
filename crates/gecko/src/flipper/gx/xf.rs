@@ -102,6 +102,11 @@ impl GraphicsProcessor {
         let n = length + 1;
         let end = addr + n;
 
+        #[cfg(feature = "gx-stats")]
+        {
+            self.stats.xf_writes += n as u64;
+        }
+
         for i in 0..n {
             let offset = 4 + i * 4;
             let val = u32::from_be_bytes([data[offset], data[offset + 1], data[offset + 2], data[offset + 3]]);

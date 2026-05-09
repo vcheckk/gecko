@@ -173,10 +173,10 @@ pub struct DrawData {
     pub vertices: Vec<DrawVertex>,
     pub modelview: [[f32; 4]; 4],
     // TEV combiner state
-    pub tev_color_env: Vec<u32>,
-    pub tev_alpha_env: Vec<u32>,
-    pub tev_orders: Vec<u32>,
-    pub tev_ksel: Vec<u32>,
+    pub tev_color_env: [u32; 16],
+    pub tev_alpha_env: [u32; 16],
+    pub tev_orders: [u32; 8],
+    pub tev_ksel: [u32; 8],
     pub tev_color_regs: [[f32; 4]; 4],
     pub tev_konst_colors: [[f32; 4]; 16],
     pub num_tev_stages: u8,
@@ -189,7 +189,7 @@ pub struct DrawData {
     pub indirect_refs: u32,
     pub num_indirect_stages: u8,
     pub bump_imask: u32,
-    pub tev_indirect: Vec<u32>,
+    pub tev_indirect: [u32; 16],
     // Lighting state (2 channels: COLOR0/ALPHA0 and COLOR1/ALPHA1)
     pub color_ctrl: [ChanCtrl; 2],
     pub alpha_ctrl: [ChanCtrl; 2],

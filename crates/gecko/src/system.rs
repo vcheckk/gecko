@@ -68,10 +68,10 @@ pub struct System<const SYSTEM: SystemId> {
     #[cfg(feature = "fps-counter")]
     pub fps_counter: FpsCounter,
 
-    #[cfg(any(feature = "jit-stats", feature = "profile"))]
+    #[cfg(any(feature = "jit-stats", feature = "profile", feature = "gx-stats"))]
     pub heatmap: crate::profile::HeatmapConfig,
 
-    #[cfg(any(feature = "jit-stats", feature = "profile"))]
+    #[cfg(any(feature = "jit-stats", feature = "profile", feature = "gx-stats"))]
     pub vsync_count: u64,
 
     #[cfg(feature = "profile")]
@@ -119,10 +119,10 @@ impl<const SYSTEM: SystemId> System<SYSTEM> {
             #[cfg(feature = "fps-counter")]
             fps_counter: FpsCounter::new(),
 
-            #[cfg(any(feature = "jit-stats", feature = "profile"))]
+            #[cfg(any(feature = "jit-stats", feature = "profile", feature = "gx-stats"))]
             heatmap: crate::profile::HeatmapConfig::default(),
 
-            #[cfg(any(feature = "jit-stats", feature = "profile"))]
+            #[cfg(any(feature = "jit-stats", feature = "profile", feature = "gx-stats"))]
             vsync_count: 0,
 
             #[cfg(feature = "profile")]
@@ -224,19 +224,84 @@ impl<const SYSTEM: SystemId> System<SYSTEM> {
             self.drain_events();
         }
 
-        #[cfg(any(feature = "jit-stats", feature = "profile"))]
+        #[cfg(any(feature = "jit-stats", feature = "profile", feature = "gx-stats"))]
         self.on_vsync_boundary();
     }
 
-    #[cfg(any(feature = "jit-stats", feature = "profile"))]
+    #[cfg(any(feature = "jit-stats", feature = "profile", feature = "gx-stats"))]
     fn on_vsync_boundary(&mut self) {
         self.vsync_count = self.vsync_count.wrapping_add(1);
 
         #[cfg(feature = "jit-stats")]
         self.dump_heatmap_if_due();
 
+        #[cfg(feature = "gx-stats")]
+        self.dump_gx_stats_if_due();
+
         #[cfg(feature = "profile")]
         self.tick_pprof_session();
+    }
+
+    #[cfg(feature = "gx-stats")]
+    fn dump_gx_stats_if_due(&self) {
+        if !self.heatmap.enabled || self.heatmap.interval_frames == 0 {
+            return;
+        }
+        
+        if self.vsync_count % self.heatmap.interval_frames as u64 != 0 {
+            return;
+        }
+
+        use std::io::Write;
+
+        let path = self.heatmap.out_dir.join("gx-stats.txt");
+        let s = &self.gx.stats;
+        let avg_draw_ns = if s.draw_calls > 0 {
+            s.create_draw_call_ns / s.draw_calls
+        } else {
+            0
+        };
+
+        let result = crate::profile::write_file_atomic(&path, |f| {
+            writeln!(
+                f,
+                "vsync_count={}\ndraw_calls={}\nvertices={}\nfifo_bytes={}\ntexture_loads={}\nxfb_presents={}\nbp_writes={}\nxf_writes={}\ncreate_draw_call_ns={}\navg_draw_call_ns={}",
+                self.vsync_count,
+                s.draw_calls,
+                s.vertices,
+                s.fifo_bytes,
+                s.texture_loads,
+                s.xfb_presents,
+                s.bp_writes,
+                s.xf_writes,
+                s.create_draw_call_ns,
+                avg_draw_ns,
+            )?;
+            writeln!(f, "\n--- draws by primitive ---")?;
+
+            use crate::flipper::gx::draw::Primitive;
+
+            const VARIANTS: [Primitive; 7] = [
+                Primitive::Quads,
+                Primitive::Triangles,
+                Primitive::TriangleStrip,
+                Primitive::TriangleFan,
+                Primitive::Lines,
+                Primitive::LineStrip,
+                Primitive::Points,
+            ];
+
+            for p in VARIANTS {
+                let count = s.draws_by_primitive[(p as usize) & 0x7];
+                writeln!(f, "  {:>16}  {:?}", count, p)?;
+            }
+
+            Ok(())
+        });
+
+        if let Err(err) = result {
+            tracing::warn!(?err, "gx-stats sidecar write failed");
+        }
     }
 
     #[cfg(feature = "jit-stats")]

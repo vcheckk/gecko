@@ -11,7 +11,7 @@ pub mod host;
 pub mod input;
 pub mod ipl;
 pub mod mmio;
-#[cfg(any(feature = "jit-stats", feature = "profile"))]
+#[cfg(any(feature = "jit-stats", feature = "profile", feature = "gx-stats"))]
 pub mod profile;
 pub mod scheduler;
 pub mod starlet;
