@@ -743,6 +743,7 @@ pub fn branch<const OP: u32, const SYSTEM: SystemId>(t: &mut JitTranslator, inst
                 t.exit_block,
                 t.block_sig_ref,
                 t.block_lookup_table_addr,
+                t.chain_fall_addr,
             ) {
                 TermEmit::HandledNia(nia) => {
                     t.last_terminator_nia = Some(nia);
@@ -765,6 +766,7 @@ pub fn branch<const OP: u32, const SYSTEM: SystemId>(t: &mut JitTranslator, inst
                 t.exit_block,
                 t.block_sig_ref,
                 t.block_lookup_table_addr,
+                t.chain_fall_addr,
             ) {
                 TermEmit::HandledNia(nia) => {
                     t.last_terminator_nia = Some(nia);

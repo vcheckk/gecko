@@ -1142,12 +1142,24 @@ pub(crate) fn emit_bclr_dispatch<const SYSTEM: SystemId>(
     exit_block: Block,
     block_sig_ref: cranelift_codegen::ir::SigRef,
     lookup_table_addr: i64,
+    fall_slot: Option<i64>,
 ) -> TermEmit {
     let bo = (instr.bo() as u32) as u8;
 
     let unconditional = (bo & 0x14) == 0x14;
     if unconditional && !instr.lk() {
         emit_blr_with_ic::<SYSTEM>(builder, ctx_ptr, pc, exit_block, block_sig_ref, lookup_table_addr)
+    } else if !unconditional {
+        self::emit_bclr_chain_fall::<SYSTEM>(
+            builder,
+            ctx_ptr,
+            instr,
+            pc,
+            exit_block,
+            block_sig_ref,
+            lookup_table_addr,
+            fall_slot,
+        )
     } else {
         TermEmit::HandledNia(emit_bclr::<SYSTEM>(builder, ctx_ptr, instr, pc))
     }
@@ -1161,14 +1173,149 @@ pub(crate) fn emit_bcctr_dispatch<const SYSTEM: SystemId>(
     exit_block: Block,
     block_sig_ref: cranelift_codegen::ir::SigRef,
     lookup_table_addr: i64,
+    fall_slot: Option<i64>,
 ) -> TermEmit {
     let bo = (instr.bo() as u32) as u8;
     let unconditional = (bo & 0x14) == 0x14;
     if unconditional && !instr.lk() {
         emit_bctr_with_ic::<SYSTEM>(builder, ctx_ptr, pc, exit_block, block_sig_ref, lookup_table_addr)
+    } else if !unconditional {
+        self::emit_bcctr_chain_fall::<SYSTEM>(
+            builder,
+            ctx_ptr,
+            instr,
+            pc,
+            exit_block,
+            block_sig_ref,
+            lookup_table_addr,
+            fall_slot,
+        )
     } else {
         TermEmit::HandledNia(emit_bcctr::<SYSTEM>(builder, ctx_ptr, instr, pc))
     }
+}
+
+fn emit_bclr_chain_fall<const SYSTEM: SystemId>(
+    builder: &mut FunctionBuilder,
+    ctx_ptr: Value,
+    instr: Instruction,
+    pc: u32,
+    exit_block: Block,
+    block_sig_ref: cranelift_codegen::ir::SigRef,
+    lookup_table_addr: i64,
+    fall_slot: Option<i64>,
+) -> TermEmit {
+    let bo = (instr.bo() as u32) as u8;
+
+    let decrement_ctr = (bo & 0x04) == 0;
+    let mut ctr_after: Option<Value> = None;
+    if decrement_ctr {
+        let ctr = ctr_load::<SYSTEM>(builder, ctx_ptr);
+        let ctr_minus_1 = builder.ins().iadd_imm(ctr, -1);
+        ctr_store::<SYSTEM>(builder, ctx_ptr, ctr_minus_1);
+        ctr_after = Some(ctr_minus_1);
+    }
+
+    let ctr_ok: Value = if decrement_ctr {
+        let ctr = ctr_after.unwrap();
+        let cc = if (bo & 0x02) != 0 {
+            IntCC::Equal
+        } else {
+            IntCC::NotEqual
+        };
+        let r = builder.ins().icmp_imm(cc, ctr, 0);
+        builder.ins().uextend(types::I32, r)
+    } else {
+        builder.ins().iconst(types::I32, 1)
+    };
+
+    let cond_ok: Value = if (bo & 0x10) != 0 {
+        builder.ins().iconst(types::I32, 1)
+    } else {
+        let bit = cr_bit_load::<SYSTEM>(builder, ctx_ptr, instr.bi());
+        let want = if (bo & 0x08) != 0 { 1 } else { 0 };
+        let r = builder.ins().icmp_imm(IntCC::Equal, bit, want);
+        builder.ins().uextend(types::I32, r)
+    };
+
+    let take = builder.ins().band(ctr_ok, cond_ok);
+    let take_b = builder.ins().icmp_imm(IntCC::NotEqual, take, 0);
+
+    let taken_block = builder.create_block();
+    let fall_block = builder.create_block();
+    builder.ins().brif(take_b, taken_block, &[], fall_block, &[]);
+
+    builder.switch_to_block(taken_block);
+    builder.seal_block(taken_block);
+    
+    if instr.lk() {
+        let lr_val = builder.ins().iconst(types::I32, pc.wrapping_add(4) as i64);
+        lr_store::<SYSTEM>(builder, ctx_ptr, lr_val);
+    }
+
+    let lr = lr_load::<SYSTEM>(builder, ctx_ptr);
+    let target_pc = builder.ins().band_imm(lr, !3i64);
+    emit_inline_cache_dispatch::<SYSTEM>(builder, ctx_ptr, target_pc, exit_block, block_sig_ref, lookup_table_addr);
+
+    builder.switch_to_block(fall_block);
+    builder.seal_block(fall_block);
+    
+    let fall_v = builder.ins().iconst(types::I32, pc.wrapping_add(4) as i64);
+    
+    if let Some(slot_addr) = fall_slot {
+        emit_chain_or_exit::<SYSTEM>(builder, ctx_ptr, slot_addr, block_sig_ref, fall_v, exit_block);
+    } else {
+        builder.ins().jump(exit_block, &[fall_v.into()]);
+    }
+
+    TermEmit::HandledChained
+}
+
+fn emit_bcctr_chain_fall<const SYSTEM: SystemId>(
+    builder: &mut FunctionBuilder,
+    ctx_ptr: Value,
+    instr: Instruction,
+    pc: u32,
+    exit_block: Block,
+    block_sig_ref: cranelift_codegen::ir::SigRef,
+    lookup_table_addr: i64,
+    fall_slot: Option<i64>,
+) -> TermEmit {
+    let bo = (instr.bo() as u32) as u8;
+
+    let unconditional = (bo & 0x10) != 0;
+    let take_b = if unconditional {
+        builder.ins().iconst(types::I8, 1)
+    } else {
+        let bit = cr_bit_load::<SYSTEM>(builder, ctx_ptr, instr.bi());
+        let want = if (bo & 0x08) != 0 { 1 } else { 0 };
+        builder.ins().icmp_imm(IntCC::Equal, bit, want)
+    };
+
+    let taken_block = builder.create_block();
+    let fall_block = builder.create_block();
+    builder.ins().brif(take_b, taken_block, &[], fall_block, &[]);
+
+    builder.switch_to_block(taken_block);
+    builder.seal_block(taken_block);
+    if instr.lk() {
+        let lr_val = builder.ins().iconst(types::I32, pc.wrapping_add(4) as i64);
+        lr_store::<SYSTEM>(builder, ctx_ptr, lr_val);
+    }
+    let ctr = ctr_load::<SYSTEM>(builder, ctx_ptr);
+    let target_pc = builder.ins().band_imm(ctr, !3i64);
+    emit_inline_cache_dispatch::<SYSTEM>(builder, ctx_ptr, target_pc, exit_block, block_sig_ref, lookup_table_addr);
+
+    builder.switch_to_block(fall_block);
+    builder.seal_block(fall_block);
+    let fall_v = builder.ins().iconst(types::I32, pc.wrapping_add(4) as i64);
+    if let Some(slot_addr) = fall_slot {
+        emit_chain_or_exit::<SYSTEM>(builder, ctx_ptr, slot_addr, block_sig_ref, fall_v, exit_block);
+    } else {
+        builder.ins().jump(exit_block, &[fall_v.into()]);
+    }
+
+    TermEmit::HandledChained
 }
 
 pub(crate) fn emit_blr_with_ic<const SYSTEM: SystemId>(
@@ -1447,12 +1594,20 @@ pub(crate) enum LogicalOp {
 }
 
 fn terminator_fall_pc(spec: &BlockSpec) -> Option<u32> {
-    if !matches!(spec.terminator, TermKind::BranchCond) {
-        return None;
-    }
     let last_idx = spec.instrs.len().checked_sub(1)?;
     let pc = spec.pc_of(last_idx);
-    Some(pc.wrapping_add(4))
+    let fall_pc = pc.wrapping_add(4);
+
+    match spec.terminator {
+        TermKind::BranchCond => Some(fall_pc),
+        TermKind::BranchToReg => {
+            let raw = spec.instrs[last_idx];
+            let bo = (raw >> 21) & 0x1F;
+            let unconditional = (bo & 0x14) == 0x14;
+            if unconditional { None } else { Some(fall_pc) }
+        }
+        _ => None,
+    }
 }
 
 fn terminator_static_taken_pc(spec: &BlockSpec) -> Option<u32> {
@@ -3036,6 +3191,36 @@ pub(crate) fn emit_psq_load_quantized<const SYSTEM: SystemId>(
 
     builder.switch_to_block(tramp_block);
     builder.seal_block(tramp_block);
+    let (host_ptr, page_off) = emit_fastmem_lookup::<SYSTEM>(builder, ctx_ptr, ea);
+    let host_addr = builder.ins().iadd(host_ptr, page_off);
+    let fast_f32_block = builder.create_block();
+    let slow_f32_block = builder.create_block();
+    builder
+        .ins()
+        .brif(host_ptr, fast_f32_block, &[host_addr.into()], slow_f32_block, &[]);
+    builder.append_block_param(fast_f32_block, types::I64);
+
+    builder.switch_to_block(fast_f32_block);
+    builder.seal_block(fast_f32_block);
+    let addr = builder.block_params(fast_f32_block)[0];
+    let raw0 = builder.ins().load(types::I32, MemFlags::new(), addr, 0);
+    let be0 = builder.ins().bswap(raw0);
+    let f32_0 = builder.ins().bitcast(types::F32, MemFlags::new(), be0);
+    let f64_0 = builder.ins().fpromote(types::F64, f32_0);
+    fpr_store::<SYSTEM>(builder, ctx_ptr, fd, f64_0);
+    let f64_1 = if w {
+        builder.ins().f64const(1.0)
+    } else {
+        let raw1 = builder.ins().load(types::I32, MemFlags::new(), addr, 4);
+        let be1 = builder.ins().bswap(raw1);
+        let f32_1 = builder.ins().bitcast(types::F32, MemFlags::new(), be1);
+        builder.ins().fpromote(types::F64, f32_1)
+    };
+    ps1_store::<SYSTEM>(builder, ctx_ptr, fd, f64_1);
+    builder.ins().jump(merge, &[]);
+
+    builder.switch_to_block(slow_f32_block);
+    builder.seal_block(slow_f32_block);
     let fd_v = builder.ins().iconst(types::I32, fd as i64);
     let w_v = builder.ins().iconst(types::I32, if w { 1 } else { 0 });
     let gqr_const = builder.ins().iconst(types::I32, gqr_idx as i64);
@@ -3107,12 +3292,45 @@ pub(crate) fn emit_psq_store_quantized<const SYSTEM: SystemId>(
 
     builder.switch_to_block(tramp_block);
     builder.seal_block(tramp_block);
+    let (host_ptr, page_off) = emit_fastmem_lookup::<SYSTEM>(builder, ctx_ptr, ea);
+    let host_addr = builder.ins().iadd(host_ptr, page_off);
+    let fast_f32_block = builder.create_block();
+    let slow_f32_block = builder.create_block();
+    builder
+        .ins()
+        .brif(host_ptr, fast_f32_block, &[host_addr.into()], slow_f32_block, &[]);
+    builder.append_block_param(fast_f32_block, types::I64);
+
+    builder.switch_to_block(fast_f32_block);
+    builder.seal_block(fast_f32_block);
+
+    let addr = builder.block_params(fast_f32_block)[0];
+    let ps0_f64 = fpr_load::<SYSTEM>(builder, ctx_ptr, fs);
+    let ps0_f32 = builder.ins().fdemote(types::F32, ps0_f64);
+    let ps0_bits = builder.ins().bitcast(types::I32, MemFlags::new(), ps0_f32);
+    let ps0_be = builder.ins().bswap(ps0_bits);
+    builder.ins().store(MemFlags::new(), ps0_be, addr, 0);
+    
+    if !w {
+        let ps1_f64 = ps1_load::<SYSTEM>(builder, ctx_ptr, fs);
+        let ps1_f32 = builder.ins().fdemote(types::F32, ps1_f64);
+        let ps1_bits = builder.ins().bitcast(types::I32, MemFlags::new(), ps1_f32);
+        let ps1_be = builder.ins().bswap(ps1_bits);
+        builder.ins().store(MemFlags::new(), ps1_be, addr, 4);
+    }
+    
+    builder.ins().jump(merge, &[]);
+
+    builder.switch_to_block(slow_f32_block);
+    builder.seal_block(slow_f32_block);
+    
     let fs_v = builder.ins().iconst(types::I32, fs as i64);
     let w_v = builder.ins().iconst(types::I32, if w { 1 } else { 0 });
     let gqr_const = builder.ins().iconst(types::I32, gqr_idx as i64);
     builder
         .ins()
         .call(local.do_psq_store, &[ctx_ptr, fs_v, ea, w_v, gqr_const]);
+    
     builder.ins().jump(merge, &[]);
 }
 
