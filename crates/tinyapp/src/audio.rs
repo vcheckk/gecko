@@ -2,7 +2,7 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{SampleFormat, SampleRate, StreamConfig, SupportedStreamConfig};
 use gecko::audio::{AidBlock, AudioSink};
 use ringbuf::HeapRb;
-use ringbuf::traits::{Consumer, Producer, Split};
+use ringbuf::traits::{Consumer, Observer, Producer, Split};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
@@ -87,6 +87,7 @@ pub struct CpalAudioSink {
     producer: ringbuf::HeapProd<Frame>,
     overflow_counter: Arc<AtomicU64>,
     sample_rate: Arc<AtomicU32>,
+    throttle_threshold: usize,
 }
 
 impl AudioSink for CpalAudioSink {
@@ -116,6 +117,11 @@ impl AudioSink for CpalAudioSink {
             self.overflow_counter.fetch_add(dropped, Ordering::Relaxed);
         }
     }
+
+    #[inline]
+    fn should_throttle(&self) -> bool {
+        self.producer.occupied_len() >= self.throttle_threshold
+    }
 }
 
 pub fn open(emulated_rate: u32) -> Result<CpalBackend, String> {
@@ -143,6 +149,7 @@ pub fn open(emulated_rate: u32) -> Result<CpalBackend, String> {
     }
 
     let cap_frames = (emulated_rate.max(host_rate) as usize / 2).max(1024);
+    let throttle_threshold = (cap_frames / 4).max(1);
     let rb = HeapRb::<Frame>::new(cap_frames);
     let (producer, consumer) = rb.split();
     let overflow_counter = Arc::new(AtomicU64::new(0));
@@ -156,6 +163,7 @@ pub fn open(emulated_rate: u32) -> Result<CpalBackend, String> {
         emulated_rate,
         ?sample_format,
         ringbuf_capacity_frames = cap_frames,
+        throttle_threshold_frames = throttle_threshold,
         "Opened CPAL output"
     );
 
@@ -212,6 +220,7 @@ pub fn open(emulated_rate: u32) -> Result<CpalBackend, String> {
             producer,
             overflow_counter,
             sample_rate: input_rate,
+            throttle_threshold,
         },
         stream,
     })

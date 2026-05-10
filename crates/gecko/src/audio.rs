@@ -26,6 +26,12 @@ pub trait AudioSink: Send {
 
     /// Optional: flush pending state. Most sinks have nothing to do.
     fn flush(&mut self) {}
+
+    /// Backpressure signal: when the host buffer is sufficiently full, the
+    /// emu thread should stall instead of producing more samples.
+    fn should_throttle(&self) -> bool {
+        false
+    }
 }
 
 /// No-op sink. The default `System::audio_sink` so headless tools (dspemu,
@@ -75,6 +81,10 @@ impl AudioSink for MultiplexAudioSink {
         for sink in &mut self.inner {
             sink.flush();
         }
+    }
+
+    fn should_throttle(&self) -> bool {
+        self.inner.iter().any(|s| s.should_throttle())
     }
 }
 

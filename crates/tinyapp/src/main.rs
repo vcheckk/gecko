@@ -78,6 +78,10 @@ struct Args {
     #[arg(long)]
     no_audio: bool,
 
+    /// Disable audio-driven framerate cap; emu runs as fast as possible
+    #[arg(long)]
+    no_cap: bool,
+
     /// Enable per-block JIT heatmap CSV dumps (requires --features jit-stats)
     #[cfg(feature = "jit-stats")]
     #[arg(long)]
@@ -363,9 +367,10 @@ fn run<const SYSTEM: SystemId>(
         }
     }
 
+    let throttle = !args.no_cap;
     let emu_handle = std::thread::Builder::new()
         .name("emu".into())
-        .spawn(move || thread::emu_thread::<SYSTEM>(emulator, emu_input, proxy, game_id))
+        .spawn(move || thread::emu_thread::<SYSTEM>(emulator, emu_input, proxy, game_id, throttle))
         .expect("failed to spawn emulator thread");
 
     let mut app = app::App {
