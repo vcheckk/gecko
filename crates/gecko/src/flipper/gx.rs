@@ -2,6 +2,8 @@ mod bp;
 pub mod constants;
 pub mod draw;
 pub mod fifo;
+#[cfg(feature = "jit")]
+pub mod jit;
 pub mod math;
 pub mod regs;
 pub mod tev;
@@ -73,6 +75,12 @@ pub struct GraphicsProcessor {
     // this at each field boundary to emit a PresentXfb action.
     pub xfb_copies: Vec<XfbCopy>,
     pub draw_vertices_scratch: Vec<DrawVertex>,
+    #[cfg(feature = "jit")]
+    pub jit_vtx: jit::JitVertexEngine,
+    #[cfg(feature = "jit")]
+    pub jit_vtx_arrays: jit::ResolvedArrays,
+    #[cfg(feature = "vtx-jit-validate")]
+    pub jit_vtx_validator: jit::validate::VertexJitValidator,
     pub lighting_dirty: bool,
     pub konst_dirty: bool,
     pub cached_color_ctrl: [ChanCtrl; 2],
@@ -158,6 +166,12 @@ impl GraphicsProcessor {
             cur_scissor_offset_y: 0,
             xfb_copies: Vec::new(),
             draw_vertices_scratch: Vec::with_capacity(256),
+            #[cfg(feature = "jit")]
+            jit_vtx: jit::JitVertexEngine::new(),
+            #[cfg(feature = "jit")]
+            jit_vtx_arrays: jit::ResolvedArrays::default(),
+            #[cfg(feature = "vtx-jit-validate")]
+            jit_vtx_validator: jit::validate::VertexJitValidator::new(),
             lighting_dirty: true,
             konst_dirty: true,
             cached_color_ctrl: [ChanCtrl::default(); 2],

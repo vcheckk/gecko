@@ -347,14 +347,16 @@ fn run<const SYSTEM: SystemId>(
 
     let emu_input = input.clone();
     if let Some(ref id) = game_id {
-        let (ppc_c, ppc_s, dsp_c, dsp_s) = emulator.load_jit_cache(id);
-        if ppc_c > 0 || dsp_c > 0 || ppc_s > 0 || dsp_s > 0 {
+        let (ppc_c, ppc_s, dsp_c, dsp_s, vtx_c, vtx_s) = emulator.load_jit_cache(id);
+        if ppc_c > 0 || dsp_c > 0 || vtx_c > 0 || ppc_s > 0 || dsp_s > 0 || vtx_s > 0 {
             tracing::info!(
                 game = id.as_str(),
                 ppc_compiled = ppc_c,
                 ppc_skipped = ppc_s,
                 dsp_compiled = dsp_c,
                 dsp_skipped = dsp_s,
+                vtx_compiled = vtx_c,
+                vtx_skipped = vtx_s,
                 "JIT cache loaded",
             );
         }

@@ -24,6 +24,8 @@ jit = [
     "dep:cranelift-native",
 ]
 jit-stats = ["jit", "dep:backtrace"]
+# Run both interpreter and JIT for every draw call, reports drift
+vtx-jit-validate = ["jit", "gx-stats"]
 fps-counter = []
 gx-stats = []
 profile = ["dep:backtrace", "dep:windows-sys"]

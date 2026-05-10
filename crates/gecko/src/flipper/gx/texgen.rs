@@ -3,6 +3,28 @@ use super::constants::*;
 use super::regs::*;
 
 impl GraphicsProcessor {
+    pub fn apply_all_texgens(
+        &self,
+        position: [f32; 3],
+        normal: [f32; 3],
+        raw_texcoords: &[Option<[f32; 2]>; 8],
+        tex_mtx_indices: &[u8; 8],
+        out_texcoords: &mut [[f32; 3]; 8],
+    ) {
+        let num_texgens = (self.xf_mem[XF_NUM_TEXGENS] as usize).min(8);
+
+        for tg in 0..num_texgens {
+            out_texcoords[tg] = self.compute_texgen(tg, position, normal, raw_texcoords, tex_mtx_indices);
+        }
+
+        for tg in num_texgens..8 {
+            out_texcoords[tg] = match raw_texcoords[tg] {
+                Some(st) => [st[0], st[1], 1.0],
+                None => [0.0, 0.0, 1.0],
+            };
+        }
+    }
+
     pub fn compute_texgen(
         &self,
         texgen_idx: usize,

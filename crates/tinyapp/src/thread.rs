@@ -21,7 +21,9 @@ pub fn emu_thread<const SYSTEM: SystemId>(
 
     if let Some(game_id) = game_id.as_deref() {
         match emulator.save_jit_cache(game_id) {
-            Ok((ppc, dsp)) => tracing::info!(ppc_blocks = ppc, dsp_blocks = dsp, "saved JIT cache"),
+            Ok((ppc, dsp, vtx)) => {
+                tracing::info!(ppc_blocks = ppc, dsp_blocks = dsp, vtx_keys = vtx, "saved JIT cache")
+            }
             Err(err) => tracing::warn!(?err, "failed to save JIT cache"),
         }
     }

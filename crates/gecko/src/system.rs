@@ -229,11 +229,13 @@ impl<const SYSTEM: SystemId> System<SYSTEM> {
     }
 
     #[cfg(feature = "jit")]
-    pub fn load_jit_cache(&mut self, game_id: &str) -> (usize, usize, usize, usize) {
+    pub fn load_jit_cache(&mut self, game_id: &str) -> (usize, usize, usize, usize, usize, usize) {
         let mut ppc_compiled = 0;
         let mut ppc_skipped = 0;
         let mut dsp_compiled = 0;
         let mut dsp_skipped = 0;
+        let mut vtx_compiled = 0;
+        let mut vtx_skipped = 0;
 
         let ppc_path = crate::jit_cache::ppc_cache_path(game_id);
         if let Ok(blocks) = crate::jit_cache::load_ppc_blocks(&ppc_path) {
@@ -271,11 +273,26 @@ impl<const SYSTEM: SystemId> System<SYSTEM> {
             dsp_skipped = s;
         }
 
-        (ppc_compiled, ppc_skipped, dsp_compiled, dsp_skipped)
+        let vtx_path = crate::jit_cache::vtx_cache_path(game_id);
+        if let Ok(keys) = crate::jit_cache::load_vtx_keys(&vtx_path) {
+            tracing::info!(count = keys.len(), "loaded vertex JIT key cache");
+            let (c, s) = self.gx.jit_vtx.precompile_keys(&keys);
+            vtx_compiled = c;
+            vtx_skipped = s;
+        }
+
+        (
+            ppc_compiled,
+            ppc_skipped,
+            dsp_compiled,
+            dsp_skipped,
+            vtx_compiled,
+            vtx_skipped,
+        )
     }
 
     #[cfg(feature = "jit")]
-    pub fn save_jit_cache(&self, game_id: &str) -> std::io::Result<(usize, usize)> {
+    pub fn save_jit_cache(&self, game_id: &str) -> std::io::Result<(usize, usize, usize)> {
         let cached_system = if SYSTEM == WII {
             crate::jit_cache::CachedSystem::Wii
         } else {
@@ -297,7 +314,11 @@ impl<const SYSTEM: SystemId> System<SYSTEM> {
             crate::jit_cache::save_dsp_blocks(&crate::jit_cache::dsp_cache_path(game_id), cached_system, &blocks)?;
         }
 
-        Ok((ppc_count, dsp_count))
+        let keys = self.gx.jit_vtx.cached_keys();
+        let vtx_count = keys.len();
+        crate::jit_cache::save_vtx_keys(&crate::jit_cache::vtx_cache_path(game_id), cached_system, &keys)?;
+
+        Ok((ppc_count, dsp_count, vtx_count))
     }
 
     #[cfg(any(feature = "jit-stats", feature = "profile", feature = "gx-stats"))]

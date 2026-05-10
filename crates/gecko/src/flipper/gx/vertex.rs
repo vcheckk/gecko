@@ -7,6 +7,9 @@ use crate::mmio::{Mmio, RamView};
 use crate::system::SystemId;
 use std::io::{Cursor, Read};
 
+#[cfg(feature = "jit")]
+use super::jit;
+
 /// Parsed vertex format descriptor from CP/VAT registers.
 struct VertexFormat {
     vat_a: VatA,
@@ -76,13 +79,7 @@ impl GraphicsProcessor {
         self.draw_vertices_scratch.clear();
         self.draw_vertices_scratch.reserve(vertex_count);
 
-        let mut cur = Cursor::new(data);
-        let view = mmio.ram_view();
-
-        for _ in 0..vertex_count {
-            let v = self.decode_vertex(&mut cur, data, &view, &vf);
-            self.draw_vertices_scratch.push(v);
-        }
+        self::dispatch_decode(self, mmio, cmd, data, vertex_count, &vf);
 
         let modelview = self.build_modelview_matrix(vf.default_pos_mtx_idx);
 
@@ -458,18 +455,8 @@ impl GraphicsProcessor {
         let normal_view = Vec3::from(normal).transform(&nrm_mtx).normalize();
         let pos_view = self.xf_transform_3x4(pos_mtx_base, position);
 
-        let num_texgens = (self.xf_mem[XF_NUM_TEXGENS] as usize).min(8);
         let mut texcoords: [[f32; 3]; 8] = [[0.0, 0.0, 1.0]; 8];
-
-        for tg_idx in 0..num_texgens {
-            texcoords[tg_idx] = self.compute_texgen(tg_idx, position, normal, &raw_texcoords, &tex_mtx_idx);
-        }
-
-        for tg_idx in num_texgens..8 {
-            if let Some(st) = raw_texcoords[tg_idx] {
-                texcoords[tg_idx] = [st[0], st[1], 1.0];
-            }
-        }
+        self.apply_all_texgens(position, normal, &raw_texcoords, &tex_mtx_idx, &mut texcoords);
 
         DrawVertex {
             position,
@@ -706,4 +693,111 @@ fn decode_color(data: &[u8], fmt: regs::ColorFormat, cnt: regs::ColorCount) -> [
             [r, g, b, a]
         }
     }
+}
+
+fn dispatch_decode<const SYSTEM: SystemId>(
+    gp: &mut GraphicsProcessor,
+    mmio: &mut Mmio<SYSTEM>,
+    #[cfg_attr(not(feature = "jit"), allow(unused_variables))] cmd: u8,
+    data: &[u8],
+    vertex_count: usize,
+    vf: &VertexFormat,
+) {
+    #[cfg(feature = "jit")]
+    {
+        let vat_index = (cmd & 0b111) as usize;
+        let key = jit::VtxKey::from_cp_regs(&gp.cp_regs, vat_index);
+        let view = mmio.ram_view();
+        let arrays_ok = jit::resolve_arrays_for_draw(&gp.cp_regs, &key, view.mem1, view.mem2, &mut gp.jit_vtx_arrays);
+        let parser = if arrays_ok {
+            gp.jit_vtx.lookup_or_compile(key)
+        } else {
+            None
+        };
+
+        if let Some(parser) = parser {
+            gp.draw_vertices_scratch.clear();
+            gp.draw_vertices_scratch.reserve(vertex_count);
+
+            let gp_raw = gp as *mut GraphicsProcessor as *mut std::ffi::c_void;
+            let xf_mem_ptr = gp.xf_mem.as_ptr();
+            let arrays_ptr = gp.jit_vtx_arrays.0.as_ptr();
+            let out_ptr = gp.draw_vertices_scratch.as_mut_ptr();
+
+            unsafe {
+                parser(
+                    gp_raw,
+                    xf_mem_ptr,
+                    arrays_ptr,
+                    data.as_ptr(),
+                    out_ptr,
+                    vertex_count as u32,
+                );
+                gp.draw_vertices_scratch.set_len(vertex_count);
+            }
+
+            #[cfg(feature = "vtx-jit-validate")]
+            self::run_validator(gp, mmio, cmd, key, data, vertex_count, vf);
+            return;
+        }
+    }
+
+    self::run_interpreter(gp, mmio, data, vertex_count, vf);
+}
+
+fn run_interpreter<const SYSTEM: SystemId>(
+    gp: &mut GraphicsProcessor,
+    mmio: &mut Mmio<SYSTEM>,
+    data: &[u8],
+    vertex_count: usize,
+    vf: &VertexFormat,
+) {
+    let view = mmio.ram_view();
+    let mut cur = Cursor::new(data);
+    for _ in 0..vertex_count {
+        let v = gp.decode_vertex(&mut cur, data, &view, vf);
+        gp.draw_vertices_scratch.push(v);
+    }
+}
+
+#[cfg(feature = "vtx-jit-validate")]
+fn run_validator<const SYSTEM: SystemId>(
+    gp: &mut GraphicsProcessor,
+    mmio: &mut Mmio<SYSTEM>,
+    cmd: u8,
+    key: jit::VtxKey,
+    data: &[u8],
+    vertex_count: usize,
+    vf: &VertexFormat,
+) {
+    if !gp.jit_vtx_validator.enabled {
+        return;
+    }
+
+    let mut interp_buf = std::mem::take(&mut gp.jit_vtx_validator.interp_scratch);
+    interp_buf.clear();
+    interp_buf.reserve(vertex_count);
+
+    {
+        let view = mmio.ram_view();
+        let mut cur = Cursor::new(data);
+        for _ in 0..vertex_count {
+            let v = gp.decode_vertex(&mut cur, data, &view, vf);
+            interp_buf.push(v);
+        }
+    }
+
+    let ctx = jit::validate::CompareCtx {
+        key,
+        draw_cmd: cmd,
+        vertex_count: vertex_count as u32,
+    };
+    let mismatches = jit::validate::compare_draw_vertices(&gp.draw_vertices_scratch, &interp_buf, &ctx);
+    gp.jit_vtx_validator.record(&ctx, &mismatches);
+
+    if !gp.jit_vtx_validator.use_jit_output_downstream {
+        std::mem::swap(&mut gp.draw_vertices_scratch, &mut interp_buf);
+    }
+
+    gp.jit_vtx_validator.interp_scratch = interp_buf;
 }
