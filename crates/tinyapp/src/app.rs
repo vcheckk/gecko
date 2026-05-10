@@ -79,16 +79,7 @@ impl State {
         self.surface.configure(&self.device, &self.surface_config);
     }
 
-    fn render(&mut self, window: &Window) {
-        #[cfg(feature = "fps-counter")]
-        let (fps, native_pct) = fps::read(&self.fps_shared);
-        #[cfg(not(feature = "fps-counter"))]
-        let fps = {
-            let delta = self.last_frame.elapsed().as_secs_f64();
-            self.last_frame = Instant::now();
-            if delta > 0.0 { 1.0 / delta } else { 0.0 }
-        };
-
+    fn render(&mut self, window: &Window, waiting: bool) {
         let frame = match self.surface.get_current_texture() {
             Ok(f) => f,
             Err(e) => {
@@ -97,42 +88,78 @@ impl State {
             }
         };
         let view = frame.texture.create_view(&Default::default());
-        let pending_capture = self.screenshots.take_pending();
 
-        // Blit the latest XFB output from the renderer worker to the swapchain.
-        self.renderer.blit(
-            &self.queue,
-            &view,
-            (self.surface_config.width, self.surface_config.height),
-        );
+        #[cfg(feature = "fps-counter")]
+        let (fps, native_pct) = if waiting { (0.0, 0.0) } else { fps::read(&self.fps_shared) };
+        #[cfg(not(feature = "fps-counter"))]
+        let fps = if waiting {
+            0.0
+        } else {
+            let delta = self.last_frame.elapsed().as_secs_f64();
+            self.last_frame = Instant::now();
+            if delta > 0.0 { 1.0 / delta } else { 0.0 }
+        };
 
-        // Capture the game-only screen before the egui overlay is drawn. Reads
-        // the swapchain instead of the XFB directly so the blit's fullscreen
-        // sample resolves any partial-update state in the XFB accumulator.
-        if let CaptureRequest::GameOnly = pending_capture
-            && let Some(cap) = capture::capture_texture(&self.device, &self.queue, &frame.texture)
-        {
-            capture::save_png_async(capture::timestamped_path("game"), cap, true);
+        let pending_capture = if waiting {
+            CaptureRequest::None
+        } else {
+            self.screenshots.take_pending()
+        };
+
+        if !waiting {
+            self.renderer.blit(
+                &self.queue,
+                &view,
+                (self.surface_config.width, self.surface_config.height),
+            );
+
+            // Capture the game-only screen before the egui overlay is drawn. Reads
+            // the swapchain instead of the XFB directly so the blit's fullscreen
+            // sample resolves any partial-update state in the XFB accumulator.
+            if let CaptureRequest::GameOnly = pending_capture
+                && let Some(cap) = capture::capture_texture(&self.device, &self.queue, &frame.texture)
+            {
+                capture::save_png_async(capture::timestamped_path("game"), cap, true);
+            }
         }
 
-        // egui overlay
         let raw_input = self.egui_winit.take_egui_input(window);
         let full_output = self.egui_ctx.run_ui(raw_input, |ui| {
             let ctx = ui.ctx().clone();
-            let frame =
-                egui::Frame::window(&ctx.global_style()).fill(egui::Color32::from_rgba_unmultiplied(20, 20, 20, 180));
-            egui::Window::new("perf_hud")
-                .title_bar(false)
-                .resizable(false)
-                .movable(false)
-                .anchor(egui::Align2::RIGHT_TOP, [-8.0, 8.0])
-                .frame(frame)
-                .show(&ctx, |ui| {
-                    #[cfg(feature = "fps-counter")]
-                    ui.label(egui::RichText::new(format!("{fps:.1} FPS  {native_pct:.1}%")).monospace());
-                    #[cfg(not(feature = "fps-counter"))]
-                    ui.label(egui::RichText::new(format!("{fps:.1} FPS")).monospace());
-                });
+            if waiting {
+                let frame = egui::Frame::window(&ctx.global_style())
+                    .fill(egui::Color32::from_rgba_unmultiplied(20, 20, 20, 220));
+                egui::Window::new("wait_modal")
+                    .title_bar(false)
+                    .resizable(false)
+                    .movable(false)
+                    .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                    .frame(frame)
+                    .show(&ctx, |ui| {
+                        ui.vertical_centered(|ui| {
+                            ui.label(
+                                egui::RichText::new("press space to start")
+                                    .size(13.0)
+                                    .color(egui::Color32::from_gray(170)),
+                            );
+                        });
+                    });
+            } else {
+                let frame = egui::Frame::window(&ctx.global_style())
+                    .fill(egui::Color32::from_rgba_unmultiplied(20, 20, 20, 180));
+                egui::Window::new("perf_hud")
+                    .title_bar(false)
+                    .resizable(false)
+                    .movable(false)
+                    .anchor(egui::Align2::RIGHT_TOP, [-8.0, 8.0])
+                    .frame(frame)
+                    .show(&ctx, |ui| {
+                        #[cfg(feature = "fps-counter")]
+                        ui.label(egui::RichText::new(format!("{fps:.1} FPS  {native_pct:.1}%")).monospace());
+                        #[cfg(not(feature = "fps-counter"))]
+                        ui.label(egui::RichText::new(format!("{fps:.1} FPS")).monospace());
+                    });
+            }
         });
 
         self.egui_winit
@@ -156,13 +183,23 @@ impl State {
         self.egui_renderer
             .update_buffers(&self.device, &self.queue, &mut encoder, &tris, &screen_desc);
         {
+            let load = if waiting {
+                wgpu::LoadOp::Clear(wgpu::Color {
+                    r: 0.07,
+                    g: 0.07,
+                    b: 0.08,
+                    a: 1.0,
+                })
+            } else {
+                wgpu::LoadOp::Load
+            };
             let rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("egui"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &view,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
+                        load,
                         store: wgpu::StoreOp::Store,
                     },
                     depth_slice: None,
@@ -199,8 +236,15 @@ pub struct App {
     pub init: Option<AppInit>,
     pub _audio_stream: Option<cpal::Stream>,
     pub shutdown_requested: Arc<AtomicBool>,
+    pub start_gate: Arc<AtomicBool>,
     #[cfg(feature = "fps-counter")]
     pub fps_shared: FpsShared,
+}
+
+impl App {
+    fn waiting(&self) -> bool {
+        !self.start_gate.load(Ordering::Acquire)
+    }
 }
 
 pub struct AppInit {
@@ -279,7 +323,10 @@ impl ApplicationHandler for App {
         }
 
         match event {
-            WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::CloseRequested => {
+                self.shutdown_requested.store(true, Ordering::Relaxed);
+                event_loop.exit();
+            }
             WindowEvent::Resized(size) => {
                 if let (Some(state), Some(window)) = (&mut self.state, &self.window) {
                     state.resize(window, size.width, size.height);
@@ -288,6 +335,16 @@ impl ApplicationHandler for App {
             WindowEvent::KeyboardInput { event, .. } => {
                 let pressed = event.state.is_pressed();
                 if let PhysicalKey::Code(key) = event.physical_key {
+                    if self.waiting() {
+                        if pressed && !event.repeat && key == KeyCode::Space {
+                            self.start_gate.store(true, Ordering::Release);
+                            if let Some(window) = &self.window {
+                                window.request_redraw();
+                            }
+                        }
+                        return;
+                    }
+
                     if pressed && !event.repeat {
                         if let Some(state) = &mut self.state {
                             match key {
@@ -342,8 +399,9 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::RedrawRequested => {
+                let waiting = self.waiting();
                 if let (Some(state), Some(window)) = (&mut self.state, &self.window) {
-                    state.render(window);
+                    state.render(window, waiting);
                 }
             }
             _ => {}

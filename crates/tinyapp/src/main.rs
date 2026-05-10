@@ -127,6 +127,10 @@ struct Args {
     #[cfg(feature = "fps-counter")]
     #[arg(long)]
     fps_log: Option<String>,
+
+    /// Show a small centered window and block until space is pressed before booting
+    #[arg(long)]
+    wait: bool,
 }
 
 fn resolve_aspect(arg: &str, system: SystemId) -> TargetAspect {
@@ -368,9 +372,22 @@ fn run<const SYSTEM: SystemId>(
     }
 
     let throttle = !args.no_cap;
+    let start_gate = Arc::new(AtomicBool::new(!args.wait));
+    let emu_start_gate = start_gate.clone();
+    let emu_shutdown = shutdown_requested.clone();
     let emu_handle = std::thread::Builder::new()
         .name("emu".into())
-        .spawn(move || thread::emu_thread::<SYSTEM>(emulator, emu_input, proxy, game_id, throttle))
+        .spawn(move || {
+            thread::emu_thread::<SYSTEM>(
+                emulator,
+                emu_input,
+                proxy,
+                game_id,
+                throttle,
+                emu_start_gate,
+                emu_shutdown,
+            )
+        })
         .expect("failed to spawn emulator thread");
 
     let mut app = app::App {
@@ -388,6 +405,7 @@ fn run<const SYSTEM: SystemId>(
         }),
         _audio_stream: audio_stream,
         shutdown_requested,
+        start_gate,
         #[cfg(feature = "fps-counter")]
         fps_shared,
     };

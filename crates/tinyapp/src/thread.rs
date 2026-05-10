@@ -1,6 +1,7 @@
 use gecko::HostInput;
 use gecko::system::{System, SystemId};
 use spin_sleep::SpinSleeper;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use winit::event_loop::EventLoopProxy;
@@ -11,9 +12,18 @@ pub fn emu_thread<const SYSTEM: SystemId>(
     proxy: EventLoopProxy<()>,
     game_id: Option<String>,
     throttle: bool,
+    start_gate: Arc<AtomicBool>,
+    shutdown: Arc<AtomicBool>,
 ) {
     let sleeper = SpinSleeper::default();
     let throttle_step = Duration::from_micros(500);
+
+    while !start_gate.load(Ordering::Acquire) {
+        if shutdown.load(Ordering::Relaxed) {
+            return;
+        }
+        sleeper.sleep(Duration::from_millis(10));
+    }
 
     loop {
         while throttle && emulator.audio_sink.should_throttle() {
