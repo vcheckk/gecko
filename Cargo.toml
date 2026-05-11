@@ -4,31 +4,30 @@ members = [
     "crates/multitool",
     "crates/disasm",
     "crates/gecko",
-    "crates/tinytracer",
-    "crates/tinybench",
     "crates/image",
     "crates/tinyapp",
     "crates/backend-wgpu",
     "crates/scripting",
-    "crates/dspemu",
     "crates/dbglib",
     "crates/debugger",
+    "crates/mcp",
 
     # Stuff we rarely use
     "crates/dsptestrunner",
     "crates/screenshotter",
+    "crates/dspemu",
+    "crates/tinytracer",
+    "crates/tinybench",
 ]
 default-members = [
     "crates/multitool",
     "crates/disasm",
     "crates/gecko",
-    "crates/tinytracer",
-    "crates/tinybench",
     "crates/image",
     "crates/tinyapp",
     "crates/backend-wgpu",
     "crates/scripting",
-    "crates/dspemu",
+    "crates/mcp",
 ]
 
 exclude = [
