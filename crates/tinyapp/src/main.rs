@@ -19,8 +19,15 @@ use gecko::wii::Wii;
 use image::Dol;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 use winit::event_loop::EventLoop;
 use winit::keyboard::KeyCode;
+
+#[derive(Debug, Clone, Copy)]
+pub enum UserEvent {
+    FrameReady { at: Instant },
+    Shutdown,
+}
 
 #[derive(Parser)]
 #[command(
@@ -330,8 +337,15 @@ fn run<const SYSTEM: SystemId>(
 
     let input = Arc::new(Mutex::new(HostInput::neutral_for(SYSTEM)));
 
-    let event_loop = EventLoop::new().unwrap();
+    let event_loop = EventLoop::<UserEvent>::with_user_event().build().unwrap();
     let proxy = event_loop.create_proxy();
+
+    {
+        let cb_proxy = proxy.clone();
+        renderer.set_frame_ready_callback(move |at| {
+            let _ = cb_proxy.send_event(UserEvent::FrameReady { at });
+        });
+    }
 
     // Ctrl+C / SIGINT routes through the winit event loop so it tears down
     // through the same path as the window close button. Crucial for the
@@ -348,7 +362,7 @@ fn run<const SYSTEM: SystemId>(
             }
 
             tracing::info!("Ctrl+C received, requesting graceful shutdown");
-            let _ = proxy.send_event(());
+            let _ = proxy.send_event(UserEvent::Shutdown);
         }) {
             tracing::warn!(?err, "failed to install Ctrl+C handler");
         }
@@ -375,18 +389,11 @@ fn run<const SYSTEM: SystemId>(
     let start_gate = Arc::new(AtomicBool::new(!args.wait));
     let emu_start_gate = start_gate.clone();
     let emu_shutdown = shutdown_requested.clone();
+    drop(proxy);
     let emu_handle = std::thread::Builder::new()
         .name("emu".into())
         .spawn(move || {
-            thread::emu_thread::<SYSTEM>(
-                emulator,
-                emu_input,
-                proxy,
-                game_id,
-                throttle,
-                emu_start_gate,
-                emu_shutdown,
-            )
+            thread::emu_thread::<SYSTEM>(emulator, emu_input, game_id, throttle, emu_start_gate, emu_shutdown)
         })
         .expect("failed to spawn emulator thread");
 

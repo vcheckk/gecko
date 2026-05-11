@@ -202,6 +202,14 @@ impl GraphicsProcessor {
 }
 
 pub fn present_xfb<const SYSTEM: SystemId>(sys: &mut System<SYSTEM>) {
+    sys.vi_present_seen_this_frame = true;
+    sys.vsync_pending = true;
+
+    #[cfg(feature = "fps-counter")]
+    {
+        sys.fps_counter.vsync_count += 1;
+    }
+
     if sys.gx.xfb_copies.is_empty() {
         return;
     }

@@ -4,15 +4,23 @@ use gecko::HostInput;
 #[cfg(feature = "fps-counter")]
 use gecko::fps::{self, FpsShared};
 use gecko::hollywood::ipc::usb;
+use spin_sleep::SpinSleeper;
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-#[cfg(not(feature = "fps-counter"))]
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use winit::application::ApplicationHandler;
 use winit::event::{MouseButton, WindowEvent};
 use winit::event_loop::ActiveEventLoop;
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowId};
+
+const PACER_OFFSET: Duration = Duration::from_millis(1);
+const FRAME_PERIOD_60HZ: Duration = Duration::from_nanos(16_666_667);
+const CADENCE_WINDOW: usize = 16;
+const CADENCE_MIN_SAMPLES: usize = 4;
+const CADENCE_MIN: Duration = Duration::from_micros(500);
+const CADENCE_MAX: Duration = Duration::from_millis(200);
 
 pub struct State {
     surface: wgpu::Surface<'static>,
@@ -29,6 +37,12 @@ pub struct State {
     screenshots: ScreenshotControl,
     #[cfg(feature = "fps-counter")]
     fps_shared: FpsShared,
+    intended_present_time: Option<Instant>,
+    frame_period: Duration,
+    pacer_offset: Duration,
+    pacer_sleeper: SpinSleeper,
+    last_frame_ready_at: Option<Instant>,
+    recent_intervals: VecDeque<Duration>,
 }
 
 impl State {
@@ -60,7 +74,45 @@ impl State {
             screenshots: ScreenshotControl::new(),
             #[cfg(feature = "fps-counter")]
             fps_shared,
+            intended_present_time: None,
+            frame_period: FRAME_PERIOD_60HZ,
+            pacer_offset: PACER_OFFSET,
+            pacer_sleeper: SpinSleeper::default(),
+            last_frame_ready_at: None,
+            recent_intervals: VecDeque::with_capacity(CADENCE_WINDOW),
         }
+    }
+
+    pub fn observe_frame_ready(&mut self, at: Instant) {
+        let Some(prev) = self.last_frame_ready_at.replace(at) else {
+            return;
+        };
+
+        let Some(delta) = at.checked_duration_since(prev) else {
+            return;
+        };
+
+        if !(CADENCE_MIN..=CADENCE_MAX).contains(&delta) {
+            return;
+        }
+
+        if self.recent_intervals.len() == CADENCE_WINDOW {
+            self.recent_intervals.pop_front();
+        }
+
+        self.recent_intervals.push_back(delta);
+        let n = self.recent_intervals.len();
+        if n < CADENCE_MIN_SAMPLES {
+            return;
+        }
+
+        let mut buf = [Duration::ZERO; CADENCE_WINDOW];
+        for (slot, d) in buf.iter_mut().zip(self.recent_intervals.iter()) {
+            *slot = *d;
+        }
+        buf[..n].sort();
+
+        self.frame_period = buf[n / 2];
     }
 
     fn resize(&mut self, window: &Window, width: u32, height: u32) {
@@ -80,6 +132,14 @@ impl State {
     }
 
     fn render(&mut self, window: &Window, waiting: bool) {
+        if !waiting && let Some(intended) = self.intended_present_time {
+            let target = intended + self.pacer_offset;
+            let now = Instant::now();
+            if target > now {
+                self.pacer_sleeper.sleep(target - now);
+            }
+        }
+
         let frame = match self.surface.get_current_texture() {
             Ok(f) => f,
             Err(e) => {
@@ -229,6 +289,13 @@ impl State {
         }
 
         frame.present();
+
+        if !waiting {
+            let now = Instant::now();
+            let base = self.intended_present_time.unwrap_or(now);
+            let next = (base + self.frame_period).max(now);
+            self.intended_present_time = Some(next);
+        }
     }
 }
 
@@ -260,7 +327,7 @@ pub struct AppInit {
     pub surface_format: wgpu::TextureFormat,
 }
 
-impl ApplicationHandler for App {
+impl ApplicationHandler<crate::UserEvent> for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         let initial_size = self
             .init
@@ -412,14 +479,26 @@ impl ApplicationHandler for App {
         }
     }
 
-    fn user_event(&mut self, event_loop: &ActiveEventLoop, _event: ()) {
-        if self.shutdown_requested.load(Ordering::Relaxed) {
-            event_loop.exit();
-            return;
-        }
+    fn user_event(&mut self, event_loop: &ActiveEventLoop, event: crate::UserEvent) {
+        match event {
+            crate::UserEvent::Shutdown => {
+                self.shutdown_requested.store(true, Ordering::Relaxed);
+                event_loop.exit();
+            }
+            crate::UserEvent::FrameReady { at } => {
+                if self.shutdown_requested.load(Ordering::Relaxed) {
+                    event_loop.exit();
+                    return;
+                }
 
-        if let Some(window) = &self.window {
-            window.request_redraw();
+                if let Some(state) = self.state.as_mut() {
+                    state.observe_frame_ready(at);
+                }
+
+                if let Some(window) = &self.window {
+                    window.request_redraw();
+                }
+            }
         }
     }
 }

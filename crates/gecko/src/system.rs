@@ -30,6 +30,7 @@ pub const WII: SystemId = 1;
 
 pub struct System<const SYSTEM: SystemId> {
     pub vsync_pending: bool,
+    pub vi_present_seen_this_frame: bool,
     pub gekko: Gekko,
     pub scheduler: Scheduler<SYSTEM>,
     pub mmio: Mmio<SYSTEM>,
@@ -85,6 +86,7 @@ impl<const SYSTEM: SystemId> System<SYSTEM> {
     pub(crate) fn with_scheduler(entrypoint: u32, scheduler: Scheduler<SYSTEM>) -> Self {
         System {
             vsync_pending: false,
+            vi_present_seen_this_frame: false,
             gekko: Gekko::new(entrypoint),
             scheduler,
             mmio: Mmio::new(),

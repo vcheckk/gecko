@@ -4,9 +4,12 @@ use crossbeam_channel::{Receiver, Sender, bounded};
 use gecko::host::EfbWriteback;
 use gecko::host::{DrawData, GxAction, RenderSink};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 #[cfg(feature = "renderdoc-capture")]
 use std::time::Duration;
+use std::time::Instant;
+
+pub type FrameReadyCallback = Box<dyn Fn(Instant) + Send + Sync>;
 
 const CHANNEL_CAPACITY: usize = 65536;
 const RECYCLE_CAPACITY: usize = 8192;
@@ -58,6 +61,7 @@ fn worker(
     shared: Arc<Shared>,
     rx: Receiver<WorkerMsg>,
     recyclers: Recyclers,
+    frame_ready_cb: Arc<OnceLock<FrameReadyCallback>>,
 ) {
     #[cfg(feature = "renderdoc-capture")]
     let mut renderdoc = crate::renderdoc_capture::RenderDocCapture::new();
@@ -105,8 +109,11 @@ fn worker(
 
             match action {
                 GxAction::PresentXfb { .. } => {
-                    let mut output = shared.output.lock().unwrap();
-                    *output = gx.xfb_view.clone();
+                    let view = gx.xfb_view.clone();
+                    *shared.output.lock().unwrap() = view;
+                    if let Some(cb) = frame_ready_cb.get() {
+                        cb(Instant::now());
+                    }
                 }
                 GxAction::Draw(mut boxed) => {
                     boxed.vertices.clear();
@@ -154,6 +161,7 @@ pub struct Renderer {
     blit_sampler: wgpu::Sampler,
     target_aspect: TargetAspect,
     actions_sent: Arc<AtomicU64>,
+    frame_ready_cb: Arc<OnceLock<FrameReadyCallback>>,
     /// Receiver end of the EFB-to-texture writeback channel. Taken by the
     /// emulator setup code (via [`Renderer::take_writeback_rx`]) and
     /// installed into `GraphicsProcessor::efb_writeback_rx`. Wrapped in
@@ -266,13 +274,15 @@ impl Renderer {
             batches: batches_tx,
         };
 
-        // Spawn the worker.
+        let frame_ready_cb: Arc<OnceLock<FrameReadyCallback>> = Arc::new(OnceLock::new());
+
         let worker_shared = shared.clone();
         let worker_device = device.clone();
         let worker_queue = queue.clone();
+        let worker_cb = frame_ready_cb.clone();
         std::thread::Builder::new()
             .name("gx-renderer".into())
-            .spawn(move || worker(gx, worker_device, worker_queue, worker_shared, rx, recyclers))
+            .spawn(move || worker(gx, worker_device, worker_queue, worker_shared, rx, recyclers, worker_cb))
             .expect("failed to spawn renderer worker");
 
         Renderer {
@@ -284,11 +294,19 @@ impl Renderer {
             blit_sampler,
             target_aspect,
             actions_sent: Arc::new(AtomicU64::new(0)),
+            frame_ready_cb,
             #[cfg(feature = "efb-writeback")]
             writeback_rx: Arc::new(Mutex::new(Some(writeback_rx))),
             recycle_rx: Arc::new(Mutex::new(Some(recycle_rx))),
             batch_recycle_rx: Arc::new(Mutex::new(Some(batch_recycle_rx))),
         }
+    }
+
+    pub fn set_frame_ready_callback<F>(&self, cb: F)
+    where
+        F: Fn(Instant) + Send + Sync + 'static,
+    {
+        let _ = self.frame_ready_cb.set(Box::new(cb));
     }
 
     /// Take the writeback receiver once. Returns `Some` on the first call,

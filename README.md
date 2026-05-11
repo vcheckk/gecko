@@ -22,6 +22,7 @@ Gecko is still in development. Support may vary, while many games work very well
 - IPL skip patches for NTSC and PAL
 - `wgpu` based renderer backend
 - `wesl` based specialized shader compiler
+- Frame pacing
 - Modular audio backend, defaults to `cpal`
   - Core speed synced to the audio rate
   - Supports mixing audio sinks

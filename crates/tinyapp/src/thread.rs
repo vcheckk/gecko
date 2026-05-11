@@ -4,12 +4,10 @@ use spin_sleep::SpinSleeper;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use winit::event_loop::EventLoopProxy;
 
 pub fn emu_thread<const SYSTEM: SystemId>(
     mut emulator: System<SYSTEM>,
     input: Arc<Mutex<HostInput>>,
-    proxy: EventLoopProxy<()>,
     game_id: Option<String>,
     throttle: bool,
     start_gate: Arc<AtomicBool>,
@@ -25,18 +23,17 @@ pub fn emu_thread<const SYSTEM: SystemId>(
         sleeper.sleep(Duration::from_millis(10));
     }
 
-    loop {
+    while !shutdown.load(Ordering::Relaxed) {
         while throttle && emulator.audio_sink.should_throttle() {
+            if shutdown.load(Ordering::Relaxed) {
+                break;
+            }
             sleeper.sleep(throttle_step);
         }
 
         let input = *input.lock().unwrap();
         emulator.apply_host_input(&input);
         emulator.run_until_vsync();
-
-        if proxy.send_event(()).is_err() {
-            break;
-        }
     }
 
     if let Some(game_id) = game_id.as_deref() {
