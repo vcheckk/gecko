@@ -214,7 +214,10 @@ impl EfbClear {
         }
     }
 
-    /// Clear a rectangular region with independent RGB, alpha, and depth masks.
+    /// Clear a rectangular region with independent RGB, alpha, and depth
+    /// masks. Returns the finished CommandBuffer so the caller can batch
+    /// it with surrounding work; returns None on no-op early-outs
+    /// (all masks off / zero-area / fully clamped away).
     pub fn clear_region_masked(
         &self,
         device: &wgpu::Device,
@@ -233,21 +236,23 @@ impl EfbClear {
         color_update: bool,
         alpha_update: bool,
         z_update: bool,
-    ) {
+    ) -> Option<wgpu::CommandBuffer> {
         if !color_update && !alpha_update && !z_update {
-            return;
+            return None;
         }
+
         if w == 0 || h == 0 {
             tracing::warn!(x, y, w, h, "clear: zero-area clear region, skipping");
-            return;
+            return None;
         }
+
         let x = x.min(target_width);
         let y = y.min(target_height);
         let w = w.min(target_width.saturating_sub(x));
         let h = h.min(target_height.saturating_sub(y));
         if w == 0 || h == 0 {
             tracing::warn!(x, y, w, h, "clear: zero-area after clamping to target, skipping");
-            return;
+            return None;
         }
 
         // im gonna vomit
@@ -327,6 +332,7 @@ impl EfbClear {
             rpass.draw(0..3, 0..1);
         }
         encoder.pop_debug_group();
-        queue.submit([encoder.finish()]);
+
+        Some(encoder.finish())
     }
 }

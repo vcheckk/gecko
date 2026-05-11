@@ -107,6 +107,11 @@ impl GxRenderer {
             return;
         }
 
+        let needs_shader_copy = dst_h != height || (gamma - 1.0).abs() > f32::EPSILON;
+        if needs_shader_copy && self.xfb_copy_uniform_write_pending {
+            self.submit_pending(queue);
+        }
+
         let entry = self.xfb_copies.entry(id).or_insert_with(|| {
             let texture_label = format!("xfb_copy_tmp id={id} size={width}x{dst_h}");
             let tex = device.create_texture(&wgpu::TextureDescriptor {
@@ -154,7 +159,6 @@ impl GxRenderer {
             *entry = (tex, view);
         }
 
-        let needs_shader_copy = dst_h != height || (gamma - 1.0).abs() > f32::EPSILON;
         let group_label = format!(
             "CopyXfb id={id} src=({src_x},{src_y} {width}x{height}) dst_h={dst_h} gamma={gamma:.3} clear={clear}"
         );
@@ -248,18 +252,17 @@ impl GxRenderer {
             );
         }
         encoder.pop_debug_group();
-        queue.submit([encoder.finish()]);
+
+        self.pending_command_buffers.push(encoder.finish());
+        if needs_shader_copy {
+            self.xfb_copy_uniform_write_pending = true;
+        }
 
         // Region-scoped EFB clear after copy (if requested).
         if clear {
-            self.efb_clear.clear_region_masked(
+            self.clear_efb_region(
                 device,
                 queue,
-                &self.efb_msaa_view,
-                &self.efb_view,
-                &self.efb_depth_view,
-                crate::EFB_WIDTH,
-                crate::EFB_HEIGHT,
                 src_x,
                 src_y,
                 src_w,
@@ -334,6 +337,10 @@ impl GxRenderer {
                 (tex, view)
             });
 
+        if self.xfb_copy_uniform_write_pending {
+            self.submit_pending(queue);
+        }
+
         let uniforms = XfbCopyUniforms {
             src_rect: [src_x as f32, src_y as f32, width as f32, height as f32],
             dst_size: [dst_w as f32, dst_h as f32],
@@ -391,7 +398,8 @@ impl GxRenderer {
             rpass.draw(0..3, 0..1);
         }
         encoder.pop_debug_group();
-        queue.submit([encoder.finish()]);
+        self.pending_command_buffers.push(encoder.finish());
+        self.xfb_copy_uniform_write_pending = true;
 
         self.efb_copy_cache.insert(dest_addr, (tex, view));
     }
@@ -464,6 +472,10 @@ impl GxRenderer {
                 (tex, view)
             });
 
+        if self.efb_depth_resolve_uniform_write_pending {
+            self.submit_pending(queue);
+        }
+
         let uniforms = XfbCopyUniforms {
             src_rect: [src_x as f32, src_y as f32, width as f32, height as f32],
             dst_size: [dst_w as f32, dst_h as f32],
@@ -517,7 +529,8 @@ impl GxRenderer {
             rpass.draw(0..3, 0..1);
         }
         encoder.pop_debug_group();
-        queue.submit([encoder.finish()]);
+        self.pending_command_buffers.push(encoder.finish());
+        self.efb_depth_resolve_uniform_write_pending = true;
 
         self.efb_copy_cache.insert(dest_addr, (tex, view));
     }
@@ -615,7 +628,8 @@ impl GxRenderer {
         }
 
         encoder.pop_debug_group();
-        queue.submit([encoder.finish()]);
+        self.pending_command_buffers.push(encoder.finish());
+        self.submit_pending(queue);
         self.xfb_has_content = true;
     }
 
@@ -678,14 +692,9 @@ impl GxRenderer {
                 "efb_to_texture: unsupported copy format, skipping readback"
             );
             if clear {
-                self.efb_clear.clear_region_masked(
+                self.clear_efb_region(
                     device,
                     queue,
-                    &self.efb_msaa_view,
-                    &self.efb_view,
-                    &self.efb_depth_view,
-                    crate::EFB_WIDTH,
-                    crate::EFB_HEIGHT,
                     src_x,
                     src_y,
                     src_w,
@@ -706,14 +715,9 @@ impl GxRenderer {
                 "efb_to_texture: depth readback is not implemented yet, skipping readback"
             );
             if clear {
-                self.efb_clear.clear_region_masked(
+                self.clear_efb_region(
                     device,
                     queue,
-                    &self.efb_msaa_view,
-                    &self.efb_view,
-                    &self.efb_depth_view,
-                    crate::EFB_WIDTH,
-                    crate::EFB_HEIGHT,
                     src_x,
                     src_y,
                     src_w,
@@ -784,7 +788,8 @@ impl GxRenderer {
             },
         );
         encoder.pop_debug_group();
-        queue.submit([encoder.finish()]);
+        self.pending_command_buffers.push(encoder.finish());
+        self.submit_pending(queue);
 
         // Map and wait. This stalls the renderer worker (not the emu
         // thread). Hello zayd, this mirrors beanwii's synchronous glReadPixels I think?
@@ -853,14 +858,9 @@ impl GxRenderer {
         }
 
         if clear {
-            self.efb_clear.clear_region_masked(
+            self.clear_efb_region(
                 device,
                 queue,
-                &self.efb_msaa_view,
-                &self.efb_view,
-                &self.efb_depth_view,
-                crate::EFB_WIDTH,
-                crate::EFB_HEIGHT,
                 src_x,
                 src_y,
                 src_w,

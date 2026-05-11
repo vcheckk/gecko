@@ -16,7 +16,7 @@ pub fn emu_thread<const SYSTEM: SystemId>(
     shutdown: Arc<AtomicBool>,
 ) {
     let sleeper = SpinSleeper::default();
-    let throttle_step = Duration::from_micros(500);
+    let throttle_step = Duration::from_micros(5);
 
     while !start_gate.load(Ordering::Acquire) {
         if shutdown.load(Ordering::Relaxed) {

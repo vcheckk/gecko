@@ -8,6 +8,37 @@ use gecko::flipper::gx::regs::{MagFilter, MinFilter, WrapMode};
 use gecko::host::{DrawData, GxAction};
 use glam::{Mat4, UVec4, Vec4};
 
+fn draw_active_slot_mask(draw: &DrawData) -> u8 {
+    let mut mask: u8 = 0;
+
+    let num_stages = (draw.num_tev_stages as usize).min(draw.tev_orders.len());
+    for i in 0..num_stages {
+        let order = draw.tev_orders[i];
+        let tex_enabled = ((order >> 6) & 1) != 0;
+        if tex_enabled {
+            mask |= 1 << (order & 7);
+        }
+    }
+
+    let num_ind = (draw.num_indirect_stages as usize).min(4);
+    for i in 0..num_ind {
+        let texmap = (draw.indirect_refs >> (i * 6)) & 7;
+        mask |= 1 << texmap;
+    }
+
+    mask
+}
+
+fn trim_bg_key(mut key: BindGroupCacheKey, active: u8) -> BindGroupCacheKey {
+    for slot in 0..8 {
+        if (active >> slot) & 1 == 0 {
+            key.tex_keys[slot] = None;
+            key.sampler_keys[slot] = None;
+        }
+    }
+    key
+}
+
 fn pack_u32_slice_to_uvec4x4(data: &[u32]) -> [UVec4; 4] {
     let get = |i: usize| if i < data.len() { data[i] } else { 0 };
     [
@@ -133,6 +164,7 @@ impl GxRenderer {
             }
             GxAction::InvalidateCaches => {
                 self.flush_pending_draws(device, queue);
+                self.submit_pending(queue);
                 self.texture_cache.clear();
                 let drained: Vec<_> = self.efb_copy_cache.drain().map(|(_, v)| v).collect();
                 for (tex, view) in drained {
@@ -255,9 +287,10 @@ impl GxRenderer {
                     self.last_frame_uniform_index.unwrap()
                 };
 
-                // Snapshot tracked state for this draw.
+                let active = draw_active_slot_mask(draw);
                 self.draw_pipeline_keys.push(full_key);
-                self.draw_bg_keys.push(self.current_bind_group_key());
+                self.draw_bg_keys
+                    .push(trim_bg_key(self.current_bind_group_key(), active));
                 self.draw_viewports.push(self.current_viewport);
                 self.draw_scissors.push(self.current_scissor);
                 self.draw_frame_indices.push(frame_idx);
@@ -363,14 +396,9 @@ impl GxRenderer {
                 }
 
                 if *clear {
-                    self.efb_clear.clear_region_masked(
+                    self.clear_efb_region(
                         device,
                         queue,
-                        &self.efb_msaa_view,
-                        &self.efb_view,
-                        &self.efb_depth_view,
-                        crate::EFB_WIDTH,
-                        crate::EFB_HEIGHT,
                         *src_x,
                         *src_y,
                         *src_w,
@@ -391,11 +419,16 @@ impl GxRenderer {
         if self.scratch_draws.is_empty() {
             return;
         }
+
+        if self.draw_bufs_write_pending {
+            self.submit_pending(queue);
+        }
+
         let fub = std::mem::take(&mut self.frame_uniform_bytes);
         self.upload_buffers(device, queue, &fub);
         self.frame_uniform_bytes = fub;
 
-        self.execute_action_render_pass(device, queue);
+        self.execute_action_render_pass(device);
 
         self.scratch_vertices.clear();
         self.scratch_indices.clear();
@@ -412,7 +445,7 @@ impl GxRenderer {
         self.draw_primitives.clear();
     }
 
-    fn execute_action_render_pass(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
+    fn execute_action_render_pass(&mut self, device: &wgpu::Device) {
         let target_width = crate::EFB_WIDTH;
         let target_height = crate::EFB_HEIGHT;
         let fallback_sampler_key = (WrapMode::Clamp, WrapMode::Clamp, MagFilter::Linear, MinFilter::Linear);
@@ -641,7 +674,8 @@ impl GxRenderer {
         #[cfg(feature = "renderdoc-capture")]
         encoder.pop_debug_group();
 
-        queue.submit([encoder.finish()]);
+        self.pending_command_buffers.push(encoder.finish());
+        self.draw_bufs_write_pending = true;
     }
 
     fn ensure_sampler(&mut self, device: &wgpu::Device, key: &SamplerKey) {

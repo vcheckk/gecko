@@ -192,6 +192,11 @@ pub struct GxRenderer {
     pub(crate) xfb_copy_uniform_buffer: wgpu::Buffer,
     // Region-scoped EFB clear.
     pub(crate) efb_clear: clear::EfbClear,
+    pub(crate) pending_command_buffers: Vec<wgpu::CommandBuffer>,
+    pub(crate) draw_bufs_write_pending: bool,
+    pub(crate) xfb_copy_uniform_write_pending: bool,
+    pub(crate) efb_clear_uniform_write_pending: bool,
+    pub(crate) efb_depth_resolve_uniform_write_pending: bool,
     // EFB-to-texture readback. Only allocated with `efb-writeback`.
     #[cfg(feature = "efb-writeback")]
     pub(crate) efb_readback_staging: Option<wgpu::Buffer>,
@@ -704,6 +709,11 @@ impl GxRenderer {
             xfb_copy_sampler,
             xfb_copy_uniform_buffer,
             efb_clear,
+            pending_command_buffers: Vec::with_capacity(8),
+            draw_bufs_write_pending: false,
+            xfb_copy_uniform_write_pending: false,
+            efb_clear_uniform_write_pending: false,
+            efb_depth_resolve_uniform_write_pending: false,
             #[cfg(feature = "efb-writeback")]
             efb_readback_staging: None,
             #[cfg(feature = "efb-writeback")]
@@ -718,6 +728,61 @@ impl GxRenderer {
     #[cfg(feature = "efb-writeback")]
     pub fn set_efb_writeback_tx(&mut self, tx: crossbeam_channel::Sender<EfbWriteback>) {
         self.efb_writeback_tx = Some(tx);
+    }
+
+    pub(crate) fn submit_pending(&mut self, queue: &wgpu::Queue) {
+        if self.pending_command_buffers.is_empty() {
+            return;
+        }
+
+        queue.submit(self.pending_command_buffers.drain(..));
+
+        self.draw_bufs_write_pending = false;
+        self.xfb_copy_uniform_write_pending = false;
+        self.efb_clear_uniform_write_pending = false;
+        self.efb_depth_resolve_uniform_write_pending = false;
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn clear_efb_region(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        x: u32,
+        y: u32,
+        w: u32,
+        h: u32,
+        color: [f32; 4],
+        depth: f32,
+        color_update: bool,
+        alpha_update: bool,
+        z_update: bool,
+    ) {
+        if self.efb_clear_uniform_write_pending {
+            self.submit_pending(queue);
+        }
+
+        if let Some(cb) = self.efb_clear.clear_region_masked(
+            device,
+            queue,
+            &self.efb_msaa_view,
+            &self.efb_view,
+            &self.efb_depth_view,
+            EFB_WIDTH,
+            EFB_HEIGHT,
+            x,
+            y,
+            w,
+            h,
+            color,
+            depth,
+            color_update,
+            alpha_update,
+            z_update,
+        ) {
+            self.pending_command_buffers.push(cb);
+            self.efb_clear_uniform_write_pending = true;
+        }
     }
 
     pub fn save_shader_cache(&self) -> std::io::Result<usize> {

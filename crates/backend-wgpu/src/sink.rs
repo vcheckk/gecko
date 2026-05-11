@@ -122,6 +122,8 @@ fn worker(
         let _ = recyclers.batches.try_send(batch);
     }
 
+    gx.submit_pending(&queue);
+
     match gx.save_shader_cache() {
         Ok(n) => tracing::info!(num_variants = n, "saved shader cache"),
         Err(err) => tracing::warn!(?err, "failed to save shader cache"),
