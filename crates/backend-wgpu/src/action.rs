@@ -185,12 +185,12 @@ impl GxRenderer {
                     self.pipeline_cache.insert(full_key, pipeline);
                 }
 
-                // Triangulate.
-                let prev_len = self.scratch_vertices.len();
-                triangulate_draw_data(draw, &mut self.scratch_vertices);
-                let added = self.scratch_vertices.len() - prev_len;
-                if added == 0 {
-                    tracing::warn!("draw call produced zero triangulated vertices, skipping");
+                let first_vertex = self.scratch_vertices.len() as u32;
+                let first_index = self.scratch_indices.len() as u32;
+                let (vertex_count, index_count) =
+                    triangulate_draw_data(draw, &mut self.scratch_vertices, &mut self.scratch_indices);
+                if vertex_count == 0 {
+                    tracing::warn!("draw call produced zero vertices, skipping");
                     return;
                 }
 
@@ -264,7 +264,8 @@ impl GxRenderer {
                 #[cfg(feature = "renderdoc-capture")]
                 self.draw_primitives.push(draw.primitive);
 
-                self.scratch_draws.push((prev_len as u32, added as u32));
+                self.scratch_draws
+                    .push((first_vertex, vertex_count, first_index, index_count));
             }
 
             GxAction::CopyXfb {
@@ -397,6 +398,7 @@ impl GxRenderer {
         self.execute_action_render_pass(device, queue);
 
         self.scratch_vertices.clear();
+        self.scratch_indices.clear();
         self.scratch_draws.clear();
         self.scratch_uniform_bytes.clear();
         self.frame_uniform_bytes.clear();
@@ -416,9 +418,14 @@ impl GxRenderer {
         let fallback_sampler_key = (WrapMode::Clamp, WrapMode::Clamp, MagFilter::Linear, MinFilter::Linear);
         let frame_stride = self.frame_stride;
 
-        // Pre-build bind groups from tracked texture snapshots.
-        for bg_key in &self.draw_bg_keys {
-            self.bind_group_cache.entry(bg_key.clone()).or_insert_with(|| {
+        let num_draws = self.draw_bg_keys.len();
+        for i in 0..num_draws {
+            let bg_key = &self.draw_bg_keys[i];
+            if self.bind_group_cache.contains_key(bg_key) {
+                continue;
+            }
+
+            let new_bg = {
                 let mut tex_views: [&wgpu::TextureView; 8] = [&self.fallback_view; 8];
                 let mut tex_samplers: [&wgpu::Sampler; 8] = [&self.sampler_cache[&fallback_sampler_key]; 8];
 
@@ -475,7 +482,8 @@ impl GxRenderer {
                     layout: &self.bind_group_layout,
                     entries: &entries,
                 })
-            });
+            };
+            self.bind_group_cache.insert(self.draw_bg_keys[i].clone(), new_bg);
         }
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -549,12 +557,15 @@ impl GxRenderer {
                 }
             }
 
-            for (index, (first_vertex, vertex_count)) in self.scratch_draws.iter().copied().enumerate() {
+            rpass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+            for (index, (first_vertex, vertex_count, first_index, index_count)) in
+                self.scratch_draws.iter().copied().enumerate()
+            {
                 #[cfg(feature = "renderdoc-capture")]
                 {
                     let primitive = self.draw_primitives[index];
                     let draw_label = format!(
-                        "GX Primitive Batch {index}: primitive={primitive:?} first_vertex={first_vertex} vertex_count={vertex_count}"
+                        "GX Primitive Batch {index}: primitive={primitive:?} first_vertex={first_vertex} vertex_count={vertex_count} indices={index_count}"
                     );
                     rpass.push_debug_group(&draw_label);
                 }
@@ -618,7 +629,11 @@ impl GxRenderer {
                     rpass.insert_debug_marker(&raster_marker);
                 }
 
-                rpass.draw(first_vertex..first_vertex + vertex_count, 0..1);
+                if index_count == 0 {
+                    rpass.draw(first_vertex..first_vertex + vertex_count, 0..1);
+                } else {
+                    rpass.draw_indexed(first_index..first_index + index_count, first_vertex as i32, 0..1);
+                }
                 #[cfg(feature = "renderdoc-capture")]
                 rpass.pop_debug_group();
             }
@@ -643,69 +658,61 @@ impl GxRenderer {
     }
 }
 
-/// Triangulate a [`DrawData`] into GPU vertices.
-fn triangulate_draw_data(draw: &DrawData, out: &mut Vec<GpuVertex>) {
+fn triangulate_draw_data(draw: &DrawData, verts_out: &mut Vec<GpuVertex>, indices_out: &mut Vec<u32>) -> (u32, u32) {
     use gecko::flipper::gx::draw::Primitive;
 
-    let verts = &draw.vertices;
-    let to_gpu = |v: &gecko::host::DrawVertex| -> GpuVertex {
-        GpuVertex {
-            position: v.position,
-            color: v.color0,
-            color1: v.color1,
-            normal: v.normal,
-            pos_view: v.pos_view,
-            tex0: v.texcoords[0],
-            tex1: v.texcoords[1],
-            tex2: v.texcoords[2],
-            tex3: v.texcoords[3],
-            tex4: v.texcoords[4],
-            tex5: v.texcoords[5],
-            tex6: v.texcoords[6],
-            tex7: v.texcoords[7],
-        }
-    };
+    let verts: &[GpuVertex] = &draw.vertices;
+    let n = verts.len() as u32;
 
     match draw.primitive {
         Primitive::Triangles => {
-            out.extend(verts.iter().map(to_gpu));
+            verts_out.extend_from_slice(verts);
+            (n, 0)
         }
         Primitive::Quads => {
-            for quad in verts.chunks(4) {
-                if quad.len() < 4 {
-                    tracing::error!(count = quad.len(), "quad primitive with less than 4 vertices, skipping");
-                    continue;
-                }
-                out.push(to_gpu(&quad[0]));
-                out.push(to_gpu(&quad[1]));
-                out.push(to_gpu(&quad[2]));
-                out.push(to_gpu(&quad[0]));
-                out.push(to_gpu(&quad[2]));
-                out.push(to_gpu(&quad[3]));
+            verts_out.extend_from_slice(verts);
+
+            let chunks = n / 4;
+            for q in 0..chunks {
+                let base = q * 4;
+                indices_out.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
             }
+
+            (n, chunks * 6)
         }
         Primitive::TriangleStrip => {
-            for i in 2..verts.len() {
-                if i % 2 == 0 {
-                    out.push(to_gpu(&verts[i - 2]));
-                    out.push(to_gpu(&verts[i - 1]));
-                    out.push(to_gpu(&verts[i]));
+            if n < 3 {
+                return (0, 0);
+            }
+
+            verts_out.extend_from_slice(verts);
+
+            let tris = n - 2;
+            for i in 0..tris {
+                if i & 1 == 0 {
+                    indices_out.extend_from_slice(&[i, i + 1, i + 2]);
                 } else {
-                    out.push(to_gpu(&verts[i - 1]));
-                    out.push(to_gpu(&verts[i - 2]));
-                    out.push(to_gpu(&verts[i]));
+                    indices_out.extend_from_slice(&[i + 1, i, i + 2]);
                 }
             }
+
+            (n, tris * 3)
         }
         Primitive::TriangleFan => {
-            for i in 2..verts.len() {
-                out.push(to_gpu(&verts[0]));
-                out.push(to_gpu(&verts[i - 1]));
-                out.push(to_gpu(&verts[i]));
+            if n < 3 {
+                return (0, 0);
             }
+
+            verts_out.extend_from_slice(verts);
+            let tris = n - 2;
+            for i in 0..tris {
+                indices_out.extend_from_slice(&[0, i + 1, i + 2]);
+            }
+            (n, tris * 3)
         }
         _ => {
             tracing::error!(?draw.primitive, "triangulate: skipping unsupported primitive");
+            (0, 0)
         }
     }
 }

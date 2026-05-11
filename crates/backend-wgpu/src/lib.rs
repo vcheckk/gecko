@@ -25,23 +25,7 @@ use rustc_hash::FxHashMap;
 use shader_specialization::ShaderKey;
 use std::num::NonZeroU64;
 
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-pub(crate) struct GpuVertex {
-    pub position: [f32; 3],
-    pub color: [f32; 4],
-    pub color1: [f32; 4],
-    pub normal: [f32; 3],
-    pub pos_view: [f32; 3],
-    pub tex0: [f32; 3],
-    pub tex1: [f32; 3],
-    pub tex2: [f32; 3],
-    pub tex3: [f32; 3],
-    pub tex4: [f32; 3],
-    pub tex5: [f32; 3],
-    pub tex6: [f32; 3],
-    pub tex7: [f32; 3],
-}
+pub(crate) type GpuVertex = gecko::host::DrawVertex;
 
 pub(crate) fn align_up(value: u64, alignment: u64) -> u64 {
     (value + alignment - 1) & !(alignment - 1)
@@ -132,6 +116,10 @@ pub struct GxRenderer {
     pub(crate) draw_uniform_capacity: usize,
     pub(crate) vertex_buffer: wgpu::Buffer,
     pub(crate) vertex_capacity: usize,
+    // Index buffers.
+    pub(crate) index_buffer: wgpu::Buffer,
+    pub(crate) index_buffer_capacity: usize,
+    pub(crate) scratch_indices: Vec<u32>,
     // EFB: resolved (1x) color used for CopyXfb reads + texture binding.
     pub(crate) efb_texture: wgpu::Texture,
     pub(crate) efb_view: wgpu::TextureView,
@@ -157,7 +145,11 @@ pub struct GxRenderer {
     pub(crate) efb_depth_resolve_uniform_buffer: wgpu::Buffer,
     pub(crate) fallback_view: wgpu::TextureView,
     pub(crate) scratch_vertices: Vec<GpuVertex>,
-    pub(crate) scratch_draws: Vec<(u32, u32)>,
+    /// `(first_vertex, vertex_count, first_index, index_count)`. When
+    /// `index_count == 0` the draw is non-indexed (input was Triangles,
+    /// no expansion needed). Otherwise `draw_indexed` is used with
+    /// `base_vertex = first_vertex`.
+    pub(crate) scratch_draws: Vec<(u32, u32, u32, u32)>,
     pub(crate) scratch_uniform_bytes: Vec<u8>,
     pub(crate) bind_group_cache: FxHashMap<BindGroupCacheKey, wgpu::BindGroup>,
     // Per-frame draw accumulation (persists across process_action calls,
@@ -342,6 +334,13 @@ impl GxRenderer {
             label: Some("gx_vertices"),
             size: (initial_capacity * std::mem::size_of::<GpuVertex>()) as u64,
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let initial_index_capacity = 4096;
+        let index_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("gx_indices"),
+            size: (initial_index_capacity * std::mem::size_of::<u32>()) as u64,
+            usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
 
@@ -627,8 +626,11 @@ impl GxRenderer {
             shader_cache.insert(k, m);
         }
 
+        let pipeline_cache: FxHashMap<pipeline::FullPipelineKey, wgpu::RenderPipeline> =
+            FxHashMap::with_capacity_and_hasher(64, Default::default());
+
         GxRenderer {
-            pipeline_cache: FxHashMap::default(),
+            pipeline_cache,
             shader_cache,
             pipeline_layout,
             surface_format,
@@ -639,6 +641,9 @@ impl GxRenderer {
             draw_uniform_capacity: 1,
             vertex_buffer,
             vertex_capacity: initial_capacity,
+            index_buffer,
+            index_buffer_capacity: initial_index_capacity,
+            scratch_indices: Vec::new(),
             efb_texture,
             efb_view,
             _efb_msaa_texture: efb_msaa_texture,
@@ -721,12 +726,69 @@ impl GxRenderer {
         shader_specialization::save_keys(path, &keys)?;
         Ok(keys.len())
     }
+
+    pub fn save_pipeline_cache(&self) -> std::io::Result<usize> {
+        let path = std::path::Path::new(pipeline::PIPELINE_CACHE_PATH);
+        let keys: Vec<pipeline::FullPipelineKey> = self.pipeline_cache.keys().copied().collect();
+        pipeline::save_pipeline_keys(path, &keys)?;
+        Ok(keys.len())
+    }
+
+    pub fn prewarm_pipeline_cache(&mut self, device: &wgpu::Device) {
+        let path = std::path::Path::new(pipeline::PIPELINE_CACHE_PATH);
+        let keys: Vec<pipeline::FullPipelineKey> = pipeline::load_cached_pipeline_keys(path)
+            .into_iter()
+            .filter(|k| !self.pipeline_cache.contains_key(k) && self.shader_cache.contains_key(&k.shader))
+            .collect();
+
+        if keys.is_empty() {
+            return;
+        }
+
+        let t0 = std::time::Instant::now();
+
+        let num_threads = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(4)
+            .min(keys.len());
+        let chunk_size = keys.len().div_ceil(num_threads);
+
+        let self_ref = &*self;
+        let compiled: Vec<(pipeline::FullPipelineKey, wgpu::RenderPipeline)> = std::thread::scope(|s| {
+            let handles: Vec<_> = keys
+                .chunks(chunk_size)
+                .map(|chunk| {
+                    s.spawn(move || {
+                        chunk
+                            .iter()
+                            .map(|&k| {
+                                let module = &self_ref.shader_cache[&k.shader];
+                                (k, self_ref.create_pipeline(device, module, &k.fixed))
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                })
+                .collect();
+            handles.into_iter().flat_map(|h| h.join().unwrap()).collect()
+        });
+
+        for (k, p) in compiled {
+            self.pipeline_cache.insert(k, p);
+        }
+
+        tracing::info!(
+            num_pipelines = keys.len(),
+            elapsed_ms = t0.elapsed().as_millis() as u64,
+            "prewarmed pipeline cache",
+        );
+    }
 }
 
 fn prewarm_shader_variants(device: &wgpu::Device, keys: &[ShaderKey]) -> Vec<(ShaderKey, wgpu::ShaderModule)> {
     if keys.is_empty() {
         return Vec::new();
     }
+
     let t0 = std::time::Instant::now();
     let num_threads = std::thread::available_parallelism()
         .map(|n| n.get())

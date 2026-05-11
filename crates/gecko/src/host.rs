@@ -199,14 +199,17 @@ pub struct DrawData {
     pub frame_dirty: bool,
 }
 
-/// Per-vertex data after decode, ready for the renderer.
-#[derive(Debug, Clone, Default)]
+/// Per-vertex data after decode, ready for the renderer. Field order
+/// matches `backend_wgpu::GpuVertex` and the wgpu vertex attribute layout
+/// in `backend_wgpu::pipeline`, so a slice of `DrawVertex` can be uploaded
+/// directly via `bytemuck::cast_slice` without any field-shuffle copy.
+#[derive(Debug, Clone, Copy, Default, bytemuck::Pod, bytemuck::Zeroable)]
 #[repr(C)]
 pub struct DrawVertex {
     pub position: [f32; 3],
-    pub normal: [f32; 3],
     pub color0: [f32; 4],
     pub color1: [f32; 4],
+    pub normal: [f32; 3],
     pub pos_view: [f32; 3],
     pub texcoords: [[f32; 3]; 8],
 }

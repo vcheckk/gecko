@@ -45,6 +45,16 @@ impl GxRenderer {
             });
         }
 
+        if self.scratch_indices.len() > self.index_buffer_capacity {
+            self.index_buffer_capacity = self.scratch_indices.len().next_power_of_two();
+            self.index_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("gx_indices"),
+                size: (self.index_buffer_capacity * std::mem::size_of::<u32>()) as u64,
+                usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+        }
+
         let needed_frame_size = frame_uniform_bytes.len() as u64;
         if needed_frame_size > self.frame_uniform_buffer.size() {
             self.frame_uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -59,6 +69,9 @@ impl GxRenderer {
         write_buffer(queue, &self.frame_uniform_buffer, frame_uniform_bytes);
         write_buffer(queue, &self.draw_uniform_buffer, &self.scratch_uniform_bytes);
         write_buffer(queue, &self.vertex_buffer, bytemuck::cast_slice(&self.scratch_vertices));
+        if !self.scratch_indices.is_empty() {
+            write_buffer(queue, &self.index_buffer, bytemuck::cast_slice(&self.scratch_indices));
+        }
     }
 
     pub(crate) fn execute_copy_xfb(

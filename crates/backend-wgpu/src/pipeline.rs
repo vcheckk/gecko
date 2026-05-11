@@ -1,6 +1,10 @@
-use crate::shader_specialization::ShaderKey;
+use crate::shader_specialization::{KEY_BYTES as SHADER_KEY_BYTES, ShaderKey};
 use crate::{GpuVertex, GxRenderer, helpers};
+use chapa::BitField;
 use gecko::flipper::gx::regs::{BlendFactor, CompareFunc, CullMode};
+use std::fs::File;
+use std::io::{BufWriter, Read, Write};
+use std::path::Path;
 
 #[derive(Clone, Copy, Hash, PartialEq, Eq)]
 pub(crate) struct PipelineKey {
@@ -16,10 +20,120 @@ pub(crate) struct PipelineKey {
     pub cull_mode: CullMode,
 }
 
+impl PipelineKey {
+    const BYTES: usize = 10;
+
+    fn to_bytes(self) -> [u8; Self::BYTES] {
+        [
+            self.blend_enable as u8,
+            self.src_factor.raw(),
+            self.dst_factor.raw(),
+            self.subtract as u8,
+            self.z_enable as u8,
+            self.z_func.raw(),
+            self.z_write as u8,
+            self.color_update as u8,
+            self.alpha_update as u8,
+            self.cull_mode.raw(),
+        ]
+    }
+
+    fn from_bytes(b: &[u8; Self::BYTES]) -> Self {
+        Self {
+            blend_enable: b[0] != 0,
+            src_factor: BlendFactor::from_raw(b[1]),
+            dst_factor: BlendFactor::from_raw(b[2]),
+            subtract: b[3] != 0,
+            z_enable: b[4] != 0,
+            z_func: CompareFunc::from_raw(b[5]),
+            z_write: b[6] != 0,
+            color_update: b[7] != 0,
+            alpha_update: b[8] != 0,
+            cull_mode: CullMode::from_raw(b[9]),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Hash, PartialEq, Eq)]
 pub(crate) struct FullPipelineKey {
     pub shader: ShaderKey,
     pub fixed: PipelineKey,
+}
+
+pub(crate) const FULL_PIPELINE_KEY_BYTES: usize = SHADER_KEY_BYTES + PipelineKey::BYTES;
+const PIPELINE_CACHE_MAGIC: [u8; 4] = *b"GPKC";
+const PIPELINE_CACHE_VERSION: u32 = 1;
+pub(crate) const PIPELINE_CACHE_PATH: &str = "cache/pipeline_keys.bin";
+
+impl FullPipelineKey {
+    fn to_bytes(self) -> [u8; FULL_PIPELINE_KEY_BYTES] {
+        let mut out = [0u8; FULL_PIPELINE_KEY_BYTES];
+        out[..SHADER_KEY_BYTES].copy_from_slice(&self.shader.to_bytes());
+        out[SHADER_KEY_BYTES..].copy_from_slice(&self.fixed.to_bytes());
+        out
+    }
+
+    fn from_bytes(b: &[u8; FULL_PIPELINE_KEY_BYTES]) -> Self {
+        let mut shader_bytes = [0u8; SHADER_KEY_BYTES];
+        shader_bytes.copy_from_slice(&b[..SHADER_KEY_BYTES]);
+
+        let mut fixed_bytes = [0u8; PipelineKey::BYTES];
+        fixed_bytes.copy_from_slice(&b[SHADER_KEY_BYTES..]);
+
+        Self {
+            shader: ShaderKey::from_bytes(&shader_bytes),
+            fixed: PipelineKey::from_bytes(&fixed_bytes),
+        }
+    }
+}
+
+pub(crate) fn load_cached_pipeline_keys(path: &Path) -> Vec<FullPipelineKey> {
+    let mut f = match File::open(path) {
+        Ok(f) => f,
+        Err(_) => return Vec::new(),
+    };
+
+    let mut header = [0u8; 8];
+    if f.read_exact(&mut header).is_err() {
+        return Vec::new();
+    }
+
+    if header[..4] != PIPELINE_CACHE_MAGIC {
+        return Vec::new();
+    }
+
+    let version = u32::from_le_bytes(header[4..8].try_into().unwrap());
+    if version != PIPELINE_CACHE_VERSION {
+        return Vec::new();
+    }
+
+    let mut keys = Vec::new();
+    let mut buf = [0u8; FULL_PIPELINE_KEY_BYTES];
+    while f.read_exact(&mut buf).is_ok() {
+        keys.push(FullPipelineKey::from_bytes(&buf));
+    }
+
+    keys
+}
+
+pub(crate) fn save_pipeline_keys(path: &Path, keys: &[FullPipelineKey]) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    let f = File::create(path)?;
+
+    let mut w = BufWriter::new(f);
+    w.write_all(&PIPELINE_CACHE_MAGIC)?;
+    w.write_all(&PIPELINE_CACHE_VERSION.to_le_bytes())?;
+
+    for k in keys {
+        w.write_all(&k.to_bytes())?;
+    }
+
+    w.flush()?;
+
+    Ok(())
 }
 
 impl GxRenderer {

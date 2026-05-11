@@ -188,7 +188,14 @@ impl GraphicsProcessor {
             texture_hashes: FxHashMap::default(),
             #[cfg(feature = "efb-writeback")]
             efb_writeback_rx: None,
-            draw_box_pool: Vec::with_capacity(64),
+            draw_box_pool: {
+                const POOL_PREALLOC: usize = 1024;
+                let mut v: Vec<Box<crate::host::DrawData>> = Vec::with_capacity(POOL_PREALLOC);
+                for _ in 0..POOL_PREALLOC {
+                    v.push(Box::new(crate::host::DrawData::default()));
+                }
+                v
+            },
             draw_box_recycle_rx: None,
         }
     }

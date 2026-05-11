@@ -126,6 +126,11 @@ fn worker(
         Ok(n) => tracing::info!(num_variants = n, "saved shader cache"),
         Err(err) => tracing::warn!(?err, "failed to save shader cache"),
     }
+
+    match gx.save_pipeline_cache() {
+        Ok(n) => tracing::info!(num_pipelines = n, "saved pipeline cache"),
+        Err(err) => tracing::warn!(?err, "failed to save pipeline cache"),
+    }
 }
 
 #[cfg(feature = "renderdoc-capture")]
@@ -167,10 +172,8 @@ impl Renderer {
         surface_format: wgpu::TextureFormat,
         target_aspect: TargetAspect,
     ) -> Self {
-        #[cfg(feature = "efb-writeback")]
         let mut gx = GxRenderer::new(&device, &queue, surface_format);
-        #[cfg(not(feature = "efb-writeback"))]
-        let gx = GxRenderer::new(&device, &queue, surface_format);
+        gx.prewarm_pipeline_cache(&device);
 
         // Writeback channel: GxRenderer sends encoded EFB-to-texture bytes,
         // GraphicsProcessor consumes them synchronously on the emu thread.
