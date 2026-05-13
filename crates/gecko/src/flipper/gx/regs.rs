@@ -50,7 +50,7 @@ pub struct ZMode {
     pub update_enable: bool,
 }
 
-#[derive(Debug, BitEnum)]
+#[derive(Debug, PartialEq, Eq, Hash, BitEnum)]
 pub enum LogicOp {
     Clear = 0,
     And = 1,

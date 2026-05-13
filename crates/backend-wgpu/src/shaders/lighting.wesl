@@ -31,15 +31,14 @@ fn compute_light_factor(ctrl: u32, light_idx: u32, normal: vec3<f32>, pos: vec3<
         let angle_attn = max(cosatt.x + cosatt.y * cos_angle + cosatt.z * cos_angle * cos_angle, 0.0);
         attn = safe_div(angle_attn, distatt.x + distatt.y * dist + distatt.z * dist * dist);
     } else {
-        let half_angle = normalize(light_pos);
-        let norm_dot_half = dot(normal, half_angle);
-        if norm_dot_half <= 0.0 {
-            return 0.0;
-        }
-        let s = max(dot(normal, light_dir), 0.0);
+        ldir = normalize(ldir);
+        let s = select(0.0, max(dot(normal, light_dir), 0.0), dot(normal, ldir) >= 0.0);
         let att_len = vec3(1.0, s, s * s);
-        attn = safe_div(max(dot(att_len, cosatt), 0.0), dot(att_len, distatt));
-        ldir = half_angle;
+        var distatt_eff = distatt;
+        if diff_fn != 0u {
+            distatt_eff = normalize(distatt);
+        }
+        attn = safe_div(max(dot(att_len, cosatt), 0.0), dot(att_len, distatt_eff));
     }
 
     let dif_attn = dot(ldir, normal);

@@ -58,6 +58,8 @@ impl GxRenderer {
             src_factor: blend.src_factor(),
             dst_factor: blend.dst_factor(),
             subtract: blend.subtract(),
+            logic_op_enable: blend.logic_op_enable(),
+            logic_op: blend.logic_op(),
             z_enable: zmode.enable(),
             z_func: zmode.func(),
             z_write: zmode.update_enable(),

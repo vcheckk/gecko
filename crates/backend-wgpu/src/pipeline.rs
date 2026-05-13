@@ -1,7 +1,46 @@
 use crate::shader_specialization::{KEY_BYTES as SHADER_KEY_BYTES, ShaderKey};
 use crate::{GpuVertex, GxRenderer, helpers};
 use chapa::BitField;
-use gecko::flipper::gx::regs::{BlendFactor, CompareFunc, CullMode};
+use gecko::flipper::gx::regs::{BlendFactor, CompareFunc, CullMode, LogicOp};
+
+fn make_blend_state(
+    src_factor: wgpu::BlendFactor,
+    dst_factor: wgpu::BlendFactor,
+    operation: wgpu::BlendOperation,
+) -> wgpu::BlendState {
+    let component = wgpu::BlendComponent {
+        src_factor,
+        dst_factor,
+        operation,
+    };
+    wgpu::BlendState {
+        color: component,
+        alpha: component,
+    }
+}
+
+// Blend factor approximations for logic ops.
+fn logic_op_approximation(op: LogicOp) -> (bool, bool, wgpu::BlendFactor, wgpu::BlendFactor) {
+    use wgpu::BlendFactor::*;
+    match op {
+        LogicOp::Clear => (true, false, Zero, Zero),
+        LogicOp::And => (true, false, Dst, Zero),
+        LogicOp::ReverseAnd => (true, true, One, OneMinusSrc),
+        LogicOp::Copy => (false, false, One, Zero),
+        LogicOp::InvertedAnd => (true, true, Dst, One),
+        LogicOp::Noop => (true, false, Zero, One),
+        LogicOp::Xor => (true, false, OneMinusDst, OneMinusSrc),
+        LogicOp::Or => (true, false, OneMinusDst, One),
+        LogicOp::Nor => (true, false, OneMinusDst, OneMinusSrc),
+        LogicOp::Equivalent => (true, false, OneMinusDst, Zero),
+        LogicOp::Invert => (true, false, OneMinusDst, Zero),
+        LogicOp::ReverseOr => (true, false, One, OneMinusDstAlpha),
+        LogicOp::InvertedCopy => (false, false, One, Zero),
+        LogicOp::InvertedOr => (true, false, OneMinusDst, One),
+        LogicOp::Nand => (true, false, OneMinusDst, OneMinusSrc),
+        LogicOp::Set => (false, false, One, Zero),
+    }
+}
 use std::fs::File;
 use std::io::{BufWriter, Read, Write};
 use std::path::Path;
@@ -12,6 +51,8 @@ pub(crate) struct PipelineKey {
     pub src_factor: BlendFactor,
     pub dst_factor: BlendFactor,
     pub subtract: bool,
+    pub logic_op_enable: bool,
+    pub logic_op: LogicOp,
     pub z_enable: bool,
     pub z_func: CompareFunc,
     pub z_write: bool,
@@ -21,7 +62,7 @@ pub(crate) struct PipelineKey {
 }
 
 impl PipelineKey {
-    const BYTES: usize = 10;
+    const BYTES: usize = 12;
 
     fn to_bytes(self) -> [u8; Self::BYTES] {
         [
@@ -29,6 +70,8 @@ impl PipelineKey {
             self.src_factor.raw(),
             self.dst_factor.raw(),
             self.subtract as u8,
+            self.logic_op_enable as u8,
+            self.logic_op.raw(),
             self.z_enable as u8,
             self.z_func.raw(),
             self.z_write as u8,
@@ -44,12 +87,14 @@ impl PipelineKey {
             src_factor: BlendFactor::from_raw(b[1]),
             dst_factor: BlendFactor::from_raw(b[2]),
             subtract: b[3] != 0,
-            z_enable: b[4] != 0,
-            z_func: CompareFunc::from_raw(b[5]),
-            z_write: b[6] != 0,
-            color_update: b[7] != 0,
-            alpha_update: b[8] != 0,
-            cull_mode: CullMode::from_raw(b[9]),
+            logic_op_enable: b[4] != 0,
+            logic_op: LogicOp::from_raw(b[5]),
+            z_enable: b[6] != 0,
+            z_func: CompareFunc::from_raw(b[7]),
+            z_write: b[8] != 0,
+            color_update: b[9] != 0,
+            alpha_update: b[10] != 0,
+            cull_mode: CullMode::from_raw(b[11]),
         }
     }
 }
@@ -222,22 +267,31 @@ impl GxRenderer {
         };
 
         let blend = if key.blend_enable {
-            let operation = if key.subtract {
-                wgpu::BlendOperation::ReverseSubtract
+            // In subtract mode the hardware ignores the configured src/dst
+            // factors and computes `dst = dst - src` with ONE/ONE.
+            let (src_factor, dst_factor, operation) = if key.subtract {
+                (
+                    wgpu::BlendFactor::One,
+                    wgpu::BlendFactor::One,
+                    wgpu::BlendOperation::ReverseSubtract,
+                )
             } else {
-                wgpu::BlendOperation::Add
+                (
+                    helpers::map_src_blend_factor(key.src_factor),
+                    helpers::map_dst_blend_factor(key.dst_factor),
+                    wgpu::BlendOperation::Add,
+                )
             };
-            Some(wgpu::BlendState {
-                color: wgpu::BlendComponent {
-                    src_factor: helpers::map_blend_factor(key.src_factor),
-                    dst_factor: helpers::map_blend_factor(key.dst_factor),
-                    operation,
-                },
-                alpha: wgpu::BlendComponent {
-                    src_factor: helpers::map_blend_factor(key.src_factor),
-                    dst_factor: helpers::map_blend_factor(key.dst_factor),
-                    operation,
-                },
+            Some(make_blend_state(src_factor, dst_factor, operation))
+        } else if key.logic_op_enable {
+            let (be, sub, sf, df) = logic_op_approximation(key.logic_op);
+            be.then(|| {
+                let operation = if sub {
+                    wgpu::BlendOperation::ReverseSubtract
+                } else {
+                    wgpu::BlendOperation::Add
+                };
+                make_blend_state(sf, df, operation)
             })
         } else {
             None

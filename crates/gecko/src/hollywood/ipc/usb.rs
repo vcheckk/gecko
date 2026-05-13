@@ -187,7 +187,7 @@ impl Bluetooth {
         if !report_needed || self.host_hid_interrupt_cid.is_none() {
             return;
         }
-        
+
         let report = self.wiimote.make_input_report();
         self.queue_hid_input_report(report);
     }
