@@ -21,6 +21,7 @@ Gecko is still in development. Support may vary, while many games work very well
 - Starlet HLE
 - IPL skip patches for NTSC and PAL
 - `wgpu` based renderer backend
+  - Supports all major platforms
 - `wesl` based specialized shader compiler
 - Frame pacing
 - Modular audio backend, defaults to `cpal`
@@ -42,6 +43,8 @@ Gecko is still in development. Support may vary, while many games work very well
 
 WIP features:
 - IPL HLE backed by [solstice](https://codeberg.org/hazelwiss/solstice)
+
+For **Wii support** use the `dev` branch!
 
 ## Projects
 This is a table of the main projects. Refer to `crates/` to find out about all available projects.
@@ -68,20 +71,70 @@ wasm-pack build crates/web --target web --out-dir pkg --release  # web version
 
 ### Features
 
-| Flag                  | Crates                                                    | Description                                                          |
-| --------------------- | --------------------------------------------------------- | -------------------------------------------------------------------- |
-| `scripting`           | `tinyapp` (off); always on in `debugger`                  | Lua scripting support and the `--script` option                      |
-| `scripting-mut-traps` | `tinyapp` (off), `debugger` (off)                         | Let scripting hooks re-register themselves at runtime                |
-| `efb-writeback`       | `tinyapp` (off), `debugger` (off)                         | EFB-to-texture writeback (needed by some games)                      |
-| `audio-wav-dump`      | `tinyapp` (off)                                           | Write all emulated audio to `dump.wav` while running                 |
-| `renderdoc-capture`   | `debugger` (off)                                          | RenderDoc captures with debug markers, triggered by F10              |
-| `fps-counter`         | `tinyapp` (on)                                            | Enables emulator core driven FPS counter                             |
-| `jit-stats`           | `tinyapp` (off), `tinybench` (off)                        | Per-block JIT stats and block-frequency CSV dumps                    |
-| `gx-stats`            | `tinyapp` (off)                                           | GX submission and draw-call stats                                    |
-| `profile`             | `tinyapp` (off)                                           | In-process profiler: per-block PPC/DSP heatmaps + Windows IP sampler |
-| `debug`               | `web` (off, on for [`/dbg`](https://gecko.layle.dev/dbg)) | Bundle the in-browser debugger UI                                    |
+Features below are listed based on the frontend crate that supports them. Most of them are simply forwarded into the core `gecko` and `backend-wgpu` crates,
+so the underlying flag of the same name is what actually toggles the behavior. For exact build invocations refer to the GitHub CI actions file.
 
-For exact build invocations refer to the GitHub CI actions file.
+#### `tinyapp`
+
+| Flag                  | Default | Description                                                                                                     |
+| --------------------- | :-----: | --------------------------------------------------------------------------------------------------------------- |
+| `fps-counter`         |   on    | Emulator-core driven FPS counter (forwards `gecko/fps-counter`).                                                |
+| `scripting`           |   off   | Enables Lua scripting support and the `--script` CLI option (pulls in `gecko/hooks` + the `scripting` crate).   |
+| `scripting-mut-traps` |   off   | Implies `scripting`: lets scripted hooks re-register themselves at runtime (`gecko/hooks-mut-traps`).           |
+| `audio-wav-dump`      |   off   | Forwards `gecko/audio-wav-dump`: write all emulated audio to a `.wav` sink while running.                       |
+| `renderdoc-capture`   |   off   | Forwards `backend-wgpu/renderdoc-capture`: load the RenderDoc in-app API and emit debug markers.                |
+| `jit-stats`           |   off   | Forwards `gecko/jit-stats`: per-block PPC JIT stats, block-frequency CSV dumps and more.                        |
+| `gx-stats`            |   off   | Forwards `gecko/gx-stats`: GX submission and draw-call counters surfaced by the core.                           |
+| `profile`             |   off   | Forwards `gecko/profile`: in-process profiler (Windows-only kernel IP sampler).                                 |
+| `hotpath`             |   off   | Compiles `hotpath::measure` instrumentation into the core and the wgpu backend; reports on shutdown.            |
+| `hotpath-alloc`       |   off   | Implies `hotpath`: swaps the global allocator for a counting allocator that attributes allocs to hot functions. |
+| `hotpath-cpu`         |   off   | Implies `hotpath`: samples CPU time per measured function via `hotpath/hotpath-cpu`.                            |
+| `hotpath-tui`         |   off   | Implies `hotpath`: renders the live `hotpath` TUI instead of dumping a report on exit.                          |
+
+#### `debugger`
+
+`debugger` always builds with `gecko/hooks`, `gecko/audio-wav-dump`, `image/symbols` (ELF/IDA symbol parsing), and the full `scripting` crate enabled.
+
+| Flag                  | Default | Description                                                                                                       |
+| --------------------- | :-----: | ----------------------------------------------------------------------------------------------------------------- |
+| `scripting-mut-traps` |   off   | Same as in `tinyapp`: re-registerable scripted hooks (`gecko/hooks-mut-traps` + `scripting/hooks-mut-traps`).     |
+| `renderdoc-capture`   |   off   | Forwards `backend-wgpu/renderdoc-capture`. With this enabled, F10 triggers a RenderDoc capture of the next frame. |
+
+#### `gecko`
+
+| Flag                  | Default | Description                                                                                                            |
+| --------------------- | :-----: | ---------------------------------------------------------------------------------------------------------------------- |
+| `jit`                 |   on    | Cranelift-backed JIT for Gekko, DSP, and GX vertex decode. Without it the core falls back to interpreters.             |
+| `hooks`               |   off   | Memory/instruction trap hook surface used by `scripting`, the `debugger`, and tooling like `dsptestrunner`.            |
+| `hooks-mut-traps`     |   off   | Implies `hooks`: allows hooks to mutate trap state.                                                                    |
+| `audio-wav-dump`      |   off   | Compiles the `hound`-backed `.wav` audio sink.                                                                         |
+| `fps-counter`         |   off   | Compiles the core FPS counter for more accurate measurements.                                                          |
+| `jit-stats`           |   off   | Implies `jit`: per-block JIT hit counts, idle-skip stats, CSV dumps (pulls in `backtrace`).                            |
+| `gx-stats`            |   off   | GX command-processor / BP / XF submission counters.                                                                    |
+| `vtx-jit-validate`    |   off   | Implies `jit` + `gx-stats`. Runs both the GX vertex JIT and interpreter for every draw and reports drift between them. |
+| `profile`             |   off   | Per-block PPC/DSP heatmap profiler; on Windows it also enables a kernel-IP sampler via `windows-sys`.                  |
+| `rendersink-blackbox` |   off   | Wraps `EmptyRenderSink::exec` in `std::hint::black_box`. Useful for benchmarking.                                      |
+| `hotpath`             |   off   | Compiles `hotpath::measure` instrumentation across the core hot loops.                                                 |
+
+#### `backend-wgpu`
+
+| Flag                | Default | Description                                                                        |
+| ------------------- | :-----: | ---------------------------------------------------------------------------------- |
+| `renderdoc-capture` |   off   | Pulls in the `renderdoc` crate and enables the in-app capture API + debug markers. |
+| `hotpath`           |   off   | Instruments the wgpu sink (incl. crossbeam channels) for `hotpath` reporting.      |
+
+#### `web`
+
+| Flag    | Default | Description                                                                                                                              |
+| ------- | :-----: | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `debug` |   off   | Bundles the in-browser debugger UI (pulls in `dbglib` and `egui-phosphor`). Enabled for the [`/dbg`](https://gecko.layle.dev/dbg) build. |
+
+#### `tinybench`
+
+| Flag        | Default | Description                                                                                       |
+| ----------- | :-----: | ------------------------------------------------------------------------------------------------- |
+| _(default)_ |    —    | Forwards `gecko/rendersink-blackbox` so the renderless benchmark loop doesn't get optimized away. |
+| `jit-stats` |   off   | Forwards `gecko/jit-stats` for benchmarking.                                                      |
 
 ## Required files
 
