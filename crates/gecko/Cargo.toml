@@ -51,7 +51,7 @@ crc32fast = "1.5.0"
 zerocopy = { version = "0.8.48", features = ["derive"] }
 cranelift-codegen = { version = "0.131.1", optional = true }
 cranelift-frontend = { version = "0.131.1", optional = true }
-cranelift-jit = { version = "0.131.1", optional = true }
+cranelift-jit = { version = "0.131.1", optional = true, features = ["selinux-fix"] }
 cranelift-module = { version = "0.131.1", optional = true }
 cranelift-native = { version = "0.131.1", optional = true }
 backtrace = { version = "0.3", optional = true }

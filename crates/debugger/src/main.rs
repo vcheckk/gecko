@@ -3,17 +3,23 @@ use backend_wgpu::sink::TargetAspect;
 use clap::Parser;
 use std::sync::Arc;
 use winit::application::ApplicationHandler;
-use winit::event::WindowEvent;
+use winit::event::{MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowId};
 
 use gecko::HostInput;
-use gecko::audio::WavAudioSink;
+use gecko::audio::{EmptyAudioSink, WavAudioSink};
 use gecko::flipper::si::pad::{self, PadStatus, STICK_CENTER, STICK_MAX, STICK_MIN, TRIGGER_MAX, TRIGGER_MIN};
 use gecko::gamecube::GameCube;
+use gecko::hollywood::ipc::usb as wiimote;
 use gecko::wii::Wii;
 use image::Dol;
+
+#[derive(Debug, Clone, Copy)]
+pub enum UserEvent {
+    Shutdown,
+}
 
 use crate::debugger::DebuggerUi;
 use crate::render::RenderState;
@@ -93,6 +99,20 @@ impl EmulatorVariant {
             Self::Wii(e) => e.ai.control.aid_sample_rate_hz(),
         }
     }
+
+    fn load_jit_cache(&mut self, game_id: &str) -> (usize, usize, usize, usize, usize, usize) {
+        match self {
+            Self::Gc(e) => e.load_jit_cache(game_id),
+            Self::Wii(e) => e.load_jit_cache(game_id),
+        }
+    }
+
+    fn save_jit_cache(&self, game_id: &str) -> std::io::Result<(usize, usize, usize)> {
+        match self {
+            Self::Gc(e) => e.save_jit_cache(game_id),
+            Self::Wii(e) => e.save_jit_cache(game_id),
+        }
+    }
 }
 
 struct App {
@@ -149,7 +169,13 @@ fn try_load_lua<const SYSTEM: gecko::SystemId>(emu: &mut gecko::System<SYSTEM>, 
     }
 }
 
-impl ApplicationHandler for App {
+impl ApplicationHandler<UserEvent> for App {
+    fn user_event(&mut self, event_loop: &ActiveEventLoop, event: UserEvent) {
+        match event {
+            UserEvent::Shutdown => event_loop.exit(),
+        }
+    }
+
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         let initial_size = self
             .init
@@ -238,11 +264,74 @@ impl ApplicationHandler for App {
                     }
 
                     if !egui_consumed {
-                        if let HostInput::Gc(pad) = &mut self.input {
-                            update_pad(pad, key, pressed);
+                        match &mut self.input {
+                            HostInput::Gc(pad) => update_pad(pad, key, pressed),
+                            HostInput::Wii {
+                                wiimote_buttons,
+                                wiimote_shake,
+                                nunchuk_buttons,
+                                nunchuk_stick_x,
+                                nunchuk_stick_y,
+                                ir_pointer: _,
+                            } => {
+                                update_wiimote_keys(wiimote_buttons, key, pressed);
+                                update_wiimote_motion_keys(wiimote_shake, key, pressed);
+                                update_nunchuk_keys(nunchuk_buttons, nunchuk_stick_x, nunchuk_stick_y, key, pressed);
+                            }
                         }
                         self.emulator.apply_host_input(&self.input);
                     }
+                }
+            }
+            WindowEvent::MouseInput { state, button, .. } => {
+                let pressed = state.is_pressed();
+                let mask = match button {
+                    MouseButton::Left => Some(wiimote::BTN_A),
+                    MouseButton::Right => Some(wiimote::BTN_B),
+                    _ => None,
+                };
+
+                if let Some(mask) = mask
+                    && let HostInput::Wii { wiimote_buttons, .. } = &mut self.input
+                {
+                    set_bit(wiimote_buttons, mask, pressed);
+                    self.emulator.apply_host_input(&self.input);
+                }
+            }
+            WindowEvent::CursorMoved { position, .. } => {
+                let Some(window) = &self.window else {
+                    return;
+                };
+
+                let size = window.inner_size();
+                if size.width == 0 || size.height == 0 {
+                    return;
+                }
+
+                const POINTER_SCALE_X: f64 = 0.44;
+                const POINTER_SCALE_Y: f64 = 0.66;
+                const POINTER_Y_OFFSET: f64 = 120.0;
+
+                let aim_x = (position.x / size.width as f64).clamp(0.0, 1.0);
+                let aim_y = (position.y / size.height as f64).clamp(0.0, 1.0);
+                let span_x = wiimote::IR_CAMERA_WIDTH as f64 * POINTER_SCALE_X;
+                let span_y = wiimote::IR_CAMERA_HEIGHT as f64 * POINTER_SCALE_Y;
+                let base_x = (wiimote::IR_CAMERA_WIDTH as f64 - span_x) / 2.0;
+                let base_y = (wiimote::IR_CAMERA_HEIGHT as f64 - span_y) / 2.0 + POINTER_Y_OFFSET;
+                let ir_x = (base_x + (1.0 - aim_x) * span_x) as u16;
+                let ir_y = (base_y + aim_y * span_y) as u16;
+
+                if let HostInput::Wii { ir_pointer, .. } = &mut self.input
+                    && *ir_pointer != Some((ir_x, ir_y))
+                {
+                    *ir_pointer = Some((ir_x, ir_y));
+                    self.emulator.apply_host_input(&self.input);
+                }
+            }
+            WindowEvent::CursorLeft { .. } => {
+                if let HostInput::Wii { ir_pointer, .. } = &mut self.input {
+                    *ir_pointer = None;
+                    self.emulator.apply_host_input(&self.input);
                 }
             }
             WindowEvent::RedrawRequested => {
@@ -338,8 +427,9 @@ fn resolve_aspect(arg: &str, is_wii: bool) -> TargetAspect {
 fn main() {
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+                tracing_subscriber::EnvFilter::new("info,cranelift_jit=warn,cranelift_codegen=warn")
+            }),
         )
         .without_time()
         .init();
@@ -352,6 +442,7 @@ fn main() {
         wgpu::PresentMode::Fifo
     };
 
+    let mut game_id: Option<String> = None;
     let mut emulator = if let Some(ref dol) = args.dol {
         let dol = Dol::parse(std::fs::read(dol).expect("failed to read DOL"));
         if args.wii {
@@ -368,6 +459,7 @@ fn main() {
     } else if let Some(ref dvd_path) = args.dvd {
         let dvd_data = std::fs::read(dvd_path).expect("failed to read DVD");
         let dvd = image::load_dvd(dvd_data);
+        game_id = Some(game_id_from_header(dvd.header()));
         if dvd.header().is_wii() {
             eprintln!("Detected Wii disc, booting via apploader HLE");
             EmulatorVariant::Wii(Wii::apploader_hle(dvd).build())
@@ -428,7 +520,7 @@ fn main() {
     let surface_format = wgpu::TextureFormat::Bgra8Unorm;
 
     let target_aspect = resolve_aspect(&args.aspect, matches!(emulator, EmulatorVariant::Wii(_)));
-    let (renderer, _renderer_worker) =
+    let (renderer, renderer_worker) =
         backend_wgpu::sink::Renderer::new(device.clone(), queue.clone(), surface_format, target_aspect);
 
     emulator.install_recycle_rx(renderer.take_recycle_rx());
@@ -444,7 +536,29 @@ fn main() {
         ..DebuggerUi::default()
     };
 
-    let event_loop = EventLoop::new().unwrap();
+    if let Some(ref id) = game_id {
+        let (ppc_c, ppc_s, dsp_c, dsp_s, vtx_c, vtx_s) = emulator.load_jit_cache(id);
+        if ppc_c > 0 || dsp_c > 0 || vtx_c > 0 || ppc_s > 0 || dsp_s > 0 || vtx_s > 0 {
+            eprintln!("JIT cache loaded for {id}: ppc {ppc_c}/{ppc_s}, dsp {dsp_c}/{dsp_s}, vtx {vtx_c}/{vtx_s}");
+        }
+    }
+
+    let event_loop = EventLoop::<UserEvent>::with_user_event().build().unwrap();
+
+    {
+        let proxy = event_loop.create_proxy();
+        let pending = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        if let Err(err) = ctrlc::set_handler(move || {
+            if pending.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                std::process::exit(69);
+            }
+            eprintln!("Ctrl+C received, requesting graceful shutdown");
+            let _ = proxy.send_event(UserEvent::Shutdown);
+        }) {
+            eprintln!("failed to install Ctrl+C handler: {err:?}");
+        }
+    }
+
     let mut app = App {
         emulator,
         input,
@@ -462,17 +576,53 @@ fn main() {
         }),
     };
     event_loop.run_app(&mut app).unwrap();
+
+    if let Some(ref id) = game_id {
+        match app.emulator.save_jit_cache(id) {
+            Ok((ppc, dsp, vtx)) => {
+                eprintln!("saved JIT cache: ppc {ppc} dsp {dsp} vtx {vtx}");
+            }
+            Err(err) => eprintln!("failed to save JIT cache: {err}"),
+        }
+    }
+
+    app.emulator.install_audio_sink(Box::new(EmptyAudioSink));
+
+    if let Err(err) = renderer_worker.shutdown_and_join() {
+        eprintln!("gx-renderer thread panicked: {err:?}");
+    }
+
+    std::mem::forget(app);
+}
+
+fn game_id_from_header(header: &image::dvd::Header) -> String {
+    let mut buf = String::with_capacity(6);
+
+    for &b in &header.game_code {
+        buf.push(if b.is_ascii_graphic() { b as char } else { '_' });
+    }
+
+    for &b in &header.maker_code {
+        buf.push(if b.is_ascii_graphic() { b as char } else { '_' });
+    }
+
+    buf
+}
+
+#[inline(always)]
+fn set_bit<T: std::ops::BitOrAssign + std::ops::BitAndAssign + std::ops::Not<Output = T> + Copy>(
+    bits: &mut T,
+    mask: T,
+    on: bool,
+) {
+    if on {
+        *bits |= mask;
+    } else {
+        *bits &= !mask;
+    }
 }
 
 fn update_pad(pad: &mut PadStatus, key: KeyCode, pressed: bool) {
-    let set_button = |buttons: &mut u16, mask: u16, on: bool| {
-        if on {
-            *buttons |= mask;
-        } else {
-            *buttons &= !mask;
-        }
-    };
-
     match key {
         // Analog stick (digital, full deflection)
         KeyCode::ArrowUp => pad.stick_y = if pressed { STICK_MAX } else { STICK_CENTER },
@@ -481,28 +631,63 @@ fn update_pad(pad: &mut PadStatus, key: KeyCode, pressed: bool) {
         KeyCode::ArrowRight => pad.stick_x = if pressed { STICK_MAX } else { STICK_CENTER },
 
         // Face buttons
-        KeyCode::KeyX => set_button(&mut pad.buttons, pad::A, pressed),
-        KeyCode::KeyZ => set_button(&mut pad.buttons, pad::B, pressed),
-        KeyCode::KeyC => set_button(&mut pad.buttons, pad::X, pressed),
-        KeyCode::KeyV => set_button(&mut pad.buttons, pad::Y, pressed),
-        KeyCode::Enter => set_button(&mut pad.buttons, pad::START, pressed),
+        KeyCode::KeyX => set_bit(&mut pad.buttons, pad::A, pressed),
+        KeyCode::KeyZ => set_bit(&mut pad.buttons, pad::B, pressed),
+        KeyCode::KeyC => set_bit(&mut pad.buttons, pad::X, pressed),
+        KeyCode::KeyV => set_bit(&mut pad.buttons, pad::Y, pressed),
+        KeyCode::Enter => set_bit(&mut pad.buttons, pad::START, pressed),
 
         // Triggers
         KeyCode::KeyA => {
-            set_button(&mut pad.buttons, pad::L, pressed);
+            set_bit(&mut pad.buttons, pad::L, pressed);
             pad.trigger_left = if pressed { TRIGGER_MAX } else { TRIGGER_MIN };
         }
         KeyCode::KeyS => {
-            set_button(&mut pad.buttons, pad::R, pressed);
+            set_bit(&mut pad.buttons, pad::R, pressed);
             pad.trigger_right = if pressed { TRIGGER_MAX } else { TRIGGER_MIN };
         }
-        KeyCode::KeyD => set_button(&mut pad.buttons, pad::Z, pressed),
+        KeyCode::KeyD => set_bit(&mut pad.buttons, pad::Z, pressed),
 
         // D-pad
-        KeyCode::KeyI => set_button(&mut pad.buttons, pad::DPAD_UP, pressed),
-        KeyCode::KeyK => set_button(&mut pad.buttons, pad::DPAD_DOWN, pressed),
-        KeyCode::KeyJ => set_button(&mut pad.buttons, pad::DPAD_LEFT, pressed),
-        KeyCode::KeyL => set_button(&mut pad.buttons, pad::DPAD_RIGHT, pressed),
+        KeyCode::KeyI => set_bit(&mut pad.buttons, pad::DPAD_UP, pressed),
+        KeyCode::KeyK => set_bit(&mut pad.buttons, pad::DPAD_DOWN, pressed),
+        KeyCode::KeyJ => set_bit(&mut pad.buttons, pad::DPAD_LEFT, pressed),
+        KeyCode::KeyL => set_bit(&mut pad.buttons, pad::DPAD_RIGHT, pressed),
+        _ => {}
+    }
+}
+
+fn update_wiimote_keys(buttons: &mut u16, key: KeyCode, pressed: bool) {
+    let mask = match key {
+        KeyCode::Digit1 => wiimote::BTN_ONE,
+        KeyCode::Digit2 => wiimote::BTN_TWO,
+        KeyCode::Home => wiimote::BTN_HOME,
+        KeyCode::Minus => wiimote::BTN_MINUS,
+        KeyCode::Equal => wiimote::BTN_PLUS,
+        KeyCode::ArrowUp => wiimote::BTN_UP,
+        KeyCode::ArrowDown => wiimote::BTN_DOWN,
+        KeyCode::ArrowLeft => wiimote::BTN_LEFT,
+        KeyCode::ArrowRight => wiimote::BTN_RIGHT,
+        _ => return,
+    };
+    set_bit(buttons, mask, pressed);
+}
+
+fn update_wiimote_motion_keys(shake: &mut bool, key: KeyCode, pressed: bool) {
+    if let KeyCode::ShiftLeft = key {
+        *shake = pressed;
+    }
+}
+
+fn update_nunchuk_keys(buttons: &mut u8, stick_x: &mut u8, stick_y: &mut u8, key: KeyCode, pressed: bool) {
+    use wiimote::{NUNCHUK_STICK_CENTER as C, NUNCHUK_STICK_MAX as MAX, NUNCHUK_STICK_MIN as MIN};
+    match key {
+        KeyCode::KeyW => *stick_y = if pressed { MAX } else { C },
+        KeyCode::KeyS => *stick_y = if pressed { MIN } else { C },
+        KeyCode::KeyA => *stick_x = if pressed { MIN } else { C },
+        KeyCode::KeyD => *stick_x = if pressed { MAX } else { C },
+        KeyCode::KeyQ => set_bit(buttons, wiimote::NUNCHUK_BTN_Z, pressed),
+        KeyCode::KeyE => set_bit(buttons, wiimote::NUNCHUK_BTN_C, pressed),
         _ => {}
     }
 }

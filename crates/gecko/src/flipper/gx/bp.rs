@@ -9,8 +9,16 @@ use std::time::Duration;
 impl GraphicsProcessor {
     pub fn load_bp(&mut self, renderer: &mut dyn RenderSink, ram: &mut RamViewMut<'_>, data: &[u8]) {
         let idx = data[0] as usize;
-        let val = u32::from_be_bytes([0, data[1], data[2], data[3]]);
+        let raw_val = u32::from_be_bytes([0, data[1], data[2], data[3]]);
+
+        let old = self.bp_regs[idx];
+        let val = (old & !self.bp_mask) | (raw_val & self.bp_mask);
         self.bp_regs[idx] = val;
+        if idx == BP_BP_MASK {
+            self.bp_mask = val & 0x00ff_ffff;
+        } else {
+            self.bp_mask = 0x00ff_ffff;
+        }
 
         #[cfg(feature = "gx-stats")]
         {
