@@ -17,7 +17,7 @@ use crate::flipper::gx::draw::Matrix4;
 use crate::flipper::gx::regs::{
     AlphaCompare, BlendMode, ChanCtrl, TevAlphaEnv, TevColorEnv, TevRegisterH, TevRegisterL, ZMode,
 };
-use crate::host::{DrawVertex, GxAction, LightData, TextureKey, XfbPart};
+use crate::host::{GxAction, LightData, TextureKey, XfbPart};
 use crate::system::{System, SystemId};
 use rustc_hash::FxHashMap;
 
@@ -73,7 +73,6 @@ pub struct GraphicsProcessor {
     // XFB copies accumulated since the last vblank. `present_xfb()` drains
     // this at each field boundary to emit a PresentXfb action.
     pub xfb_copies: Vec<XfbCopy>,
-    pub draw_vertices_scratch: Vec<DrawVertex>,
     #[cfg(feature = "jit")]
     pub jit_vtx: jit::JitVertexEngine,
     #[cfg(feature = "jit")]
@@ -159,7 +158,6 @@ impl GraphicsProcessor {
             cur_scissor_offset_x: 0,
             cur_scissor_offset_y: 0,
             xfb_copies: Vec::new(),
-            draw_vertices_scratch: Vec::with_capacity(256),
             #[cfg(feature = "jit")]
             jit_vtx: jit::JitVertexEngine::new(),
             #[cfg(feature = "jit")]

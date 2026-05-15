@@ -359,9 +359,9 @@ impl<const SYSTEM: SystemId> System<SYSTEM> {
             0
         };
 
-        let actions_sent = self.render_sink.actions_sent_total();
-        let channel_len = self.render_sink.channel_len();
-        let channel_cap = self.render_sink.channel_capacity().unwrap_or(0);
+        let actions_sent: u64 = 0;
+        let channel_len: usize = 0;
+        let channel_cap: usize = 0;
         let result = crate::profile::write_file_atomic(&path, |f| {
             writeln!(
                 f,

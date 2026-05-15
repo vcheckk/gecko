@@ -79,12 +79,14 @@ impl GraphicsProcessor {
 
         let mut boxed: Box<DrawData> = renderer.take_draw_data();
 
-        self.draw_vertices_scratch.clear();
-        if self.draw_vertices_scratch.capacity() < vertex_count {
-            self.draw_vertices_scratch.reserve(vertex_count);
-        }
-
-        self::dispatch_decode(self, mmio, cmd, data, vertex_count, &vf);
+        // Decode directly into the renderer's vertex scratch. No
+        // intermediate `draw_vertices_scratch`, no append memcpy. The
+        // interpreter pushes into `verts`, and the Cranelift JIT writes
+        // through `verts.as_mut_ptr().add(base)` then sets the new length.
+        let verts = renderer.vertex_scratch();
+        let base_vertex = verts.len() as u32;
+        verts.reserve(vertex_count);
+        self::dispatch_decode(self, mmio, cmd, data, vertex_count, &vf, verts);
 
         let modelview = self.build_modelview_matrix(vf.default_pos_mtx_idx);
 
@@ -98,9 +100,6 @@ impl GraphicsProcessor {
             self.konst_dirty = false;
         }
 
-        let renderer_scratch = renderer.vertex_scratch();
-        let base_vertex = renderer_scratch.len() as u32;
-        renderer_scratch.append(&mut self.draw_vertices_scratch);
         boxed.base_vertex = base_vertex;
         boxed.vertex_count = vertex_count as u32;
 
@@ -713,6 +712,7 @@ fn dispatch_decode<const SYSTEM: SystemId>(
     data: &[u8],
     vertex_count: usize,
     vf: &VertexFormat,
+    verts: &mut Vec<DrawVertex>,
 ) {
     #[cfg(feature = "jit")]
     {
@@ -730,7 +730,8 @@ fn dispatch_decode<const SYSTEM: SystemId>(
             let gp_raw = gp as *mut GraphicsProcessor as *mut std::ffi::c_void;
             let xf_mem_ptr = gp.xf_mem.as_ptr();
             let arrays_ptr = gp.jit_vtx_arrays.0.as_ptr();
-            let out_ptr = gp.draw_vertices_scratch.as_mut_ptr();
+            let base = verts.len();
+            let out_ptr = unsafe { verts.as_mut_ptr().add(base) };
 
             unsafe {
                 parser(
@@ -741,16 +742,16 @@ fn dispatch_decode<const SYSTEM: SystemId>(
                     out_ptr,
                     vertex_count as u32,
                 );
-                gp.draw_vertices_scratch.set_len(vertex_count);
+                verts.set_len(base + vertex_count);
             }
 
             #[cfg(feature = "vtx-jit-validate")]
-            self::run_validator(gp, mmio, cmd, key, data, vertex_count, vf);
+            self::run_validator(gp, mmio, cmd, key, data, vertex_count, vf, verts, base);
             return;
         }
     }
 
-    self::run_interpreter(gp, mmio, data, vertex_count, vf);
+    self::run_interpreter(gp, mmio, data, vertex_count, vf, verts);
 }
 
 #[cfg_attr(feature = "hotpath", hotpath::measure(label = "vtx_run_interpreter"))]
@@ -760,12 +761,13 @@ fn run_interpreter<const SYSTEM: SystemId>(
     data: &[u8],
     vertex_count: usize,
     vf: &VertexFormat,
+    verts: &mut Vec<DrawVertex>,
 ) {
     let view = mmio.ram_view();
     let mut cur = Cursor::new(data);
     for _ in 0..vertex_count {
         let v = gp.decode_vertex(&mut cur, data, &view, vf);
-        gp.draw_vertices_scratch.push(v);
+        verts.push(v);
     }
 }
 
@@ -778,6 +780,8 @@ fn run_validator<const SYSTEM: SystemId>(
     data: &[u8],
     vertex_count: usize,
     vf: &VertexFormat,
+    verts: &mut Vec<DrawVertex>,
+    base: usize,
 ) {
     if !gp.jit_vtx_validator.enabled {
         return;
@@ -801,11 +805,12 @@ fn run_validator<const SYSTEM: SystemId>(
         draw_cmd: cmd,
         vertex_count: vertex_count as u32,
     };
-    let mismatches = jit::validate::compare_draw_vertices(&gp.draw_vertices_scratch, &interp_buf, &ctx);
+    let jit_slice = &verts[base..base + vertex_count];
+    let mismatches = jit::validate::compare_draw_vertices(jit_slice, &interp_buf, &ctx);
     gp.jit_vtx_validator.record(&ctx, &mismatches);
 
     if !gp.jit_vtx_validator.use_jit_output_downstream {
-        std::mem::swap(&mut gp.draw_vertices_scratch, &mut interp_buf);
+        verts[base..base + vertex_count].copy_from_slice(&interp_buf);
     }
 
     gp.jit_vtx_validator.interp_scratch = interp_buf;
