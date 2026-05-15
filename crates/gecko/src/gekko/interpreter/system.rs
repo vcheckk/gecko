@@ -44,8 +44,15 @@ pub fn spr<const OP: u32, const SYSTEM: SystemId>(ctx: &mut System<SYSTEM>, inst
                 923 => {
                     ctx.gekko.spr.dmal = crate::gekko::spr::DmaLower::from_raw(val);
                     if ctx.gekko.spr.dmal.trigger() {
-                        ctx.mmio
-                            .process_locked_cache_dma(&ctx.gekko.spr.dmau, &ctx.gekko.spr.dmal);
+                        let dmau = ctx.gekko.spr.dmau;
+                        let dmal = ctx.gekko.spr.dmal;
+                        let written = ctx.mmio.process_locked_cache_dma(&dmau, &dmal);
+                        #[cfg(feature = "jit")]
+                        if let Some((phys, len)) = written {
+                            ctx.mmio.queue_icbi_for_range(phys, len);
+                        }
+                        #[cfg(not(feature = "jit"))]
+                        let _ = written;
                     }
                 }
                 _ => ctx.gekko.spr.write(spr_num, val),

@@ -6,11 +6,21 @@ pub mod traits;
 
 use crate::system::{SystemId, WII};
 use constants::*;
+use rustc_hash::FxHashSet;
 
 pub const FASTMEM_LUT_PAGES: usize = 1 << 15;
 pub const FASTMEM_PAGE_BYTES: usize = 1 << 17;
 pub const FASTMEM_PAGE_MASK: u32 = (FASTMEM_PAGE_BYTES as u32) - 1;
 pub const FASTMEM_PAGE_SHIFT: u32 = 17;
+
+pub const CODE_LINE_BYTES: u32 = 32;
+pub const CODE_LINE_SHIFT: u32 = 5;
+pub const CODE_LINE_MASK: u32 = !(CODE_LINE_BYTES - 1);
+
+pub const PHYS_MASK: u32 = 0x3FFF_FFFF;
+
+pub const MEM1_LINES: usize = RAM_SIZE >> CODE_LINE_SHIFT as usize;
+pub const MEM2_LINES: usize = MEM2_SIZE >> CODE_LINE_SHIFT as usize;
 
 pub struct Mmio<const SYSTEM: SystemId> {
     pub ram: Vec<u8>,
@@ -22,6 +32,12 @@ pub struct Mmio<const SYSTEM: SystemId> {
     pub ram_ptr: usize,
     pub fastmem_lut: Vec<usize>,
     pub fastmem_lut_ptr: usize,
+    pub code_refcount: Box<[u8]>,
+    pub code_refcount_ptr: usize,
+    #[cfg(feature = "jit")]
+    pub pending_icbi: FxHashSet<u32>,
+    #[cfg(feature = "jit")]
+    pub jit_dirty: u8,
 }
 
 /// Read-only view over MEM1 plus (on Wii) MEM2, addressed by physical
@@ -122,6 +138,14 @@ impl<const SYSTEM: SystemId> Mmio<SYSTEM> {
 
         let fastmem_lut_ptr = fastmem_lut.as_ptr() as usize;
 
+        let refcount_len = if SYSTEM == WII {
+            MEM1_LINES + MEM2_LINES
+        } else {
+            MEM1_LINES
+        };
+        let code_refcount: Box<[u8]> = vec![0u8; refcount_len].into_boxed_slice();
+        let code_refcount_ptr = code_refcount.as_ptr() as usize;
+
         Mmio {
             ram,
             efb: vec![0; EFB_SIZE],
@@ -132,6 +156,12 @@ impl<const SYSTEM: SystemId> Mmio<SYSTEM> {
             ram_ptr,
             fastmem_lut,
             fastmem_lut_ptr,
+            code_refcount,
+            code_refcount_ptr,
+            #[cfg(feature = "jit")]
+            pending_icbi: FxHashSet::default(),
+            #[cfg(feature = "jit")]
+            jit_dirty: 0,
         }
     }
 
@@ -284,6 +314,79 @@ impl<const SYSTEM: SystemId> Mmio<SYSTEM> {
         &mut slice[offset..offset + len]
     }
 
+    #[inline(always)]
+    fn code_refcount_index(phys: u32) -> Option<usize> {
+        match phys {
+            RAM_BASE..=RAM_END => Some((phys >> CODE_LINE_SHIFT) as usize),
+            MEM2_BASE..=MEM2_END if SYSTEM == WII => {
+                Some(MEM1_LINES + ((phys - MEM2_BASE) >> CODE_LINE_SHIFT) as usize)
+            }
+            _ => None,
+        }
+    }
+
+    #[inline(always)]
+    fn for_each_code_line(start: u32, len: u32, mut f: impl FnMut(u32)) {
+        if len == 0 {
+            return;
+        }
+
+        let mut p = start & CODE_LINE_MASK;
+        let end = start.wrapping_add(len - 1) & CODE_LINE_MASK;
+        loop {
+            f(p);
+
+            if p == end {
+                break;
+            }
+
+            p = p.wrapping_add(CODE_LINE_BYTES);
+        }
+    }
+
+    pub fn mark_code(&mut self, start: u32, len: u32) {
+        Self::for_each_code_line(start, len, |line| {
+            if let Some(i) = Self::code_refcount_index(line) {
+                let v = &mut self.code_refcount[i];
+                *v = v.saturating_add(1);
+            }
+        });
+    }
+
+    pub fn unmark_code(&mut self, start: u32, len: u32) {
+        Self::for_each_code_line(start, len, |line| {
+            if let Some(i) = Self::code_refcount_index(line) {
+                let v = &mut self.code_refcount[i];
+                if *v != u8::MAX {
+                    *v = v.saturating_sub(1);
+                }
+            }
+        });
+    }
+
+    #[inline(always)]
+    pub fn is_code_chunk(&self, phys: u32) -> bool {
+        match Self::code_refcount_index(phys) {
+            Some(i) => self.code_refcount[i] != 0,
+            None => false,
+        }
+    }
+
+    pub fn clear_code_refcount(&mut self) {
+        self.code_refcount.fill(0);
+    }
+
+    #[cfg(feature = "jit")]
+    #[inline(always)]
+    pub fn queue_icbi_for_range(&mut self, phys: u32, len: u32) {
+        Self::for_each_code_line(phys, len, |line| {
+            if self.is_code_chunk(line) {
+                self.pending_icbi.insert(line);
+                self.jit_dirty = 1;
+            }
+        });
+    }
+
     /// Read-only view spanning MEM1 and (on Wii) MEM2. Used by the GP path
     /// so texture / vertex / TLUT reads can resolve addresses in either bank.
     #[inline(always)]
@@ -352,8 +455,11 @@ impl<const SYSTEM: SystemId> Mmio<SYSTEM> {
         }
     }
 
-    /// Process a locked cache DMA transfer triggered by writing to SPR DMAL (923).
-    pub fn process_locked_cache_dma(&mut self, dmau: &crate::gekko::spr::DmaUpper, dmal: &crate::gekko::spr::DmaLower) {
+    pub fn process_locked_cache_dma(
+        &mut self,
+        dmau: &crate::gekko::spr::DmaUpper,
+        dmal: &crate::gekko::spr::DmaLower,
+    ) -> Option<(u32, u32)> {
         let ram_addr = dmau.ram_addr() << 5;
         let lcache_vaddr = dmal.lcache_addr() << 5;
         let lcache_paddr = (lcache_vaddr - LCACHE_BASE) as usize;
@@ -372,9 +478,11 @@ impl<const SYSTEM: SystemId> Mmio<SYSTEM> {
         if dmal.load() {
             let src = self.virt_slice(ram_addr, length).to_vec();
             self.lcache[lcache_paddr..lcache_paddr + length].copy_from_slice(&src);
+            None
         } else {
             let src = self.lcache[lcache_paddr..lcache_paddr + length].to_vec();
             self.virt_slice_mut(ram_addr, length).copy_from_slice(&src);
+            Some((virt_to_phys(ram_addr), length as u32))
         }
     }
 

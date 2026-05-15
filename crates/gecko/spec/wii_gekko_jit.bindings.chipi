@@ -162,12 +162,15 @@ target rust {
             dcba
             dcbz
             dcbz_l
-            icbi
             tlbie
             tlbia
             tlbsync
             tlbld
             tlbli
+        }
+
+        handler icbi {
+            icbi
         }
 
         handler logical {

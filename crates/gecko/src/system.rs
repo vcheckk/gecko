@@ -545,6 +545,14 @@ impl<const SYSTEM: SystemId> System<SYSTEM> {
             }
 
             jit.run_block(self);
+
+            if self.mmio.jit_dirty != 0 {
+                jit.drain_scratch.extend(self.mmio.pending_icbi.drain());
+                while let Some(line) = jit.drain_scratch.pop() {
+                    jit.invalidate_line(&mut self.mmio, line);
+                }
+                self.mmio.jit_dirty = 0;
+            }
         }
 
         self.jit = Some(jit);

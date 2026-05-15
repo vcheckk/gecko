@@ -74,6 +74,8 @@ pub struct ExternFuncs {
     pub do_psq_load: FuncId,
     pub do_psq_store: FuncId,
     pub read_timebase: FuncId,
+    pub cause_icbi: FuncId,
+    pub cause_smc_write: FuncId,
 }
 
 pub struct JitEngine<const SYSTEM: SystemId> {
@@ -82,7 +84,9 @@ pub struct JitEngine<const SYSTEM: SystemId> {
     builder_ctx: FunctionBuilderContext,
     cache: FxHashMap<u32, BlockEntry>,
     block_func_ids: FxHashMap<u32, FuncId>,
-    pending_chain_slots: FxHashMap<u32, Vec<usize>>,
+    target_slots: std::cell::RefCell<FxHashMap<u32, usize>>,
+    blocks_by_line: FxHashMap<u32, smallvec::SmallVec<[u32; 2]>>,
+    pub(crate) drain_scratch: Vec<u32>,
     #[cfg(feature = "jit-stats")]
     hits: FxHashMap<u32, u64>,
     pub(crate) block_specs: FxHashMap<u32, block::BlockSpec>,
@@ -150,6 +154,8 @@ impl<const SYSTEM: SystemId> JitEngine<SYSTEM> {
             do_psq_load: (&'static str, *const u8),
             do_psq_store: (&'static str, *const u8),
             read_timebase: (&'static str, *const u8),
+            cause_icbi: (&'static str, *const u8),
+            cause_smc_write: (&'static str, *const u8),
         }
         let syms: SymTable = match SYSTEM {
             GC => SymTable {
@@ -201,6 +207,8 @@ impl<const SYSTEM: SystemId> JitEngine<SYSTEM> {
                 do_psq_load: ("gecko_jit_do_psq_load_gc", runtime::do_psq_load_gc as *const u8),
                 do_psq_store: ("gecko_jit_do_psq_store_gc", runtime::do_psq_store_gc as *const u8),
                 read_timebase: ("gecko_jit_read_timebase_gc", runtime::read_timebase_gc as *const u8),
+                cause_icbi: ("gecko_jit_cause_icbi_gc", runtime::cause_icbi_gc as *const u8),
+                cause_smc_write: ("gecko_jit_cause_smc_write_gc", runtime::cause_smc_write_gc as *const u8),
             },
             WII => SymTable {
                 cause_invalid_opcode: (
@@ -254,6 +262,11 @@ impl<const SYSTEM: SystemId> JitEngine<SYSTEM> {
                 do_psq_load: ("gecko_jit_do_psq_load_wii", runtime::do_psq_load_wii as *const u8),
                 do_psq_store: ("gecko_jit_do_psq_store_wii", runtime::do_psq_store_wii as *const u8),
                 read_timebase: ("gecko_jit_read_timebase_wii", runtime::read_timebase_wii as *const u8),
+                cause_icbi: ("gecko_jit_cause_icbi_wii", runtime::cause_icbi_wii as *const u8),
+                cause_smc_write: (
+                    "gecko_jit_cause_smc_write_wii",
+                    runtime::cause_smc_write_wii as *const u8,
+                ),
             },
             _ => unreachable!(),
         };
@@ -289,6 +302,8 @@ impl<const SYSTEM: SystemId> JitEngine<SYSTEM> {
             syms.do_psq_load,
             syms.do_psq_store,
             syms.read_timebase,
+            syms.cause_icbi,
+            syms.cause_smc_write,
         ] {
             jit_builder.symbol(name, addr);
         }
@@ -456,6 +471,12 @@ impl<const SYSTEM: SystemId> JitEngine<SYSTEM> {
             read_timebase: module
                 .declare_function(syms.read_timebase.0, Linkage::Import, &mem_read_sig)
                 .expect("declare read_timebase"),
+            cause_icbi: module
+                .declare_function(syms.cause_icbi.0, Linkage::Import, &ctx_u32_sig)
+                .expect("declare cause_icbi"),
+            cause_smc_write: module
+                .declare_function(syms.cause_smc_write.0, Linkage::Import, &mem_write_sig)
+                .expect("declare cause_smc_write"),
         };
 
         let trampoline_fn = build_trampoline(&mut module, call_conv, pointer_type, &block_sig);
@@ -477,7 +498,9 @@ impl<const SYSTEM: SystemId> JitEngine<SYSTEM> {
             builder_ctx: FunctionBuilderContext::new(),
             cache: FxHashMap::default(),
             block_func_ids: FxHashMap::default(),
-            pending_chain_slots: FxHashMap::default(),
+            target_slots: std::cell::RefCell::new(FxHashMap::default()),
+            blocks_by_line: FxHashMap::default(),
+            drain_scratch: Vec::new(),
             #[cfg(feature = "jit-stats")]
             hits: FxHashMap::default(),
             block_specs: FxHashMap::default(),
@@ -492,6 +515,14 @@ impl<const SYSTEM: SystemId> JitEngine<SYSTEM> {
                 .ok()
                 .and_then(|s| u32::from_str_radix(s.trim().trim_start_matches("0x"), 16).ok()),
         }
+    }
+
+    #[inline]
+    fn target_slot_addr(&self, target_pc: u32) -> usize {
+        *self.target_slots.borrow_mut().entry(target_pc).or_insert_with(|| {
+            let slot: &'static mut usize = Box::leak(Box::new(0usize));
+            slot as *mut usize as usize
+        })
     }
 
     pub fn block_lookup_table_addr(&self) -> usize {
@@ -592,8 +623,75 @@ impl<const SYSTEM: SystemId> JitEngine<SYSTEM> {
         let entry = self.compile(&spec, &gprs_snapshot);
         self.cache.insert(pc, entry);
         self.block_specs.insert(pc, spec);
+        self.register_block(&mut sys.mmio, pc);
 
         entry
+    }
+
+    fn register_block(&mut self, mmio: &mut crate::mmio::Mmio<SYSTEM>, pc: u32) {
+        let Some(spec) = self.block_specs.get(&pc) else { return };
+        let mut last = u32::MAX;
+        for &vpc in &spec.pcs {
+            let line = crate::mmio::virt_to_phys(vpc) & crate::mmio::CODE_LINE_MASK;
+            if line == last {
+                continue;
+            }
+
+            last = line;
+            self.blocks_by_line.entry(line).or_default().push(pc);
+            mmio.mark_code(line, crate::mmio::CODE_LINE_BYTES);
+        }
+    }
+
+    fn unregister_block(&mut self, mmio: &mut crate::mmio::Mmio<SYSTEM>, pc: u32) {
+        let Some(spec) = self.block_specs.remove(&pc) else {
+            return;
+        };
+        self.cache.remove(&pc);
+        self.block_func_ids.remove(&pc);
+
+        if let Some(&slot) = self.target_slots.borrow().get(&pc) {
+            unsafe {
+                *(slot as *mut usize) = 0;
+            }
+        }
+
+        let idx = ((pc >> 2) & BLOCK_LOOKUP_TABLE_MASK) as usize;
+        unsafe {
+            let table = self.block_lookup_table_addr as *mut BlockLookupSlot;
+            if (*table.add(idx)).pc == pc {
+                (*table.add(idx)).entry = 0;
+            }
+        }
+
+        let mut last = u32::MAX;
+        for &vpc in &spec.pcs {
+            let line = crate::mmio::virt_to_phys(vpc) & crate::mmio::CODE_LINE_MASK;
+            if line == last {
+                continue;
+            }
+
+            last = line;
+            mmio.unmark_code(line, crate::mmio::CODE_LINE_BYTES);
+            if let Some(v) = self.blocks_by_line.get_mut(&line) {
+                v.retain(|p| *p != pc);
+                if v.is_empty() {
+                    self.blocks_by_line.remove(&line);
+                }
+            }
+        }
+    }
+
+    pub fn invalidate_line(&mut self, mmio: &mut crate::mmio::Mmio<SYSTEM>, line: u32) -> bool {
+        let Some(pcs) = self.blocks_by_line.remove(&line) else {
+            return false;
+        };
+
+        for pc in pcs.into_iter() {
+            self.unregister_block(mmio, pc);
+        }
+
+        true
     }
 
     #[cfg(feature = "jit-stats")]
@@ -796,7 +894,14 @@ impl<const SYSTEM: SystemId> JitEngine<SYSTEM> {
     pub fn flush(&mut self) {
         self.cache.clear();
         self.block_func_ids.clear();
-        self.pending_chain_slots.clear();
+        self.block_specs.clear();
+        self.blocks_by_line.clear();
+
+        for &slot_addr in self.target_slots.borrow().values() {
+            unsafe {
+                *(slot_addr as *mut usize) = 0;
+            }
+        }
 
         unsafe {
             let table = self.block_lookup_table_addr as *mut BlockLookupSlot;
@@ -807,6 +912,13 @@ impl<const SYSTEM: SystemId> JitEngine<SYSTEM> {
         }
     }
 
+    pub fn flush_with_refcount(&mut self, mmio: &mut crate::mmio::Mmio<SYSTEM>) {
+        self.flush();
+        mmio.clear_code_refcount();
+        mmio.pending_icbi.clear();
+        mmio.jit_dirty = 0;
+    }
+
     #[cfg_attr(feature = "hotpath", hotpath::measure(label = "ppc_jit_compile"))]
     fn compile(&mut self, spec: &block::BlockSpec, gprs: &[u32; 32]) -> BlockEntry {
         let func_id = self.func_id_for(spec.start_pc);
@@ -814,24 +926,18 @@ impl<const SYSTEM: SystemId> JitEngine<SYSTEM> {
         self.ctx.clear();
         self.ctx.func.signature = self.block_sig.clone();
 
-        let self_slot: &'static mut usize = Box::leak(Box::new(0usize));
-        let self_slot_addr = self_slot as *mut usize as i64;
-
-        let mut pending_for_this_block: Vec<(u32, usize)> = Vec::new();
+        let _ = self.target_slot_addr(spec.start_pc);
 
         #[cfg(feature = "jit-stats")]
         let entry_counter_addr = Some(self.block_entry_counter_slot(spec.start_pc));
         #[cfg(not(feature = "jit-stats"))]
         let entry_counter_addr: Option<usize> = None;
 
+        let block_lookup_table_addr = self.block_lookup_table_addr as i64;
         let chain = translator::ChainContext {
             self_pc: spec.start_pc,
-            self_func_id: func_id,
-            self_slot_addr,
-            compiled_func_ids: &self.block_func_ids,
-            compiled_cache: &self.cache,
-            pending: std::cell::RefCell::new(&mut pending_for_this_block),
-            block_lookup_table_addr: self.block_lookup_table_addr as i64,
+            target_slots: &self.target_slots,
+            block_lookup_table_addr,
         };
 
         translator::translate::<SYSTEM>(
@@ -846,9 +952,6 @@ impl<const SYSTEM: SystemId> JitEngine<SYSTEM> {
         );
 
         drop(chain);
-        for (target_pc, slot_addr) in pending_for_this_block.drain(..) {
-            self.pending_chain_slots.entry(target_pc).or_default().push(slot_addr);
-        }
 
         let want_dump = self.dump_pc == Some(spec.start_pc);
         if want_dump {
@@ -901,16 +1004,9 @@ impl<const SYSTEM: SystemId> JitEngine<SYSTEM> {
         self.module.finalize_definitions().expect("finalize");
         let entry = self.module.get_finalized_function(func_id) as usize;
 
+        let slot_addr = self.target_slot_addr(spec.start_pc);
         unsafe {
-            *(self_slot_addr as *mut usize) = entry;
-        }
-
-        if let Some(slots) = self.pending_chain_slots.remove(&spec.start_pc) {
-            for slot_addr in slots {
-                unsafe {
-                    *(slot_addr as *mut usize) = entry;
-                }
-            }
+            *(slot_addr as *mut usize) = entry;
         }
 
         self.register_in_lookup_table(spec.start_pc, entry);

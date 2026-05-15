@@ -264,7 +264,11 @@ pub fn run_dma<const CHANNEL: usize, const SYSTEM: SystemId>(sys: &mut System<SY
 
     if let Some(device) = &mut sys.exi.devices[CHANNEL][slot] {
         match transfer_type {
-            TransferType::Read => device.dma_read(sys.mmio.phys_slice_mut(address, length as usize)),
+            TransferType::Read => {
+                device.dma_read(sys.mmio.phys_slice_mut(address, length as usize));
+                #[cfg(feature = "jit")]
+                sys.mmio.queue_icbi_for_range(address, length);
+            }
             TransferType::Write => device.dma_write(sys.mmio.phys_slice(address, length as usize)),
             TransferType::ReadAndWrite | TransferType::Reserved => {
                 tracing::error!(

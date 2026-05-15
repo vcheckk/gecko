@@ -1802,6 +1802,7 @@ dependencies = [
  "image 0.1.0",
  "multiversion",
  "rustc-hash 2.1.2",
+ "smallvec",
  "tracing",
  "twox-hash",
  "windows-sys 0.61.2",

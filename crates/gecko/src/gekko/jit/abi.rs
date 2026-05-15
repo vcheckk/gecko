@@ -99,6 +99,16 @@ pub const fn fastmem_lut_ptr_offset<const SYSTEM: SystemId>() -> usize {
 }
 
 #[inline(always)]
+pub const fn code_refcount_ptr_offset<const SYSTEM: SystemId>() -> usize {
+    offset_of!(System<SYSTEM>, mmio) + offset_of!(Mmio<SYSTEM>, code_refcount_ptr)
+}
+
+#[inline(always)]
+pub const fn jit_dirty_offset<const SYSTEM: SystemId>() -> usize {
+    offset_of!(System<SYSTEM>, mmio) + offset_of!(Mmio<SYSTEM>, jit_dirty)
+}
+
+#[inline(always)]
 pub const fn gqr_offset<const SYSTEM: SystemId>(i: u8) -> usize {
     let spr_off = gekko_offset::<SYSTEM>() + offset_of!(Gekko, spr);
     spr_off

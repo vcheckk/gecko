@@ -207,8 +207,11 @@ fn write_spr<const SYSTEM: SystemId>(sys: *mut System<SYSTEM>, num: u32, val: u3
         923 => {
             sys.gekko.spr.dmal = crate::gekko::spr::DmaLower::from_raw(val);
             if sys.gekko.spr.dmal.trigger() {
-                sys.mmio
-                    .process_locked_cache_dma(&sys.gekko.spr.dmau, &sys.gekko.spr.dmal);
+                let dmau = sys.gekko.spr.dmau;
+                let dmal = sys.gekko.spr.dmal;
+                if let Some((phys, len)) = sys.mmio.process_locked_cache_dma(&dmau, &dmal) {
+                    sys.mmio.queue_icbi_for_range(phys, len);
+                }
             }
         }
         _ => sys.gekko.spr.write(num, val),
@@ -549,4 +552,38 @@ pub extern "C" fn do_rfi_gc(sys: *mut core::ffi::c_void) {
 }
 pub extern "C" fn do_rfi_wii(sys: *mut core::ffi::c_void) {
     do_rfi::<WII>(sys.cast());
+}
+
+#[inline(always)]
+fn cause_icbi<const SYSTEM: SystemId>(sys: *mut System<SYSTEM>, ea: u32) {
+    let sys = unsafe { &mut *sys };
+    let phys = crate::mmio::virt_to_phys(ea);
+    if !sys.mmio.is_code_chunk(phys) {
+        return;
+    }
+
+    let line = phys & crate::mmio::CODE_LINE_MASK;
+    sys.mmio.pending_icbi.insert(line);
+    sys.mmio.jit_dirty = 1;
+}
+
+pub extern "C" fn cause_icbi_gc(sys: *mut core::ffi::c_void, ea: u32) {
+    cause_icbi::<GC>(sys.cast(), ea);
+}
+pub extern "C" fn cause_icbi_wii(sys: *mut core::ffi::c_void, ea: u32) {
+    cause_icbi::<WII>(sys.cast(), ea);
+}
+
+#[inline(always)]
+fn cause_smc_write<const SYSTEM: SystemId>(sys: *mut System<SYSTEM>, ea: u32, size: u32) {
+    let sys = unsafe { &mut *sys };
+    let phys = crate::mmio::virt_to_phys(ea);
+    sys.mmio.queue_icbi_for_range(phys, size);
+}
+
+pub extern "C" fn cause_smc_write_gc(sys: *mut core::ffi::c_void, ea: u32, size: u32) {
+    cause_smc_write::<GC>(sys.cast(), ea, size);
+}
+pub extern "C" fn cause_smc_write_wii(sys: *mut core::ffi::c_void, ea: u32, size: u32) {
+    cause_smc_write::<WII>(sys.cast(), ea, size);
 }

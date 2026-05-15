@@ -4,7 +4,7 @@ use cranelift_codegen::ir::{AliasRegion, Block, FuncRef, InstBuilder, MemFlags, 
 
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
 use cranelift_jit::JITModule;
-use cranelift_module::{FuncId, Module};
+use cranelift_module::Module;
 use rustc_hash::FxHashMap;
 
 use crate::gekko::instruction::Instruction;
@@ -32,29 +32,18 @@ pub(crate) fn heap_flags() -> MemFlags {
 
 pub struct ChainContext<'a> {
     pub self_pc: u32,
-    pub self_func_id: FuncId,
-    pub self_slot_addr: i64,
-    pub compiled_func_ids: &'a FxHashMap<u32, FuncId>,
-    pub compiled_cache: &'a FxHashMap<u32, super::BlockEntry>,
-    pub pending: std::cell::RefCell<&'a mut Vec<(u32, usize)>>,
+    pub target_slots: &'a std::cell::RefCell<FxHashMap<u32, usize>>,
     pub block_lookup_table_addr: i64,
 }
 
 impl<'a> ChainContext<'a> {
     fn target_for(&self, target_pc: u32) -> Option<i64> {
-        if target_pc == self.self_pc {
-            return Some(self.self_slot_addr);
-        }
-
-        if let Some(&entry) = self.compiled_cache.get(&target_pc) {
-            let slot: &'static mut usize = Box::leak(Box::new(entry));
-            return Some(slot as *mut usize as i64);
-        }
-
-        let slot: &'static mut usize = Box::leak(Box::new(0usize));
-        let slot_addr_usize = slot as *mut usize as usize;
-        self.pending.borrow_mut().push((target_pc, slot_addr_usize));
-        Some(slot_addr_usize as i64)
+        let mut slots = self.target_slots.borrow_mut();
+        let addr = *slots.entry(target_pc).or_insert_with(|| {
+            let slot: &'static mut usize = Box::leak(Box::new(0usize));
+            slot as *mut usize as usize
+        });
+        Some(addr as i64)
     }
 }
 
@@ -92,6 +81,8 @@ pub(crate) struct LocalFuncs {
     pub(crate) do_psq_load: FuncRef,
     pub(crate) do_psq_store: FuncRef,
     pub(crate) read_timebase: FuncRef,
+    pub(crate) cause_icbi: FuncRef,
+    pub(crate) cause_smc_write: FuncRef,
     pub(crate) fp_guard_emitted: std::cell::Cell<bool>,
 }
 
@@ -152,6 +143,8 @@ pub fn translate<const SYSTEM: SystemId>(
         do_psq_load: module.declare_func_in_func(extern_funcs.do_psq_load, &mut ctx.func),
         do_psq_store: module.declare_func_in_func(extern_funcs.do_psq_store, &mut ctx.func),
         read_timebase: module.declare_func_in_func(extern_funcs.read_timebase, &mut ctx.func),
+        cause_icbi: module.declare_func_in_func(extern_funcs.cause_icbi, &mut ctx.func),
+        cause_smc_write: module.declare_func_in_func(extern_funcs.cause_smc_write, &mut ctx.func),
         fp_guard_emitted: std::cell::Cell::new(false),
     };
 
@@ -185,6 +178,15 @@ pub fn translate<const SYSTEM: SystemId>(
 
     let exit_block = builder.create_block();
     builder.append_block_param(exit_block, types::I32);
+
+    let dirty_off = abi::jit_dirty_offset::<SYSTEM>() as i32;
+    let dirty = builder.ins().load(types::I8, vmctx_flags(), ctx_ptr, dirty_off);
+    let nz = builder.ins().icmp_imm(IntCC::NotEqual, dirty, 0);
+    let alive = builder.create_block();
+    let start_nia = builder.ins().iconst(types::I32, spec.start_pc as i64);
+    builder.ins().brif(nz, exit_block, &[start_nia.into()], alive, &[]);
+    builder.switch_to_block(alive);
+    builder.seal_block(alive);
 
     if let IdleClass::PointerIterLoop { gpr, stride } = idle_class {
         let rb_off = self::gpr_offset::<SYSTEM>(gpr);
@@ -2026,6 +2028,59 @@ pub(crate) fn emit_x_form_ea<const SYSTEM: SystemId>(
     builder.ins().iadd(base, b)
 }
 
+pub(crate) fn emit_smc_check<const SYSTEM: SystemId>(
+    builder: &mut FunctionBuilder,
+    ctx_ptr: Value,
+    ea: Value,
+    size_bytes: u32,
+    cause_smc_write: FuncRef,
+) {
+    let phys = builder.ins().band_imm(ea, crate::mmio::PHYS_MASK as i64);
+    let in_mem1 = builder
+        .ins()
+        .icmp_imm(IntCC::UnsignedLessThan, phys, crate::mmio::constants::RAM_SIZE as i64);
+
+    let check_block = builder.create_block();
+    let post_block = builder.create_block();
+    builder.ins().brif(in_mem1, check_block, &[], post_block, &[]);
+
+    builder.switch_to_block(check_block);
+    builder.seal_block(check_block);
+
+    let rc_off = abi::code_refcount_ptr_offset::<SYSTEM>() as i32;
+    let rc_base = builder.ins().load(types::I64, vmctx_readonly_flags(), ctx_ptr, rc_off);
+
+    let lo_idx_u32 = builder.ins().ushr_imm(phys, crate::mmio::CODE_LINE_SHIFT as i64);
+    let lo_idx = builder.ins().uextend(types::I64, lo_idx_u32);
+    let lo_addr = builder.ins().iadd(rc_base, lo_idx);
+    let rc_lo = builder.ins().load(types::I8, vmctx_flags(), lo_addr, 0);
+
+    let combined = if size_bytes <= 1 {
+        rc_lo
+    } else {
+        let hi_phys = builder.ins().iadd_imm(phys, (size_bytes as i64) - 1);
+        let hi_idx_u32 = builder.ins().ushr_imm(hi_phys, crate::mmio::CODE_LINE_SHIFT as i64);
+        let hi_idx = builder.ins().uextend(types::I64, hi_idx_u32);
+        let hi_addr = builder.ins().iadd(rc_base, hi_idx);
+        let rc_hi = builder.ins().load(types::I8, vmctx_flags(), hi_addr, 0);
+        builder.ins().bor(rc_lo, rc_hi)
+    };
+    let nz = builder.ins().icmp_imm(IntCC::NotEqual, combined, 0);
+
+    let slow_block = builder.create_block();
+    builder.set_cold_block(slow_block);
+    builder.ins().brif(nz, slow_block, &[], post_block, &[]);
+
+    builder.switch_to_block(slow_block);
+    builder.seal_block(slow_block);
+    let size_v = builder.ins().iconst(types::I32, size_bytes as i64);
+    builder.ins().call(cause_smc_write, &[ctx_ptr, ea, size_v]);
+    builder.ins().jump(post_block, &[]);
+
+    builder.switch_to_block(post_block);
+    builder.seal_block(post_block);
+}
+
 pub(crate) fn emit_fastmem_lookup<const SYSTEM: SystemId>(
     builder: &mut FunctionBuilder,
     ctx_ptr: Value,
@@ -2135,9 +2190,9 @@ pub(crate) fn emit_stfx_update<const SYSTEM: SystemId>(
 ) {
     let ea = emit_x_form_ea::<SYSTEM>(builder, ctx_ptr, instr);
     if single {
-        emit_stfs_at_ea::<SYSTEM>(builder, ctx_ptr, instr.rs(), ea, local.write_f32);
+        emit_stfs_at_ea::<SYSTEM>(builder, ctx_ptr, instr.rs(), ea, local.write_f32, local.cause_smc_write);
     } else {
-        emit_stfd_at_ea::<SYSTEM>(builder, ctx_ptr, instr.rs(), ea, local.write_f64);
+        emit_stfd_at_ea::<SYSTEM>(builder, ctx_ptr, instr.rs(), ea, local.write_f64, local.cause_smc_write);
     }
     gpr_store::<SYSTEM>(builder, ctx_ptr, instr.ra(), ea);
 }
@@ -2147,6 +2202,7 @@ pub(crate) fn emit_stfiwx<const SYSTEM: SystemId>(
     ctx_ptr: Value,
     instr: Instruction,
     slow_u32: FuncRef,
+    cause_smc_write: FuncRef,
 ) {
     let ea = emit_x_form_ea::<SYSTEM>(builder, ctx_ptr, instr);
 
@@ -2154,7 +2210,7 @@ pub(crate) fn emit_stfiwx<const SYSTEM: SystemId>(
     let u64v = builder.ins().bitcast(types::I64, MemFlags::new(), f);
     let u32v = builder.ins().ireduce(types::I32, u64v);
 
-    emit_u32_store_at_ea::<SYSTEM>(builder, ctx_ptr, ea, u32v, slow_u32);
+    emit_u32_store_at_ea::<SYSTEM>(builder, ctx_ptr, ea, u32v, slow_u32, cause_smc_write);
 }
 
 pub(crate) fn emit_u32_store_at_ea<const SYSTEM: SystemId>(
@@ -2163,6 +2219,7 @@ pub(crate) fn emit_u32_store_at_ea<const SYSTEM: SystemId>(
     ea: Value,
     val: Value,
     slow: FuncRef,
+    cause_smc_write: FuncRef,
 ) {
     let fast_block = builder.create_block();
     let slow_block = builder.create_block();
@@ -2181,6 +2238,7 @@ pub(crate) fn emit_u32_store_at_ea<const SYSTEM: SystemId>(
     let addr = builder.block_params(fast_block)[0];
     let bswapped = builder.ins().bswap(val);
     builder.ins().store(heap_flags(), bswapped, addr, 0);
+    emit_smc_check::<SYSTEM>(builder, ctx_ptr, ea, 4, cause_smc_write);
     builder.ins().jump(merge, &[]);
 
     builder.switch_to_block(slow_block);
@@ -2215,11 +2273,11 @@ pub(crate) fn emit_psq_x<const SYSTEM: SystemId>(
     builder.seal_block(fast_block);
     if store {
         let ps0 = fpr_load::<SYSTEM>(builder, ctx_ptr, instr.rd());
-        emit_write_f32::<SYSTEM>(builder, ctx_ptr, ea, ps0, local.write_f32);
+        emit_write_f32::<SYSTEM>(builder, ctx_ptr, ea, ps0, local.write_f32, local.cause_smc_write);
         if !instr.w_21_21() {
             let ps1 = ps1_load::<SYSTEM>(builder, ctx_ptr, instr.rd());
             let ea1 = builder.ins().iadd_imm(ea, 4);
-            emit_write_f32::<SYSTEM>(builder, ctx_ptr, ea1, ps1, local.write_f32);
+            emit_write_f32::<SYSTEM>(builder, ctx_ptr, ea1, ps1, local.write_f32, local.cause_smc_write);
         }
     } else {
         let ps0 = emit_read_f32::<SYSTEM>(builder, ctx_ptr, ea, local.read_f32);
@@ -2324,6 +2382,7 @@ pub(crate) fn emit_stwcx_dot<const SYSTEM: SystemId>(
         0,
         MemSize::U32,
         local.write_u32,
+        local.cause_smc_write,
         false,
     );
     builder.ins().jump(cr_block, &[matched.into()]);
@@ -2360,7 +2419,17 @@ pub(crate) fn emit_lmw_stmw<const SYSTEM: SystemId>(
             builder.ins().iadd_imm(ea_base, off as i64)
         };
         if store {
-            emit_store_at_ea::<SYSTEM>(builder, ctx_ptr, ea, r, 0, MemSize::U32, local.write_u32, false);
+            emit_store_at_ea::<SYSTEM>(
+                builder,
+                ctx_ptr,
+                ea,
+                r,
+                0,
+                MemSize::U32,
+                local.write_u32,
+                local.cause_smc_write,
+                false,
+            );
         } else {
             emit_load_at_ea::<SYSTEM>(builder, ctx_ptr, ea, r, 0, MemSize::U32, local.read_u32, false);
         }
@@ -2474,6 +2543,7 @@ pub(crate) fn emit_store_xform_brx<const SYSTEM: SystemId>(
     instr: Instruction,
     size: MemSize,
     slow: FuncRef,
+    cause_smc_write: FuncRef,
 ) {
     let ea = emit_x_form_ea::<SYSTEM>(builder, ctx_ptr, instr);
     let val32 = gpr_load::<SYSTEM>(builder, ctx_ptr, instr.rs());
@@ -2500,6 +2570,12 @@ pub(crate) fn emit_store_xform_brx<const SYSTEM: SystemId>(
         MemSize::U8 => builder.ins().ireduce(types::I8, val32),
     };
     builder.ins().store(heap_flags(), truncated, addr, 0);
+    let size_bytes = match size {
+        MemSize::U8 => 1,
+        MemSize::U16 => 2,
+        MemSize::U32 => 4,
+    };
+    emit_smc_check::<SYSTEM>(builder, ctx_ptr, ea, size_bytes, cause_smc_write);
     builder.ins().jump(merge, &[]);
 
     builder.switch_to_block(slow_block);
@@ -2631,9 +2707,9 @@ pub(crate) fn emit_stf_d_form_update<const SYSTEM: SystemId>(
 ) {
     let ea = emit_d_form_ea::<SYSTEM>(builder, ctx_ptr, instr);
     if single {
-        emit_stfs_at_ea::<SYSTEM>(builder, ctx_ptr, instr.rs(), ea, local.write_f32);
+        emit_stfs_at_ea::<SYSTEM>(builder, ctx_ptr, instr.rs(), ea, local.write_f32, local.cause_smc_write);
     } else {
-        emit_stfd_at_ea::<SYSTEM>(builder, ctx_ptr, instr.rs(), ea, local.write_f64);
+        emit_stfd_at_ea::<SYSTEM>(builder, ctx_ptr, instr.rs(), ea, local.write_f64, local.cause_smc_write);
     }
     gpr_store::<SYSTEM>(builder, ctx_ptr, instr.ra(), ea);
 }
@@ -2729,6 +2805,7 @@ pub(crate) fn emit_stfs<const SYSTEM: SystemId>(
     instr: Instruction,
     slow_f32: FuncRef,
     _slow_u32: FuncRef,
+    cause_smc_write: FuncRef,
 ) {
     let ea = emit_d_form_ea::<SYSTEM>(builder, ctx_ptr, instr);
     let f64v = fpr_load::<SYSTEM>(builder, ctx_ptr, instr.rs());
@@ -2752,6 +2829,7 @@ pub(crate) fn emit_stfs<const SYSTEM: SystemId>(
     let bits = builder.ins().bitcast(types::I32, MemFlags::new(), f32v);
     let swapped = builder.ins().bswap(bits);
     builder.ins().store(heap_flags(), swapped, addr, 0);
+    emit_smc_check::<SYSTEM>(builder, ctx_ptr, ea, 4, cause_smc_write);
     builder.ins().jump(merge, &[]);
 
     builder.switch_to_block(slow_block);
@@ -2768,6 +2846,7 @@ pub(crate) fn emit_stfd<const SYSTEM: SystemId>(
     ctx_ptr: Value,
     instr: Instruction,
     slow_f64: FuncRef,
+    cause_smc_write: FuncRef,
 ) {
     let ea = emit_d_form_ea::<SYSTEM>(builder, ctx_ptr, instr);
     let f64v = fpr_load::<SYSTEM>(builder, ctx_ptr, instr.rs());
@@ -2790,6 +2869,7 @@ pub(crate) fn emit_stfd<const SYSTEM: SystemId>(
     let bits = builder.ins().bitcast(types::I64, MemFlags::new(), f64v);
     let swapped = builder.ins().bswap(bits);
     builder.ins().store(heap_flags(), swapped, addr, 0);
+    emit_smc_check::<SYSTEM>(builder, ctx_ptr, ea, 8, cause_smc_write);
     builder.ins().jump(merge, &[]);
 
     builder.switch_to_block(slow_block);
@@ -2826,9 +2906,10 @@ pub(crate) fn emit_stfsx<const SYSTEM: SystemId>(
     ctx_ptr: Value,
     instr: Instruction,
     slow_f32: FuncRef,
+    cause_smc_write: FuncRef,
 ) {
     let ea = emit_x_form_ea::<SYSTEM>(builder, ctx_ptr, instr);
-    emit_stfs_at_ea::<SYSTEM>(builder, ctx_ptr, instr.rs(), ea, slow_f32);
+    emit_stfs_at_ea::<SYSTEM>(builder, ctx_ptr, instr.rs(), ea, slow_f32, cause_smc_write);
 }
 
 pub(crate) fn emit_stfdx<const SYSTEM: SystemId>(
@@ -2836,9 +2917,10 @@ pub(crate) fn emit_stfdx<const SYSTEM: SystemId>(
     ctx_ptr: Value,
     instr: Instruction,
     slow_f64: FuncRef,
+    cause_smc_write: FuncRef,
 ) {
     let ea = emit_x_form_ea::<SYSTEM>(builder, ctx_ptr, instr);
-    emit_stfd_at_ea::<SYSTEM>(builder, ctx_ptr, instr.rs(), ea, slow_f64);
+    emit_stfd_at_ea::<SYSTEM>(builder, ctx_ptr, instr.rs(), ea, slow_f64, cause_smc_write);
 }
 
 pub(crate) fn emit_lfs_at_ea<const SYSTEM: SystemId>(
@@ -2928,6 +3010,7 @@ pub(crate) fn emit_stfs_at_ea<const SYSTEM: SystemId>(
     rs: u8,
     ea: Value,
     slow_f32: FuncRef,
+    cause_smc_write: FuncRef,
 ) {
     let f64v = fpr_load::<SYSTEM>(builder, ctx_ptr, rs);
 
@@ -2950,6 +3033,7 @@ pub(crate) fn emit_stfs_at_ea<const SYSTEM: SystemId>(
     let bits = builder.ins().bitcast(types::I32, MemFlags::new(), f32v);
     let swapped = builder.ins().bswap(bits);
     builder.ins().store(heap_flags(), swapped, addr, 0);
+    emit_smc_check::<SYSTEM>(builder, ctx_ptr, ea, 4, cause_smc_write);
     builder.ins().jump(merge, &[]);
 
     builder.switch_to_block(slow_block);
@@ -2967,6 +3051,7 @@ pub(crate) fn emit_stfd_at_ea<const SYSTEM: SystemId>(
     rs: u8,
     ea: Value,
     slow_f64: FuncRef,
+    cause_smc_write: FuncRef,
 ) {
     let f64v = fpr_load::<SYSTEM>(builder, ctx_ptr, rs);
 
@@ -2988,6 +3073,7 @@ pub(crate) fn emit_stfd_at_ea<const SYSTEM: SystemId>(
     let bits = builder.ins().bitcast(types::I64, MemFlags::new(), f64v);
     let swapped = builder.ins().bswap(bits);
     builder.ins().store(heap_flags(), swapped, addr, 0);
+    emit_smc_check::<SYSTEM>(builder, ctx_ptr, ea, 8, cause_smc_write);
     builder.ins().jump(merge, &[]);
 
     builder.switch_to_block(slow_block);
@@ -3078,11 +3164,11 @@ pub(crate) fn emit_psq_st<const SYSTEM: SystemId>(
     builder.switch_to_block(fast_block);
     builder.seal_block(fast_block);
     let ps0 = fpr_load::<SYSTEM>(builder, ctx_ptr, instr.rs());
-    emit_write_f32::<SYSTEM>(builder, ctx_ptr, ea, ps0, local.write_f32);
+    emit_write_f32::<SYSTEM>(builder, ctx_ptr, ea, ps0, local.write_f32, local.cause_smc_write);
     if !instr.w_16_16() {
         let ps1 = ps1_load::<SYSTEM>(builder, ctx_ptr, instr.rs());
         let ea1 = builder.ins().iadd_imm(ea, 4);
-        emit_write_f32::<SYSTEM>(builder, ctx_ptr, ea1, ps1, local.write_f32);
+        emit_write_f32::<SYSTEM>(builder, ctx_ptr, ea1, ps1, local.write_f32, local.cause_smc_write);
     }
     builder.ins().jump(merge, &[]);
 
@@ -3415,6 +3501,8 @@ pub(crate) fn emit_psq_store_quantized<const SYSTEM: SystemId>(
         builder.ins().store(heap_flags(), ps1_be, addr, 4);
     }
 
+    let psq_size = if w { 4 } else { 8 };
+    emit_smc_check::<SYSTEM>(builder, ctx_ptr, ea, psq_size, local.cause_smc_write);
     builder.ins().jump(merge, &[]);
 
     builder.switch_to_block(slow_f32_block);
@@ -3475,6 +3563,7 @@ pub(crate) fn emit_write_f32<const SYSTEM: SystemId>(
     ea: Value,
     f64v: Value,
     slow_f32: FuncRef,
+    cause_smc_write: FuncRef,
 ) {
     let fast_block = builder.create_block();
     let slow_block = builder.create_block();
@@ -3495,6 +3584,7 @@ pub(crate) fn emit_write_f32<const SYSTEM: SystemId>(
     let bits = builder.ins().bitcast(types::I32, MemFlags::new(), f32v);
     let swapped = builder.ins().bswap(bits);
     builder.ins().store(heap_flags(), swapped, addr, 0);
+    emit_smc_check::<SYSTEM>(builder, ctx_ptr, ea, 4, cause_smc_write);
     builder.ins().jump(merge, &[]);
 
     builder.switch_to_block(slow_block);
@@ -4278,10 +4368,21 @@ pub(crate) fn emit_store<const SYSTEM: SystemId>(
     instr: Instruction,
     size: MemSize,
     slow: FuncRef,
+    cause_smc_write: FuncRef,
     update: bool,
 ) {
     let ea = emit_d_form_ea::<SYSTEM>(builder, ctx_ptr, instr);
-    emit_store_at_ea::<SYSTEM>(builder, ctx_ptr, ea, instr.rs(), instr.ra(), size, slow, update);
+    emit_store_at_ea::<SYSTEM>(
+        builder,
+        ctx_ptr,
+        ea,
+        instr.rs(),
+        instr.ra(),
+        size,
+        slow,
+        cause_smc_write,
+        update,
+    );
 }
 
 pub(crate) fn emit_store_xform<const SYSTEM: SystemId>(
@@ -4290,10 +4391,21 @@ pub(crate) fn emit_store_xform<const SYSTEM: SystemId>(
     instr: Instruction,
     size: MemSize,
     slow: FuncRef,
+    cause_smc_write: FuncRef,
     update: bool,
 ) {
     let ea = emit_x_form_ea::<SYSTEM>(builder, ctx_ptr, instr);
-    emit_store_at_ea::<SYSTEM>(builder, ctx_ptr, ea, instr.rs(), instr.ra(), size, slow, update);
+    emit_store_at_ea::<SYSTEM>(
+        builder,
+        ctx_ptr,
+        ea,
+        instr.rs(),
+        instr.ra(),
+        size,
+        slow,
+        cause_smc_write,
+        update,
+    );
 }
 
 pub(crate) fn emit_store_at_ea<const SYSTEM: SystemId>(
@@ -4304,6 +4416,7 @@ pub(crate) fn emit_store_at_ea<const SYSTEM: SystemId>(
     ra: u8,
     size: MemSize,
     slow: FuncRef,
+    cause_smc_write: FuncRef,
     update: bool,
 ) {
     let val32 = gpr_load::<SYSTEM>(builder, ctx_ptr, rs);
@@ -4334,6 +4447,12 @@ pub(crate) fn emit_store_at_ea<const SYSTEM: SystemId>(
         MemSize::U16 | MemSize::U32 => builder.ins().bswap(truncated),
     };
     builder.ins().store(flags, val_to_store, addr, 0);
+    let size_bytes = match size {
+        MemSize::U8 => 1,
+        MemSize::U16 => 2,
+        MemSize::U32 => 4,
+    };
+    emit_smc_check::<SYSTEM>(builder, ctx_ptr, ea, size_bytes, cause_smc_write);
     builder.ins().jump(merge, &[]);
 
     builder.switch_to_block(slow_block);

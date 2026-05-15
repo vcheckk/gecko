@@ -488,20 +488,60 @@ pub fn store_load<const OP: u32, const SYSTEM: SystemId>(t: &mut JitTranslator, 
         lut::OP_LHA => translator::emit_lha_d_form::<SYSTEM>(builder, t.ctx_ptr, instr, local.read_u16, false),
         lut::OP_LHAU => translator::emit_lha_d_form::<SYSTEM>(builder, t.ctx_ptr, instr, local.read_u16, true),
 
-        lut::OP_STW => {
-            translator::emit_store::<SYSTEM>(builder, t.ctx_ptr, instr, MemSize::U32, local.write_u32, false)
-        }
-        lut::OP_STWU => {
-            translator::emit_store::<SYSTEM>(builder, t.ctx_ptr, instr, MemSize::U32, local.write_u32, true)
-        }
-        lut::OP_STB => translator::emit_store::<SYSTEM>(builder, t.ctx_ptr, instr, MemSize::U8, local.write_u8, false),
-        lut::OP_STBU => translator::emit_store::<SYSTEM>(builder, t.ctx_ptr, instr, MemSize::U8, local.write_u8, true),
-        lut::OP_STH => {
-            translator::emit_store::<SYSTEM>(builder, t.ctx_ptr, instr, MemSize::U16, local.write_u16, false)
-        }
-        lut::OP_STHU => {
-            translator::emit_store::<SYSTEM>(builder, t.ctx_ptr, instr, MemSize::U16, local.write_u16, true)
-        }
+        lut::OP_STW => translator::emit_store::<SYSTEM>(
+            builder,
+            t.ctx_ptr,
+            instr,
+            MemSize::U32,
+            local.write_u32,
+            local.cause_smc_write,
+            false,
+        ),
+        lut::OP_STWU => translator::emit_store::<SYSTEM>(
+            builder,
+            t.ctx_ptr,
+            instr,
+            MemSize::U32,
+            local.write_u32,
+            local.cause_smc_write,
+            true,
+        ),
+        lut::OP_STB => translator::emit_store::<SYSTEM>(
+            builder,
+            t.ctx_ptr,
+            instr,
+            MemSize::U8,
+            local.write_u8,
+            local.cause_smc_write,
+            false,
+        ),
+        lut::OP_STBU => translator::emit_store::<SYSTEM>(
+            builder,
+            t.ctx_ptr,
+            instr,
+            MemSize::U8,
+            local.write_u8,
+            local.cause_smc_write,
+            true,
+        ),
+        lut::OP_STH => translator::emit_store::<SYSTEM>(
+            builder,
+            t.ctx_ptr,
+            instr,
+            MemSize::U16,
+            local.write_u16,
+            local.cause_smc_write,
+            false,
+        ),
+        lut::OP_STHU => translator::emit_store::<SYSTEM>(
+            builder,
+            t.ctx_ptr,
+            instr,
+            MemSize::U16,
+            local.write_u16,
+            local.cause_smc_write,
+            true,
+        ),
 
         lut::OP_LMW => translator::emit_lmw_stmw::<SYSTEM>(builder, t.ctx_ptr, instr, local, false),
         lut::OP_STMW => translator::emit_lmw_stmw::<SYSTEM>(builder, t.ctx_ptr, instr, local, true),
@@ -527,24 +567,60 @@ pub fn store_load<const OP: u32, const SYSTEM: SystemId>(t: &mut JitTranslator, 
         lut::OP_LHAX => translator::emit_lha_xform::<SYSTEM>(builder, t.ctx_ptr, instr, local.read_u16, false),
         lut::OP_LHAUX => translator::emit_lha_xform::<SYSTEM>(builder, t.ctx_ptr, instr, local.read_u16, true),
 
-        lut::OP_STWX => {
-            translator::emit_store_xform::<SYSTEM>(builder, t.ctx_ptr, instr, MemSize::U32, local.write_u32, false)
-        }
-        lut::OP_STWUX => {
-            translator::emit_store_xform::<SYSTEM>(builder, t.ctx_ptr, instr, MemSize::U32, local.write_u32, true)
-        }
-        lut::OP_STBX => {
-            translator::emit_store_xform::<SYSTEM>(builder, t.ctx_ptr, instr, MemSize::U8, local.write_u8, false)
-        }
-        lut::OP_STBUX => {
-            translator::emit_store_xform::<SYSTEM>(builder, t.ctx_ptr, instr, MemSize::U8, local.write_u8, true)
-        }
-        lut::OP_STHX => {
-            translator::emit_store_xform::<SYSTEM>(builder, t.ctx_ptr, instr, MemSize::U16, local.write_u16, false)
-        }
-        lut::OP_STHUX => {
-            translator::emit_store_xform::<SYSTEM>(builder, t.ctx_ptr, instr, MemSize::U16, local.write_u16, true)
-        }
+        lut::OP_STWX => translator::emit_store_xform::<SYSTEM>(
+            builder,
+            t.ctx_ptr,
+            instr,
+            MemSize::U32,
+            local.write_u32,
+            local.cause_smc_write,
+            false,
+        ),
+        lut::OP_STWUX => translator::emit_store_xform::<SYSTEM>(
+            builder,
+            t.ctx_ptr,
+            instr,
+            MemSize::U32,
+            local.write_u32,
+            local.cause_smc_write,
+            true,
+        ),
+        lut::OP_STBX => translator::emit_store_xform::<SYSTEM>(
+            builder,
+            t.ctx_ptr,
+            instr,
+            MemSize::U8,
+            local.write_u8,
+            local.cause_smc_write,
+            false,
+        ),
+        lut::OP_STBUX => translator::emit_store_xform::<SYSTEM>(
+            builder,
+            t.ctx_ptr,
+            instr,
+            MemSize::U8,
+            local.write_u8,
+            local.cause_smc_write,
+            true,
+        ),
+        lut::OP_STHX => translator::emit_store_xform::<SYSTEM>(
+            builder,
+            t.ctx_ptr,
+            instr,
+            MemSize::U16,
+            local.write_u16,
+            local.cause_smc_write,
+            false,
+        ),
+        lut::OP_STHUX => translator::emit_store_xform::<SYSTEM>(
+            builder,
+            t.ctx_ptr,
+            instr,
+            MemSize::U16,
+            local.write_u16,
+            local.cause_smc_write,
+            true,
+        ),
 
         lut::OP_LWBRX => {
             translator::emit_load_xform_brx::<SYSTEM>(builder, t.ctx_ptr, instr, MemSize::U32, local.read_u32)
@@ -552,12 +628,22 @@ pub fn store_load<const OP: u32, const SYSTEM: SystemId>(t: &mut JitTranslator, 
         lut::OP_LHBRX => {
             translator::emit_load_xform_brx::<SYSTEM>(builder, t.ctx_ptr, instr, MemSize::U16, local.read_u16)
         }
-        lut::OP_STWBRX => {
-            translator::emit_store_xform_brx::<SYSTEM>(builder, t.ctx_ptr, instr, MemSize::U32, local.write_u32)
-        }
-        lut::OP_STHBRX => {
-            translator::emit_store_xform_brx::<SYSTEM>(builder, t.ctx_ptr, instr, MemSize::U16, local.write_u16)
-        }
+        lut::OP_STWBRX => translator::emit_store_xform_brx::<SYSTEM>(
+            builder,
+            t.ctx_ptr,
+            instr,
+            MemSize::U32,
+            local.write_u32,
+            local.cause_smc_write,
+        ),
+        lut::OP_STHBRX => translator::emit_store_xform_brx::<SYSTEM>(
+            builder,
+            t.ctx_ptr,
+            instr,
+            MemSize::U16,
+            local.write_u16,
+            local.cause_smc_write,
+        ),
 
         _ => return,
     }
@@ -577,9 +663,18 @@ pub fn store_load_fp<const OP: u32, const SYSTEM: SystemId>(t: &mut JitTranslato
         lut::OP_LFD => translator::emit_lfd::<SYSTEM>(builder, t.ctx_ptr, instr, local.read_f64),
         lut::OP_LFDU => translator::emit_lf_d_form_update::<SYSTEM>(builder, t.ctx_ptr, instr, false, local),
 
-        lut::OP_STFS => translator::emit_stfs::<SYSTEM>(builder, t.ctx_ptr, instr, local.write_f32, local.write_u32),
+        lut::OP_STFS => translator::emit_stfs::<SYSTEM>(
+            builder,
+            t.ctx_ptr,
+            instr,
+            local.write_f32,
+            local.write_u32,
+            local.cause_smc_write,
+        ),
         lut::OP_STFSU => translator::emit_stf_d_form_update::<SYSTEM>(builder, t.ctx_ptr, instr, true, local),
-        lut::OP_STFD => translator::emit_stfd::<SYSTEM>(builder, t.ctx_ptr, instr, local.write_f64),
+        lut::OP_STFD => {
+            translator::emit_stfd::<SYSTEM>(builder, t.ctx_ptr, instr, local.write_f64, local.cause_smc_write)
+        }
         lut::OP_STFDU => translator::emit_stf_d_form_update::<SYSTEM>(builder, t.ctx_ptr, instr, false, local),
 
         lut::OP_LFSX => translator::emit_lfsx::<SYSTEM>(builder, t.ctx_ptr, instr, local.read_f32),
@@ -587,12 +682,18 @@ pub fn store_load_fp<const OP: u32, const SYSTEM: SystemId>(t: &mut JitTranslato
         lut::OP_LFDX => translator::emit_lfdx::<SYSTEM>(builder, t.ctx_ptr, instr, local.read_f64),
         lut::OP_LFDUX => translator::emit_lfx_update::<SYSTEM>(builder, t.ctx_ptr, instr, false, local),
 
-        lut::OP_STFSX => translator::emit_stfsx::<SYSTEM>(builder, t.ctx_ptr, instr, local.write_f32),
+        lut::OP_STFSX => {
+            translator::emit_stfsx::<SYSTEM>(builder, t.ctx_ptr, instr, local.write_f32, local.cause_smc_write)
+        }
         lut::OP_STFSUX => translator::emit_stfx_update::<SYSTEM>(builder, t.ctx_ptr, instr, true, local),
-        lut::OP_STFDX => translator::emit_stfdx::<SYSTEM>(builder, t.ctx_ptr, instr, local.write_f64),
+        lut::OP_STFDX => {
+            translator::emit_stfdx::<SYSTEM>(builder, t.ctx_ptr, instr, local.write_f64, local.cause_smc_write)
+        }
         lut::OP_STFDUX => translator::emit_stfx_update::<SYSTEM>(builder, t.ctx_ptr, instr, false, local),
 
-        lut::OP_STFIWX => translator::emit_stfiwx::<SYSTEM>(builder, t.ctx_ptr, instr, local.write_u32),
+        lut::OP_STFIWX => {
+            translator::emit_stfiwx::<SYSTEM>(builder, t.ctx_ptr, instr, local.write_u32, local.cause_smc_write)
+        }
 
         _ => return,
     }
@@ -644,7 +745,6 @@ pub fn nop<const OP: u32, const SYSTEM: SystemId>(t: &mut JitTranslator, instr: 
         | lut::OP_DCBA
         | lut::OP_DCBZ
         | lut::OP_DCBZ_L
-        | lut::OP_ICBI
         | lut::OP_TLBIE
         | lut::OP_TLBIA
         | lut::OP_TLBSYNC
@@ -655,6 +755,38 @@ pub fn nop<const OP: u32, const SYSTEM: SystemId>(t: &mut JitTranslator, instr: 
         _ => {}
     }
     let _ = builder;
+}
+
+#[inline(always)]
+pub fn icbi<const OP: u32, const SYSTEM: SystemId>(t: &mut JitTranslator, instr: Instruction) {
+    let _ = OP;
+    let (builder, local) = unsafe { parts(t.builder_ptr, t.local_ptr) };
+
+    let ra = instr.ra();
+    let rb = instr.rb();
+    let ra_v = if ra == 0 {
+        builder.ins().iconst(types::I32, 0)
+    } else {
+        translator::gpr_load::<SYSTEM>(builder, t.ctx_ptr, ra)
+    };
+    let rb_v = translator::gpr_load::<SYSTEM>(builder, t.ctx_ptr, rb);
+    let ea = builder.ins().iadd(ra_v, rb_v);
+
+    builder.ins().call(local.cause_icbi, &[t.ctx_ptr, ea]);
+
+    let dirty_off = abi::jit_dirty_offset::<SYSTEM>() as i32;
+    let dirty = builder
+        .ins()
+        .load(types::I8, translator::vmctx_flags(), t.ctx_ptr, dirty_off);
+    let nz = builder.ins().icmp_imm(IntCC::NotEqual, dirty, 0);
+
+    let continue_block = builder.create_block();
+    let nia = builder.ins().iconst(types::I32, t.pc.wrapping_add(4) as i64);
+    builder.ins().brif(nz, t.exit_block, &[nia.into()], continue_block, &[]);
+    builder.switch_to_block(continue_block);
+    builder.seal_block(continue_block);
+
+    t.handled_natively = true;
 }
 
 #[inline(always)]
@@ -931,7 +1063,15 @@ pub fn eciwx<const SYSTEM: SystemId>(t: &mut JitTranslator, instr: Instruction) 
 pub fn ecowx<const SYSTEM: SystemId>(t: &mut JitTranslator, instr: Instruction) {
     let (builder, local) = unsafe { parts(t.builder_ptr, t.local_ptr) };
 
-    translator::emit_store_xform::<SYSTEM>(builder, t.ctx_ptr, instr, MemSize::U32, local.write_u32, false);
+    translator::emit_store_xform::<SYSTEM>(
+        builder,
+        t.ctx_ptr,
+        instr,
+        MemSize::U32,
+        local.write_u32,
+        local.cause_smc_write,
+        false,
+    );
 
     t.handled_natively = true;
 }

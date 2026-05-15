@@ -42,6 +42,7 @@ crossbeam-channel = "0.5.15"
 hound = { version = "3.5.1", optional = true }
 multiversion = "0.8.0"
 rustc-hash = "2.1.2"
+smallvec = "1.15.1"
 crc32fast = "1.5.0"
 zerocopy = { version = "0.8.48", features = ["derive"] }
 cranelift-codegen = { version = "0.131.1", optional = true }
