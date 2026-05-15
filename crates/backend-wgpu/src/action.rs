@@ -671,10 +671,12 @@ impl GxRenderer {
 
             let index_used = (self.scratch_indices.len() * std::mem::size_of::<u32>()) as u64;
             let index_off = self.draw_buffer_layout.index_offset;
-            rpass.set_index_buffer(
-                self.draw_buffer.slice(index_off..index_off + index_used),
-                wgpu::IndexFormat::Uint32,
-            );
+            if index_used > 0 {
+                rpass.set_index_buffer(
+                    self.draw_buffer.slice(index_off..index_off + index_used),
+                    wgpu::IndexFormat::Uint32,
+                );
+            }
 
             let mut last_pipeline_ptr: *const wgpu::RenderPipeline = std::ptr::null();
             let mut last_vertex_slice: Option<(u64, u64)> = None;
@@ -748,9 +750,14 @@ impl GxRenderer {
                 let vp_h = vp.h.clamp(1.0, max_dim);
 
                 if vp.x.is_finite() && vp.y.is_finite() && vp_w.is_finite() && vp_h.is_finite() {
-                    let vp_tuple = (vp.x, vp.y, vp_w, vp_h, vp.min_depth, vp.max_depth);
+                    let mut min_d = vp.min_depth.clamp(0.0, 1.0);
+                    let mut max_d = vp.max_depth.clamp(0.0, 1.0);
+                    if min_d > max_d {
+                        std::mem::swap(&mut min_d, &mut max_d);
+                    }
+                    let vp_tuple = (vp.x, vp.y, vp_w, vp_h, min_d, max_d);
                     if last_viewport != Some(vp_tuple) {
-                        rpass.set_viewport(vp.x, vp.y, vp_w, vp_h, vp.min_depth, vp.max_depth);
+                        rpass.set_viewport(vp.x, vp.y, vp_w, vp_h, min_d, max_d);
                         last_viewport = Some(vp_tuple);
                     }
                 } else {

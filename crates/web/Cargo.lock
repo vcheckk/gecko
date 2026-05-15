@@ -1086,6 +1086,7 @@ dependencies = [
  "image",
  "multiversion",
  "rustc-hash 2.1.2",
+ "smallvec",
  "tracing",
  "twox-hash",
  "zerocopy",

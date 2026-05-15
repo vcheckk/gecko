@@ -56,6 +56,10 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwayland-dev libxkbcommon-dev libx11-dev libxi-dev libxrandr-dev libxcursor-dev libasound2-dev
 
+      - name: Enable panic = abort for release builds
+        shell: bash
+        run: perl -pi -e 's/^# panic = "abort"$/panic = "abort"/' Cargo.toml
+
       - name: Build debugger + multitool (release)
         run: cargo build --release --target ${{ matrix.target }} -p debugger -p multitool
 
