@@ -231,10 +231,9 @@ impl GxRenderer {
                     self.pipeline_cache.insert(full_key, pipeline);
                 }
 
-                let first_vertex = self.scratch_vertices.len() as u32;
+                let first_vertex = draw.base_vertex;
                 let first_index = self.scratch_indices.len() as u32;
-                let (vertex_count, index_count) =
-                    triangulate_draw_data(draw, &mut self.scratch_vertices, &mut self.scratch_indices);
+                let (vertex_count, index_count) = emit_draw_indices(draw, &mut self.scratch_indices);
                 if vertex_count == 0 {
                     tracing::warn!("draw call produced zero vertices, skipping");
                     return;
@@ -606,6 +605,11 @@ impl GxRenderer {
             }
 
             rpass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+
+            let mut last_pipeline_ptr: *const wgpu::RenderPipeline = std::ptr::null();
+            let mut last_viewport: Option<(f32, f32, f32, f32, f32, f32)> = None;
+            let mut last_scissor: Option<(u32, u32, u32, u32)> = None;
+            
             for (index, (first_vertex, vertex_count, first_index, index_count)) in
                 self.scratch_draws.iter().copied().enumerate()
             {
@@ -619,7 +623,12 @@ impl GxRenderer {
                 }
                 let full_key = &self.draw_pipeline_keys[index];
                 let pipeline = &self.pipeline_cache[full_key];
-                rpass.set_pipeline(pipeline);
+                let pipeline_ptr = pipeline as *const wgpu::RenderPipeline;
+                if pipeline_ptr != last_pipeline_ptr {
+                    rpass.set_pipeline(pipeline);
+                    last_pipeline_ptr = pipeline_ptr;
+                }
+
                 #[cfg(feature = "renderdoc-capture")]
                 {
                     let pipeline_marker = format!(
@@ -650,8 +659,13 @@ impl GxRenderer {
                 let max_dim = target_width.max(target_height) as f32;
                 let vp_w = vp.w.clamp(1.0, max_dim);
                 let vp_h = vp.h.clamp(1.0, max_dim);
+
                 if vp.x.is_finite() && vp.y.is_finite() && vp_w.is_finite() && vp_h.is_finite() {
-                    rpass.set_viewport(vp.x, vp.y, vp_w, vp_h, vp.min_depth, vp.max_depth);
+                    let vp_tuple = (vp.x, vp.y, vp_w, vp_h, vp.min_depth, vp.max_depth);
+                    if last_viewport != Some(vp_tuple) {
+                        rpass.set_viewport(vp.x, vp.y, vp_w, vp_h, vp.min_depth, vp.max_depth);
+                        last_viewport = Some(vp_tuple);
+                    }
                 } else {
                     tracing::warn!(
                         x = vp.x,
@@ -667,7 +681,12 @@ impl GxRenderer {
                 let sc_y = sc.y.min(target_height);
                 let sc_w = sc.w.min(target_width - sc_x);
                 let sc_h = sc.h.min(target_height - sc_y);
-                rpass.set_scissor_rect(sc_x, sc_y, sc_w, sc_h);
+                let sc_tuple = (sc_x, sc_y, sc_w, sc_h);
+                if last_scissor != Some(sc_tuple) {
+                    rpass.set_scissor_rect(sc_x, sc_y, sc_w, sc_h);
+                    last_scissor = Some(sc_tuple);
+                }
+                
                 #[cfg(feature = "renderdoc-capture")]
                 {
                     let raster_marker = format!(
@@ -682,10 +701,12 @@ impl GxRenderer {
                 } else {
                     rpass.draw_indexed(first_index..first_index + index_count, first_vertex as i32, 0..1);
                 }
+
                 #[cfg(feature = "renderdoc-capture")]
                 rpass.pop_debug_group();
             }
         }
+
         #[cfg(feature = "renderdoc-capture")]
         encoder.pop_debug_group();
 
@@ -707,35 +728,30 @@ impl GxRenderer {
     }
 }
 
-fn triangulate_draw_data(draw: &DrawData, verts_out: &mut Vec<GpuVertex>, indices_out: &mut Vec<u32>) -> (u32, u32) {
+/// Emit indices for a draw whose vertices already live in the renderer's
+/// `scratch_vertices` at `[base_vertex .. base_vertex + n]`. Indices are
+/// written into `indices_out` as offsets relative to `base_vertex`, since
+/// `draw_indexed` is called with `base_vertex` as `first_vertex`. Returns
+/// `(vertex_count, index_count)`.
+fn emit_draw_indices(draw: &DrawData, indices_out: &mut Vec<u32>) -> (u32, u32) {
     use gecko::flipper::gx::draw::Primitive;
 
-    let verts: &[GpuVertex] = &draw.vertices;
-    let n = verts.len() as u32;
+    let n = draw.vertex_count;
 
     match draw.primitive {
-        Primitive::Triangles => {
-            verts_out.extend_from_slice(verts);
-            (n, 0)
-        }
+        Primitive::Triangles => (n, 0),
         Primitive::Quads => {
-            verts_out.extend_from_slice(verts);
-
             let chunks = n / 4;
             for q in 0..chunks {
                 let base = q * 4;
                 indices_out.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
             }
-
             (n, chunks * 6)
         }
         Primitive::TriangleStrip => {
             if n < 3 {
                 return (0, 0);
             }
-
-            verts_out.extend_from_slice(verts);
-
             let tris = n - 2;
             for i in 0..tris {
                 if i & 1 == 0 {
@@ -744,15 +760,12 @@ fn triangulate_draw_data(draw: &DrawData, verts_out: &mut Vec<GpuVertex>, indice
                     indices_out.extend_from_slice(&[i + 1, i, i + 2]);
                 }
             }
-
             (n, tris * 3)
         }
         Primitive::TriangleFan => {
             if n < 3 {
                 return (0, 0);
             }
-
-            verts_out.extend_from_slice(verts);
             let tris = n - 2;
             for i in 0..tris {
                 indices_out.extend_from_slice(&[0, i + 1, i + 2]);
@@ -760,7 +773,7 @@ fn triangulate_draw_data(draw: &DrawData, verts_out: &mut Vec<GpuVertex>, indice
             (n, tris * 3)
         }
         _ => {
-            tracing::error!(?draw.primitive, "triangulate: skipping unsupported primitive");
+            tracing::error!(?draw.primitive, "emit_draw_indices: skipping unsupported primitive");
             (0, 0)
         }
     }

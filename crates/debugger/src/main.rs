@@ -57,13 +57,6 @@ impl EmulatorVariant {
         }
     }
 
-    fn install_recycle_rx(&mut self, rx: Option<crossbeam_channel::Receiver<Box<gecko::host::DrawData>>>) {
-        match self {
-            Self::Gc(e) => e.gx.draw_box_recycle_rx = rx,
-            Self::Wii(e) => e.gx.draw_box_recycle_rx = rx,
-        }
-    }
-
     fn load_dsp_irom(&mut self, data: &[u8]) {
         match self {
             Self::Gc(e) => e.dsp.load_irom(data),
@@ -521,7 +514,6 @@ fn main() {
     let (renderer, sink) =
         backend_wgpu::sink::Renderer::new(device.clone(), queue.clone(), surface_format, target_aspect);
 
-    emulator.install_recycle_rx(renderer.take_recycle_rx());
     emulator.install_render_sink(Box::new(sink));
 
     let ui = DebuggerUi {

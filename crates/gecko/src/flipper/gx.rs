@@ -17,7 +17,7 @@ use crate::flipper::gx::draw::Matrix4;
 use crate::flipper::gx::regs::{
     AlphaCompare, BlendMode, ChanCtrl, TevAlphaEnv, TevColorEnv, TevRegisterH, TevRegisterL, ZMode,
 };
-use crate::host::{DrawData, DrawVertex, GxAction, LightData, TextureKey, XfbPart};
+use crate::host::{DrawVertex, GxAction, LightData, TextureKey, XfbPart};
 use crate::system::{System, SystemId};
 use rustc_hash::FxHashMap;
 
@@ -95,8 +95,6 @@ pub struct GraphicsProcessor {
     // sends. Keyed by the same `TextureKey` sent to the renderer in
     // [`GxAction::LoadTexture`].
     pub texture_hashes: FxHashMap<TextureKey, u64>,
-    pub draw_box_pool: Vec<Box<DrawData>>,
-    pub draw_box_recycle_rx: Option<crossbeam_channel::Receiver<Box<DrawData>>>,
 }
 
 /// A single EFB-to-XFB copy, stored until `present_xfb` computes the layout.
@@ -179,15 +177,6 @@ impl GraphicsProcessor {
             #[cfg(feature = "gx-stats")]
             stats: GxStats::default(),
             texture_hashes: FxHashMap::default(),
-            draw_box_pool: {
-                const POOL_PREALLOC: usize = 1024;
-                let mut v: Vec<Box<crate::host::DrawData>> = Vec::with_capacity(POOL_PREALLOC);
-                for _ in 0..POOL_PREALLOC {
-                    v.push(Box::new(crate::host::DrawData::default()));
-                }
-                v
-            },
-            draw_box_recycle_rx: None,
         }
     }
 }

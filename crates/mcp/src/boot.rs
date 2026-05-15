@@ -26,6 +26,7 @@ fn make_sink(
         device,
         queue,
         introspect,
+        scratch: Vec::new(),
     })
 }
 

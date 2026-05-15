@@ -149,13 +149,17 @@ pub struct XfbPart {
     pub offset_y: u32,
 }
 
-/// Per-draw data: primitive type, decoded vertices, modelview transform,
+/// Per-draw data: primitive type, vertex range, modelview transform,
 /// and TEV/lighting configuration (snapshotted at draw time since TEV is
-/// built up incrementally via BP writes).
+/// built up incrementally via BP writes). Vertices live in the renderer's
+/// scratch buffer (see [`RenderSink::vertex_scratch`]); `base_vertex` is
+/// the index into that buffer where this draw's vertices start and
+/// `vertex_count` is how many of them belong to this draw.
 #[derive(Debug, Default)]
 pub struct DrawData {
     pub primitive: Primitive,
-    pub vertices: Vec<DrawVertex>,
+    pub base_vertex: u32,
+    pub vertex_count: u32,
     pub modelview: [[f32; 4]; 4],
     // TEV combiner state
     pub tev_color_env: [u32; 16],
@@ -214,6 +218,13 @@ pub trait RenderSink: Send {
     /// Submit a single action.
     fn exec(&mut self, action: GxAction);
 
+    /// Mutable handle to the sink's vertex scratch buffer. Callers append
+    /// per-draw vertices here before issuing [`GxAction::Draw`] and store the
+    /// pre-append length as [`DrawData::base_vertex`]. Real renderers
+    /// (e.g. wgpu) keep this buffer alive across draws and upload it in one
+    /// shot at flush time; headless sinks can use a throwaway local.
+    fn vertex_scratch(&mut self) -> &mut Vec<DrawVertex>;
+
     fn flush_efb_copies(&mut self, ram: &mut crate::mmio::RamViewMut<'_>) {
         let _ = ram;
     }
@@ -221,12 +232,19 @@ pub trait RenderSink: Send {
 
 /// Swallows every action. Used by headless runners (tinybench, tinytracer)
 /// and as the default when no renderer is installed.
-#[derive(Debug, Clone, Copy)]
-pub struct EmptyRenderSink;
+#[derive(Debug, Default)]
+pub struct EmptyRenderSink {
+    scratch: Vec<DrawVertex>,
+}
 
 impl RenderSink for EmptyRenderSink {
     fn exec(&mut self, _action: GxAction) {
         #[cfg(feature = "rendersink-blackbox")]
         std::hint::black_box(&_action);
+        self.scratch.clear();
+    }
+
+    fn vertex_scratch(&mut self) -> &mut Vec<DrawVertex> {
+        &mut self.scratch
     }
 }

@@ -2,7 +2,7 @@ use super::constants::*;
 use super::math::{Vec3, unpack_rgba};
 use super::regs::{self, *};
 use super::{GraphicsProcessor, draw};
-use crate::host::{DrawVertex, GxAction, RenderSink};
+use crate::host::{DrawData, DrawVertex, GxAction, RenderSink};
 use crate::mmio::{Mmio, RamView};
 use crate::system::SystemId;
 use std::io::{Cursor, Read};
@@ -77,12 +77,7 @@ impl GraphicsProcessor {
             self.stats.draws_by_primitive[(primitive as usize) & 0x7] += 1;
         }
 
-        if let Some(rx) = &self.draw_box_recycle_rx {
-            while let Ok(b) = rx.try_recv() {
-                self.draw_box_pool.push(b);
-            }
-        }
-        let mut boxed = self.draw_box_pool.pop().unwrap_or_default();
+        let mut boxed: Box<DrawData> = Box::default();
 
         self.draw_vertices_scratch.clear();
         if self.draw_vertices_scratch.capacity() < vertex_count {
@@ -103,8 +98,11 @@ impl GraphicsProcessor {
             self.konst_dirty = false;
         }
 
-        boxed.vertices.clear();
-        boxed.vertices.append(&mut self.draw_vertices_scratch);
+        let renderer_scratch = renderer.vertex_scratch();
+        let base_vertex = renderer_scratch.len() as u32;
+        renderer_scratch.append(&mut self.draw_vertices_scratch);
+        boxed.base_vertex = base_vertex;
+        boxed.vertex_count = vertex_count as u32;
 
         // Flatten the three indirect matrices to 6 rows. Row 2M is row
         // 0 of matrix M, row 2M+1 is row 1. The .w lane carries the

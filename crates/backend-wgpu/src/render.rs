@@ -89,9 +89,10 @@ impl GxRenderer {
 
         let needed_frame_size = frame_uniform_bytes.len() as u64;
         if needed_frame_size > self.frame_uniform_buffer.size() {
+            let new_size = needed_frame_size.next_power_of_two().max(needed_frame_size);
             self.frame_uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("gx_frame_uniforms"),
-                size: needed_frame_size,
+                size: new_size,
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             });

@@ -1,26 +1,10 @@
 use crate::GxRenderer;
-use crossbeam_channel::{Receiver, Sender, bounded};
 
-#[cfg(feature = "hotpath")]
-macro_rules! instrument_channel {
-    ($e:expr, $label:expr) => {
-        hotpath::channel!($e, label = $label)
-    };
-}
-#[cfg(not(feature = "hotpath"))]
-macro_rules! instrument_channel {
-    ($e:expr, $label:expr) => {
-        $e
-    };
-}
-
-use gecko::host::{DrawData, GxAction, RenderSink};
+use gecko::host::{DrawVertex, GxAction, RenderSink};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
 
 pub type FrameReadyCallback = Box<dyn Fn(Instant) + Send + Sync>;
-
-const RECYCLE_CAPACITY: usize = 8192;
 
 /// Holds the XFB output texture view that the emu thread updates and the
 /// windowing thread reads for blitting.
@@ -43,31 +27,27 @@ pub struct InlineSink {
     queue: wgpu::Queue,
     shared: Arc<Shared>,
     frame_ready_cb: Arc<OnceLock<FrameReadyCallback>>,
-    boxes_tx: Sender<Box<DrawData>>,
 }
 
 impl RenderSink for InlineSink {
     fn exec(&mut self, action: GxAction) {
         self.gx.process_action(&self.device, &self.queue, &action);
 
-        match action {
-            GxAction::PresentXfb { .. } => {
-                let view = self.gx.xfb_view.clone();
-                *self.shared.output.lock().unwrap() = view;
-                if let Some(cb) = self.frame_ready_cb.get() {
-                    cb(Instant::now());
-                }
+        if let GxAction::PresentXfb { .. } = action {
+            let view = self.gx.xfb_view.clone();
+            *self.shared.output.lock().unwrap() = view;
+            if let Some(cb) = self.frame_ready_cb.get() {
+                cb(Instant::now());
             }
-            GxAction::Draw(mut boxed) => {
-                boxed.vertices.clear();
-                let _ = self.boxes_tx.try_send(boxed);
-            }
-            _ => {}
         }
     }
 
     fn flush_efb_copies(&mut self, ram: &mut gecko::mmio::RamViewMut<'_>) {
         self.gx.drain_pending_writebacks(&self.device, &self.queue, ram);
+    }
+
+    fn vertex_scratch(&mut self) -> &mut Vec<DrawVertex> {
+        &mut self.gx.scratch_vertices
     }
 }
 
@@ -94,7 +74,6 @@ pub struct Renderer {
     blit_sampler: wgpu::Sampler,
     target_aspect: TargetAspect,
     frame_ready_cb: Arc<OnceLock<FrameReadyCallback>>,
-    recycle_rx: Arc<Mutex<Option<Receiver<Box<DrawData>>>>>,
     #[cfg(feature = "renderdoc-capture")]
     renderdoc: Arc<Mutex<crate::renderdoc_capture::RenderDocCapture>>,
 }
@@ -180,9 +159,6 @@ impl Renderer {
             ..Default::default()
         });
 
-        let (boxes_tx, recycle_rx) =
-            instrument_channel!(bounded::<Box<DrawData>>(RECYCLE_CAPACITY), "draw_data_recycle");
-
         let frame_ready_cb: Arc<OnceLock<FrameReadyCallback>> = Arc::new(OnceLock::new());
 
         let sink = InlineSink {
@@ -191,7 +167,6 @@ impl Renderer {
             queue,
             shared: shared.clone(),
             frame_ready_cb: frame_ready_cb.clone(),
-            boxes_tx,
         };
 
         let renderer = Renderer {
@@ -202,7 +177,6 @@ impl Renderer {
             blit_sampler,
             target_aspect,
             frame_ready_cb,
-            recycle_rx: Arc::new(Mutex::new(Some(recycle_rx))),
             #[cfg(feature = "renderdoc-capture")]
             renderdoc: Arc::new(Mutex::new(crate::renderdoc_capture::RenderDocCapture::new())),
         };
@@ -257,10 +231,6 @@ impl Renderer {
         F: Fn(Instant) + Send + Sync + 'static,
     {
         let _ = self.frame_ready_cb.set(Box::new(cb));
-    }
-
-    pub fn take_recycle_rx(&self) -> Option<Receiver<Box<DrawData>>> {
-        self.recycle_rx.lock().ok()?.take()
     }
 
     pub fn target_aspect(&self) -> TargetAspect {

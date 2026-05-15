@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 
 use backend_wgpu::GxRenderer;
 use gecko::flipper::gx::draw::TextureFormat;
-use gecko::host::{GxAction, RenderSink, TextureKey};
+use gecko::host::{DrawVertex, GxAction, RenderSink, TextureKey};
 
 pub struct TextureRecord {
     pub width: u32,
@@ -27,6 +27,10 @@ pub struct McpSink {
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
     pub introspect: Arc<Mutex<Introspection>>,
+    /// Side scratch for vertices emitted by gecko since the trait method
+    /// can't return `&mut` into the `Mutex<GxRenderer>`. Synced into the
+    /// underlying renderer's `scratch_vertices` on every `exec`.
+    pub scratch: Vec<DrawVertex>,
 }
 
 impl RenderSink for McpSink {
@@ -72,6 +76,10 @@ impl RenderSink for McpSink {
         self.gx
             .lock()
             .unwrap()
-            .process_action(&self.device, &self.queue, &action);
+            .process_action_with_external_scratch(&self.device, &self.queue, &action, &mut self.scratch);
+    }
+
+    fn vertex_scratch(&mut self) -> &mut Vec<DrawVertex> {
+        &mut self.scratch
     }
 }

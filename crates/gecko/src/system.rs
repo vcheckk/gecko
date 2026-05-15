@@ -105,7 +105,7 @@ impl<const SYSTEM: SystemId> System<SYSTEM> {
             starlet: Starlet::new(),
             hollywood: Hollywood::new(),
 
-            render_sink: Box::new(EmptyRenderSink),
+            render_sink: Box::new(EmptyRenderSink::default()),
             audio_sink: Box::new(EmptyAudioSink),
 
             #[cfg(feature = "hooks")]

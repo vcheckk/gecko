@@ -17,6 +17,7 @@ struct SyncSink {
     gx: Arc<Mutex<GxRenderer>>,
     device: wgpu::Device,
     queue: wgpu::Queue,
+    scratch: Vec<gecko::host::DrawVertex>,
 }
 
 impl RenderSink for SyncSink {
@@ -24,7 +25,11 @@ impl RenderSink for SyncSink {
         self.gx
             .lock()
             .unwrap()
-            .process_action(&self.device, &self.queue, &action);
+            .process_action_with_external_scratch(&self.device, &self.queue, &action, &mut self.scratch);
+    }
+
+    fn vertex_scratch(&mut self) -> &mut Vec<gecko::host::DrawVertex> {
+        &mut self.scratch
     }
 }
 
@@ -224,6 +229,7 @@ fn run_one(device: &wgpu::Device, queue: &wgpu::Queue, surface_format: wgpu::Tex
         gx: gx.clone(),
         device: device.clone(),
         queue: queue.clone(),
+        scratch: Vec::new(),
     });
 
     gamecube.insert_dvd(image);

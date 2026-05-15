@@ -352,7 +352,6 @@ fn run<const SYSTEM: SystemId>(
     let (renderer, sink) =
         backend_wgpu::sink::Renderer::new(device.clone(), queue.clone(), surface_format, target_aspect);
 
-    emulator.gx.draw_box_recycle_rx = renderer.take_recycle_rx();
     emulator.render_sink = Box::new(sink);
 
     let audio_stream = install_audio_sink(args, &mut emulator);
