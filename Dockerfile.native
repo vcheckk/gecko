@@ -15,6 +15,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
         mingw-w64 \
         libwayland-dev libxkbcommon-dev libx11-dev libxi-dev libxrandr-dev libxcursor-dev \
+        libasound2-dev \
     && rm -rf /var/lib/apt/lists/*
 
 RUN update-alternatives --set x86_64-w64-mingw32-gcc /usr/bin/x86_64-w64-mingw32-gcc-posix \
@@ -49,7 +50,7 @@ RUN mkdir -p /out/debug \
 
 
 FROM base AS release-build
-RUN sed -i 's/strategy fn_ptr_lut/strategy jump_table/g' crates/gecko/spec/*.bindings.chipi
+#RUN sed -i 's/strategy fn_ptr_lut/strategy jump_table/g' crates/gecko/spec/*.bindings.chipi
 
 RUN cargo build --release \
         --target x86_64-unknown-linux-gnu \
