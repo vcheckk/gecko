@@ -1,3 +1,4 @@
+pub mod about;
 pub mod breakpoints;
 pub mod callstack;
 pub mod controls;

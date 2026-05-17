@@ -1,16 +1,26 @@
-use crate::thread::FrameMessage;
 use backend_wgpu::capture::{self, CaptureRequest, ScreenshotControl};
-use crossbeam_channel::Receiver;
 use egui::ViewportId;
-use gecko::flipper::si::pad::PadStatus;
+use gecko::HostInput;
+#[cfg(feature = "fps-counter")]
+use gecko::fps::{self, FpsShared};
+use gecko::hollywood::ipc::usb;
+use spin_sleep::SpinSleeper;
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use winit::application::ApplicationHandler;
-use winit::event::WindowEvent;
+use winit::event::{MouseButton, WindowEvent};
 use winit::event_loop::ActiveEventLoop;
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowId};
+
+const PACER_OFFSET: Duration = Duration::from_millis(1);
+const FRAME_PERIOD_60HZ: Duration = Duration::from_nanos(16_666_667);
+const CADENCE_WINDOW: usize = 16;
+const CADENCE_MIN_SAMPLES: usize = 4;
+const CADENCE_MIN: Duration = Duration::from_micros(500);
+const CADENCE_MAX: Duration = Duration::from_millis(200);
 
 pub struct State {
     surface: wgpu::Surface<'static>,
@@ -22,11 +32,17 @@ pub struct State {
     egui_ctx: egui::Context,
     egui_renderer: egui_wgpu::Renderer,
     egui_winit: egui_winit::State,
-    fps_history: VecDeque<[f64; 2]>,
-    start_time: Instant,
+    #[cfg(not(feature = "fps-counter"))]
     last_frame: Instant,
-    last_native_hz: f64,
     screenshots: ScreenshotControl,
+    #[cfg(feature = "fps-counter")]
+    fps_shared: FpsShared,
+    intended_present_time: Option<Instant>,
+    frame_period: Duration,
+    pacer_offset: Duration,
+    pacer_sleeper: SpinSleeper,
+    last_frame_ready_at: Option<Instant>,
+    recent_intervals: VecDeque<Duration>,
 }
 
 impl State {
@@ -37,6 +53,7 @@ impl State {
         surface: wgpu::Surface<'static>,
         surface_config: wgpu::SurfaceConfiguration,
         renderer: backend_wgpu::sink::Renderer,
+        #[cfg(feature = "fps-counter")] fps_shared: FpsShared,
     ) -> Self {
         let egui_ctx = egui::Context::default();
         let egui_renderer =
@@ -52,12 +69,50 @@ impl State {
             egui_ctx,
             egui_renderer,
             egui_winit,
-            fps_history: VecDeque::new(),
-            start_time: Instant::now(),
+            #[cfg(not(feature = "fps-counter"))]
             last_frame: Instant::now(),
-            last_native_hz: 60.0,
             screenshots: ScreenshotControl::new(),
+            #[cfg(feature = "fps-counter")]
+            fps_shared,
+            intended_present_time: None,
+            frame_period: FRAME_PERIOD_60HZ,
+            pacer_offset: PACER_OFFSET,
+            pacer_sleeper: SpinSleeper::default(),
+            last_frame_ready_at: None,
+            recent_intervals: VecDeque::with_capacity(CADENCE_WINDOW),
         }
+    }
+
+    pub fn observe_frame_ready(&mut self, at: Instant) {
+        let Some(prev) = self.last_frame_ready_at.replace(at) else {
+            return;
+        };
+
+        let Some(delta) = at.checked_duration_since(prev) else {
+            return;
+        };
+
+        if !(CADENCE_MIN..=CADENCE_MAX).contains(&delta) {
+            return;
+        }
+
+        if self.recent_intervals.len() == CADENCE_WINDOW {
+            self.recent_intervals.pop_front();
+        }
+
+        self.recent_intervals.push_back(delta);
+        let n = self.recent_intervals.len();
+        if n < CADENCE_MIN_SAMPLES {
+            return;
+        }
+
+        let mut buf = [Duration::ZERO; CADENCE_WINDOW];
+        for (slot, d) in buf.iter_mut().zip(self.recent_intervals.iter()) {
+            *slot = *d;
+        }
+        buf[..n].sort();
+
+        self.frame_period = buf[n / 2];
     }
 
     fn resize(&mut self, window: &Window, width: u32, height: u32) {
@@ -76,82 +131,129 @@ impl State {
         self.surface.configure(&self.device, &self.surface_config);
     }
 
-    fn render(&mut self, frame_rx: &Receiver<FrameMessage>, window: &Window) {
-        let mut msg: Option<FrameMessage> = None;
-        while let Ok(newer) = frame_rx.try_recv() {
-            msg = Some(newer);
-        }
+    fn render(&mut self, window: &Window, waiting: bool) {
+        #[cfg(feature = "renderdoc-capture")]
+        self.renderer.begin_renderdoc_emulated_frame();
 
-        let Some(msg) = msg else { return };
-
-        // FPS bookkeeping
-        let delta = self.last_frame.elapsed().as_secs_f64();
-        self.last_frame = Instant::now();
-        let fps = if delta > 0.0 { 1.0 / delta } else { 0.0 };
-        let elapsed = self.start_time.elapsed().as_secs_f64();
-        self.fps_history.push_back([elapsed, fps]);
-        while self.fps_history.front().is_some_and(|e| elapsed - e[0] > 5.0) {
-            self.fps_history.pop_front();
+        if !waiting && let Some(intended) = self.intended_present_time {
+            let target = intended + self.pacer_offset;
+            let now = Instant::now();
+            if target > now {
+                self.pacer_sleeper.sleep(target - now);
+            }
         }
-        self.last_native_hz = msg.native_hz;
-        let native_pct = (fps / self.last_native_hz) * 100.0;
 
         let frame = match self.surface.get_current_texture() {
             Ok(f) => f,
             Err(e) => {
-                eprintln!("surface error: {e}");
+                tracing::error!(?e, "surface error");
                 return;
             }
         };
         let view = frame.texture.create_view(&Default::default());
-        let pending_capture = self.screenshots.take_pending();
 
-        // Blit the latest XFB output from the renderer worker to the swapchain.
-        self.renderer.blit(
-            &self.queue,
-            &view,
-            (self.surface_config.width, self.surface_config.height),
-        );
+        #[cfg(feature = "fps-counter")]
+        let (fps, native_pct) = if waiting {
+            (0.0, 0.0)
+        } else {
+            fps::read(&self.fps_shared)
+        };
+        #[cfg(not(feature = "fps-counter"))]
+        let fps = if waiting {
+            0.0
+        } else {
+            let delta = self.last_frame.elapsed().as_secs_f64();
+            self.last_frame = Instant::now();
+            if delta > 0.0 { 1.0 / delta } else { 0.0 }
+        };
 
-        // Capture the game-only screen before the egui overlay is drawn. Reads
-        // the swapchain instead of the XFB directly so the blit's fullscreen
-        // sample resolves any partial-update state in the XFB accumulator.
-        if let CaptureRequest::GameOnly = pending_capture
-            && let Some(cap) = capture::capture_texture(&self.device, &self.queue, &frame.texture)
-        {
-            capture::save_png_async(capture::timestamped_path("game"), cap, true);
+        let pending_capture = if waiting {
+            CaptureRequest::None
+        } else {
+            self.screenshots.take_pending()
+        };
+
+        if !waiting {
+            self.renderer.blit(
+                &self.queue,
+                &view,
+                (self.surface_config.width, self.surface_config.height),
+            );
+
+            // Capture the game-only screen before the egui overlay is drawn. Reads
+            // the swapchain instead of the XFB directly so the blit's fullscreen
+            // sample resolves any partial-update state in the XFB accumulator.
+            if let CaptureRequest::GameOnly = pending_capture
+                && let Some(cap) = capture::capture_texture(&self.device, &self.queue, &frame.texture)
+            {
+                capture::save_png_async(capture::timestamped_path("game"), cap, true);
+            }
         }
 
-        // egui overlay
         let raw_input = self.egui_winit.take_egui_input(window);
-        let fps_points: Vec<[f64; 2]> = self.fps_history.iter().copied().collect();
         let full_output = self.egui_ctx.run_ui(raw_input, |ui| {
             let ctx = ui.ctx().clone();
-            let frame =
-                egui::Frame::window(&ctx.global_style()).fill(egui::Color32::from_rgba_unmultiplied(20, 20, 20, 180));
-            egui::Window::new("perf_hud")
-                .title_bar(false)
-                .resizable(false)
-                .movable(false)
-                .anchor(egui::Align2::RIGHT_TOP, [-8.0, 8.0])
-                .frame(frame)
-                .show(&ctx, |ui| {
-                    ui.label(egui::RichText::new(format!("{fps:.1} FPS  {native_pct:.1}%")).monospace());
-                    egui_plot::Plot::new("fps_plot")
-                        .height(60.0)
-                        .width(180.0)
-                        .show_axes(false)
-                        .show_grid(false)
-                        .allow_zoom(false)
-                        .allow_drag(false)
-                        .allow_scroll(false)
-                        .show(ui, |plot_ui| {
-                            plot_ui.line(
-                                egui_plot::Line::new("fps", egui_plot::PlotPoints::from(fps_points.clone()))
-                                    .color(egui::Color32::from_rgb(100, 200, 100)),
+            if waiting {
+                let frame = egui::Frame::window(&ctx.global_style())
+                    .fill(egui::Color32::from_rgba_unmultiplied(20, 20, 20, 220));
+                egui::Window::new("wait_modal")
+                    .title_bar(false)
+                    .resizable(false)
+                    .movable(false)
+                    .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                    .frame(frame)
+                    .default_width(280.0)
+                    .show(&ctx, |ui| {
+                        ui.vertical_centered(|ui| {
+                            ui.add_space(4.0);
+                            ui.label(egui::RichText::new("Gecko").size(20.0).strong());
+                            ui.label("GameCube / Wii emulator");
+                            ui.add_space(6.0);
+                            ui.hyperlink_to("https://github.com/ioncodes/gecko", "https://github.com/ioncodes/gecko");
+                            ui.add_space(8.0);
+                        });
+
+                        ui.separator();
+                        ui.add_space(4.0);
+
+                        ui.label(egui::RichText::new("Author").strong());
+                        ui.label("Layle");
+
+                        ui.add_space(8.0);
+
+                        ui.label(egui::RichText::new("Acknowledgements").strong());
+                        ui.label("zayd");
+                        ui.label("vxpm");
+                        ui.label("hazelwiss");
+                        ui.label("Dolphin team");
+
+                        ui.add_space(10.0);
+                        ui.separator();
+                        ui.add_space(4.0);
+                        ui.vertical_centered(|ui| {
+                            ui.label(
+                                egui::RichText::new("press space to start")
+                                    .size(13.0)
+                                    .color(egui::Color32::from_gray(170)),
                             );
                         });
-                });
+                    });
+            } else {
+                let frame = egui::Frame::window(&ctx.global_style())
+                    .fill(egui::Color32::from_rgba_unmultiplied(20, 20, 20, 180));
+                egui::Window::new("perf_hud")
+                    .title_bar(false)
+                    .resizable(false)
+                    .movable(false)
+                    .anchor(egui::Align2::RIGHT_TOP, [-8.0, 8.0])
+                    .frame(frame)
+                    .show(&ctx, |ui| {
+                        #[cfg(feature = "fps-counter")]
+                        ui.label(egui::RichText::new(format!("{fps:.1} FPS  {native_pct:.1}%")).monospace());
+                        #[cfg(not(feature = "fps-counter"))]
+                        ui.label(egui::RichText::new(format!("{fps:.1} FPS")).monospace());
+                    });
+            }
         });
 
         self.egui_winit
@@ -175,13 +277,23 @@ impl State {
         self.egui_renderer
             .update_buffers(&self.device, &self.queue, &mut encoder, &tris, &screen_desc);
         {
+            let load = if waiting {
+                wgpu::LoadOp::Clear(wgpu::Color {
+                    r: 0.07,
+                    g: 0.07,
+                    b: 0.08,
+                    a: 1.0,
+                })
+            } else {
+                wgpu::LoadOp::Load
+            };
             let rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("egui"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &view,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
+                        load,
                         store: wgpu::StoreOp::Store,
                     },
                     depth_slice: None,
@@ -207,16 +319,36 @@ impl State {
         }
 
         frame.present();
+
+        if !waiting {
+            let now = Instant::now();
+            let base = self.intended_present_time.unwrap_or(now);
+            let next = (base + self.frame_period).max(now);
+            self.intended_present_time = Some(next);
+        }
+
+        #[cfg(feature = "renderdoc-capture")]
+        self.renderer.end_renderdoc_emulated_frame();
     }
 }
 
 pub struct App {
-    pub frame_rx: Receiver<FrameMessage>,
-    pub input: Arc<Mutex<PadStatus>>,
+    pub input: Arc<Mutex<HostInput>>,
     pub window: Option<Arc<Window>>,
     pub state: Option<State>,
     pub present_mode: wgpu::PresentMode,
     pub init: Option<AppInit>,
+    pub _audio_stream: Option<cpal::Stream>,
+    pub shutdown_requested: Arc<AtomicBool>,
+    pub start_gate: Arc<AtomicBool>,
+    #[cfg(feature = "fps-counter")]
+    pub fps_shared: FpsShared,
+}
+
+impl App {
+    fn waiting(&self) -> bool {
+        !self.start_gate.load(Ordering::Acquire)
+    }
 }
 
 pub struct AppInit {
@@ -228,7 +360,7 @@ pub struct AppInit {
     pub surface_format: wgpu::TextureFormat,
 }
 
-impl ApplicationHandler for App {
+impl ApplicationHandler<crate::UserEvent> for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         let initial_size = self
             .init
@@ -280,6 +412,8 @@ impl ApplicationHandler for App {
             surface,
             surface_config,
             init.renderer,
+            #[cfg(feature = "fps-counter")]
+            self.fps_shared.clone(),
         );
         window.request_redraw();
         self.window = Some(window);
@@ -293,7 +427,10 @@ impl ApplicationHandler for App {
         }
 
         match event {
-            WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::CloseRequested => {
+                self.shutdown_requested.store(true, Ordering::Relaxed);
+                event_loop.exit();
+            }
             WindowEvent::Resized(size) => {
                 if let (Some(state), Some(window)) = (&mut self.state, &self.window) {
                     state.resize(window, size.width, size.height);
@@ -302,31 +439,140 @@ impl ApplicationHandler for App {
             WindowEvent::KeyboardInput { event, .. } => {
                 let pressed = event.state.is_pressed();
                 if let PhysicalKey::Code(key) = event.physical_key {
+                    if self.waiting() {
+                        if pressed && !event.repeat && key == KeyCode::Space {
+                            self.start_gate.store(true, Ordering::Release);
+                            if let Some(window) = &self.window {
+                                window.request_redraw();
+                            }
+                        }
+                        return;
+                    }
+
                     if pressed && !event.repeat {
                         if let Some(state) = &mut self.state {
                             match key {
+                                #[cfg(feature = "renderdoc-capture")]
+                                KeyCode::F10 => state.renderer.capture_next_renderdoc_emulated_frame(),
                                 KeyCode::F11 => state.screenshots.request(CaptureRequest::FullWindow),
                                 KeyCode::F12 => state.screenshots.request(CaptureRequest::GameOnly),
                                 _ => {}
                             }
                         }
                     }
-                    let mut pad = self.input.lock().unwrap();
-                    crate::update_pad(&mut pad, key, pressed);
+
+                    let mut input = self.input.lock().unwrap();
+                    match &mut *input {
+                        HostInput::Gc(pad) => crate::update_pad(pad, key, pressed),
+                        HostInput::Wii {
+                            wiimote_buttons,
+                            wiimote_shake,
+                            nunchuk_buttons,
+                            nunchuk_stick_x,
+                            nunchuk_stick_y,
+                            ir_pointer: _,
+                        } => {
+                            crate::update_wiimote_keys(wiimote_buttons, key, pressed);
+                            crate::update_wiimote_motion_keys(wiimote_shake, key, pressed);
+                            crate::update_nunchuk_keys(nunchuk_buttons, nunchuk_stick_x, nunchuk_stick_y, key, pressed);
+                        }
+                    }
+                }
+            }
+            WindowEvent::MouseInput { state, button, .. } => {
+                let pressed = state.is_pressed();
+                let mask = match button {
+                    MouseButton::Left => Some(usb::BTN_A),
+                    MouseButton::Right => Some(usb::BTN_B),
+                    _ => None,
+                };
+                if let Some(mask) = mask {
+                    let mut input = self.input.lock().unwrap();
+
+                    if let HostInput::Wii { wiimote_buttons, .. } = &mut *input {
+                        let next = if pressed {
+                            *wiimote_buttons | mask
+                        } else {
+                            *wiimote_buttons & !mask
+                        };
+
+                        if next != *wiimote_buttons {
+                            *wiimote_buttons = next;
+                            tracing::debug!(
+                                mask = format!("{mask:#06x}"),
+                                pressed,
+                                "host mouse button mapped to Wiimote"
+                            );
+                        }
+                    }
+                }
+            }
+            WindowEvent::CursorMoved { position, .. } => {
+                let Some(window) = &self.window else {
+                    return;
+                };
+
+                let size = window.inner_size();
+                if size.width == 0 || size.height == 0 {
+                    return;
+                }
+
+                const POINTER_SCALE_X: f64 = 0.44;
+                const POINTER_SCALE_Y: f64 = 0.66;
+                const POINTER_Y_OFFSET: f64 = 120.0;
+
+                let aim_x = (position.x / size.width as f64).clamp(0.0, 1.0);
+                let aim_y = (position.y / size.height as f64).clamp(0.0, 1.0);
+                let span_x = usb::IR_CAMERA_WIDTH as f64 * POINTER_SCALE_X;
+                let span_y = usb::IR_CAMERA_HEIGHT as f64 * POINTER_SCALE_Y;
+                let base_x = (usb::IR_CAMERA_WIDTH as f64 - span_x) / 2.0;
+                let base_y = (usb::IR_CAMERA_HEIGHT as f64 - span_y) / 2.0 + POINTER_Y_OFFSET;
+                let ir_x = (base_x + (1.0 - aim_x) * span_x) as u16;
+                let ir_y = (base_y + aim_y * span_y) as u16;
+
+                let mut input = self.input.lock().unwrap();
+                if let HostInput::Wii { ir_pointer, .. } = &mut *input
+                    && *ir_pointer != Some((ir_x, ir_y))
+                {
+                    *ir_pointer = Some((ir_x, ir_y));
+                }
+            }
+            WindowEvent::CursorLeft { .. } => {
+                let mut input = self.input.lock().unwrap();
+                if let HostInput::Wii { ir_pointer, .. } = &mut *input {
+                    *ir_pointer = None;
                 }
             }
             WindowEvent::RedrawRequested => {
+                let waiting = self.waiting();
                 if let (Some(state), Some(window)) = (&mut self.state, &self.window) {
-                    state.render(&self.frame_rx, window);
+                    state.render(window, waiting);
                 }
             }
             _ => {}
         }
     }
 
-    fn user_event(&mut self, _event_loop: &ActiveEventLoop, _event: ()) {
-        if let Some(window) = &self.window {
-            window.request_redraw();
+    fn user_event(&mut self, event_loop: &ActiveEventLoop, event: crate::UserEvent) {
+        match event {
+            crate::UserEvent::Shutdown => {
+                self.shutdown_requested.store(true, Ordering::Relaxed);
+                event_loop.exit();
+            }
+            crate::UserEvent::FrameReady { at } => {
+                if self.shutdown_requested.load(Ordering::Relaxed) {
+                    event_loop.exit();
+                    return;
+                }
+
+                if let Some(state) = self.state.as_mut() {
+                    state.observe_frame_ready(at);
+                }
+
+                if let Some(window) = &self.window {
+                    window.request_redraw();
+                }
+            }
         }
     }
 }

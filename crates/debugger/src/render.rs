@@ -208,6 +208,10 @@ impl RenderState {
                         ui.checkbox(&mut debugger_ui.show_breakpoints, "Breakpoints");
                         ui.checkbox(&mut debugger_ui.show_lua, "Lua");
                     });
+
+                    ui.menu_button("Help", |ui| {
+                        ui.checkbox(&mut debugger_ui.show_about, "About");
+                    });
                 });
             });
 
@@ -303,6 +307,9 @@ impl RenderState {
                     &mut debugger_ui.debugger,
                     &mut debugger_ui.breakpoint_addr_input,
                 );
+            }
+            if debugger_ui.show_about {
+                dbglib::windows::about::show_about(&ctx, &mut debugger_ui.show_about);
             }
             if debugger_ui.show_lua {
                 let mut load_script = false;

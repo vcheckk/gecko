@@ -214,11 +214,13 @@ impl EfbClear {
         }
     }
 
-    /// Clear a rectangular region with independent RGB, alpha, and depth masks.
+    /// Clear a rectangular region with independent RGB, alpha, and depth
+    /// masks. Records into `encoder` so the surrounding frame's work
+    /// shares one persistent encoder.
     pub fn clear_region_masked(
         &self,
-        device: &wgpu::Device,
         queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
         msaa_color_view: &wgpu::TextureView,
         resolve_color_view: &wgpu::TextureView,
         depth_view: &wgpu::TextureView,
@@ -233,21 +235,23 @@ impl EfbClear {
         color_update: bool,
         alpha_update: bool,
         z_update: bool,
-    ) {
+    ) -> bool {
         if !color_update && !alpha_update && !z_update {
-            return;
+            return false;
         }
+
         if w == 0 || h == 0 {
             tracing::warn!(x, y, w, h, "clear: zero-area clear region, skipping");
-            return;
+            return false;
         }
+
         let x = x.min(target_width);
         let y = y.min(target_height);
         let w = w.min(target_width.saturating_sub(x));
         let h = h.min(target_height.saturating_sub(y));
         if w == 0 || h == 0 {
             tracing::warn!(x, y, w, h, "clear: zero-area after clamping to target, skipping");
-            return;
+            return false;
         }
 
         // im gonna vomit
@@ -277,9 +281,6 @@ impl EfbClear {
             h,
             clear_mask_label(color_update, alpha_update, z_update)
         );
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("efb_clear_encoder"),
-        });
         encoder.push_debug_group(&group_label);
         {
             let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -327,6 +328,6 @@ impl EfbClear {
             rpass.draw(0..3, 0..1);
         }
         encoder.pop_debug_group();
-        queue.submit([encoder.finish()]);
+        true
     }
 }

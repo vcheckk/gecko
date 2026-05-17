@@ -41,9 +41,11 @@ struct ScheduledEvent<const SYSTEM: SystemId> {
 
 pub struct Scheduler<const SYSTEM: SystemId> {
     pub cycles: u64,
-    next_deadline: u64,
-    timebase_offset: i64,
+    pub(crate) next_deadline: u64,
+    pub(crate) timebase_offset: i64,
     events: VecDeque<ScheduledEvent<SYSTEM>>,
+    #[cfg(feature = "jit-stats")]
+    pub(crate) event_fire_counts: rustc_hash::FxHashMap<usize, u64>,
 }
 
 impl<const SYSTEM: SystemId> Scheduler<SYSTEM> {
@@ -53,6 +55,8 @@ impl<const SYSTEM: SystemId> Scheduler<SYSTEM> {
             next_deadline: u64::MAX,
             timebase_offset: 0,
             events: VecDeque::with_capacity(8),
+            #[cfg(feature = "jit-stats")]
+            event_fire_counts: rustc_hash::FxHashMap::default(),
         }
     }
 
@@ -108,6 +112,10 @@ impl<const SYSTEM: SystemId> Scheduler<SYSTEM> {
         if self.cycles >= front.deadline {
             let f = self.events.pop_front().unwrap().f;
             self.refresh_deadline();
+            #[cfg(feature = "jit-stats")]
+            {
+                *self.event_fire_counts.entry(f as *const () as usize).or_insert(0) += 1;
+            }
             Some(f)
         } else {
             None
@@ -141,30 +149,60 @@ impl<const SYSTEM: SystemId> Scheduler<SYSTEM> {
             self::vsync_handler::<SYSTEM>,
         );
         s.schedule_at(
-            self::cpu_cycles_per_dsp_tick(SYSTEM) * self::DSP_BATCH_SIZE,
-            self::dsp_batch_handler::<SYSTEM>,
-        );
-        s.schedule_at(
             crate::gekko::dec::cycles_until_underflow(u32::MAX),
             crate::gekko::dec::underflow_handler::<SYSTEM>,
         );
+        s.schedule_at(
+            crate::flipper::cp::PUMP_INTERVAL_CYCLES,
+            crate::flipper::cp::pump_handler::<SYSTEM>,
+        );
+        #[cfg(feature = "fps-counter")]
+        s.schedule_at(self::cpu_clock(SYSTEM), crate::fps::fps_handler::<SYSTEM>);
         s
     }
 }
 
 /// Reschedules itself every frame.
-pub fn vsync_handler<const SYSTEM: SystemId>(gc: &mut System<SYSTEM>) {
-    gc.vsync_pending = true;
-    let rate = gc.vi.dcr.video_format().refresh_rate();
-    gc.scheduler
+pub fn vsync_handler<const SYSTEM: SystemId>(sys: &mut System<SYSTEM>) {
+    if !sys.vi_present_seen_this_frame {
+        sys.vsync_pending = true;
+
+        #[cfg(feature = "fps-counter")]
+        {
+            sys.fps_counter.vsync_count += 1;
+        }
+    }
+
+    sys.vi_present_seen_this_frame = false;
+    let rate = sys.vi.dcr.video_format().refresh_rate();
+    sys.scheduler
         .schedule_in(rate.cycles_per_frame(SYSTEM), self::vsync_handler::<SYSTEM>);
 }
 
-/// Reschedules itself every DSP batch.
-pub fn dsp_batch_handler<const SYSTEM: SystemId>(gc: &mut System<SYSTEM>) {
-    gc.execute_dsp_batch();
-    gc.scheduler.schedule_in(
-        self::cpu_cycles_per_dsp_tick(SYSTEM) * self::DSP_BATCH_SIZE,
-        self::dsp_batch_handler::<SYSTEM>,
-    );
+#[inline(always)]
+pub const fn dsp_batch_interval(system: SystemId) -> u64 {
+    self::cpu_cycles_per_dsp_tick(system) * self::DSP_BATCH_SIZE
+}
+
+pub fn dsp_batch_handler<const SYSTEM: SystemId>(sys: &mut System<SYSTEM>) {
+    sys.execute_dsp_batch();
+    if sys.dsp.csr.halt() || sys.dsp.csr.reset() {
+        return;
+    }
+
+    let cpu_mail_quiet = !sys.dsp.mailbox_to_dsp_hi.busy();
+    let dsp_mail_full = sys.dsp.mailbox_to_cpu_hi.busy();
+    let (waits_cpu, waits_dsp) = sys.dsp.mailbox_wait_state();
+    let in_idle_wait = (cpu_mail_quiet && waits_cpu) || (dsp_mail_full && waits_dsp);
+    let pending_interrupt = sys.dsp.csr.pi_interrupt() && sys.dsp.registers.status.external_interrupt_enable();
+
+    if in_idle_wait && !pending_interrupt {
+        sys.dsp.scheduler_suspended = true;
+        #[cfg(feature = "jit-stats")]
+        crate::flipper::dsp::DSP_SUSPEND_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        return;
+    }
+
+    sys.scheduler
+        .schedule_in(self::dsp_batch_interval(SYSTEM), self::dsp_batch_handler::<SYSTEM>);
 }

@@ -1,18 +1,18 @@
-include "../../submodules/chipi-spec/gamecube/gekko.chipi"
+include "../../../submodules/chipi-spec/gamecube/gekko.chipi"
 
 target rust {
     dispatch Gekko {
-        output "$OUT_DIR/gekko_lut_wii.rs"
+        output "$OUT_DIR/gekko_lut.rs"
 
-        context crate::wii::Wii
+        context crate::gamecube::GameCube
         handlers crate::gekko::interpreter
-        handler_const crate::system::WII
+        handler_const crate::system::GC
         strategy fn_ptr_lut
 
         invalid_handler crate::gekko::interpreter::invalid
 
         instruction_type crate::gekko::instruction::Instruction {
-            output "$OUT_DIR/gekko_instr_wii.rs"
+            output "$OUT_DIR/gekko_instr.rs"
         }
 
         handler branch {

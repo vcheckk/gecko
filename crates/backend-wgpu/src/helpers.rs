@@ -24,7 +24,20 @@ pub fn map_min_filter(filter: MinFilter) -> wgpu::FilterMode {
     }
 }
 
-pub fn map_blend_factor(f: BlendFactor) -> wgpu::BlendFactor {
+pub fn map_src_blend_factor(f: BlendFactor) -> wgpu::BlendFactor {
+    match f {
+        BlendFactor::Zero => wgpu::BlendFactor::Zero,
+        BlendFactor::One => wgpu::BlendFactor::One,
+        BlendFactor::SrcClr => wgpu::BlendFactor::Dst,
+        BlendFactor::InvSrcClr => wgpu::BlendFactor::OneMinusDst,
+        BlendFactor::SrcAlpha => wgpu::BlendFactor::SrcAlpha,
+        BlendFactor::InvSrcAlpha => wgpu::BlendFactor::OneMinusSrcAlpha,
+        BlendFactor::DstAlpha => wgpu::BlendFactor::DstAlpha,
+        BlendFactor::InvDstAlpha => wgpu::BlendFactor::OneMinusDstAlpha,
+    }
+}
+
+pub fn map_dst_blend_factor(f: BlendFactor) -> wgpu::BlendFactor {
     match f {
         BlendFactor::Zero => wgpu::BlendFactor::Zero,
         BlendFactor::One => wgpu::BlendFactor::One,

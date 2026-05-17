@@ -1,9 +1,44 @@
-use crate::pipeline::PipelineKey;
-use crate::{BindGroupCacheKey, DrawUniforms, FrameUniforms, GpuVertex, GxRenderer, SamplerKey, helpers};
-use encase::{ShaderType as _, UniformBuffer};
+use crate::pipeline::{FullPipelineKey, PipelineKey};
+use crate::shader_specialization::{self, ShaderKey};
+use crate::{
+    BindGroupCacheKey, DRAW_UNIFORMS_SIZE, DrawUniforms, FRAME_UNIFORMS_SIZE, FrameUniforms, GxRenderer, SamplerKey,
+    helpers,
+};
 use gecko::flipper::gx::regs::{MagFilter, MinFilter, WrapMode};
+use gecko::flipper::gx::texture::CopyFormat;
 use gecko::host::{DrawData, GxAction};
 use glam::{Mat4, UVec4, Vec4};
+
+fn draw_active_slot_mask(draw: &DrawData) -> u8 {
+    let mut mask: u8 = 0;
+
+    let num_stages = (draw.num_tev_stages as usize).min(draw.tev_orders.len());
+    for i in 0..num_stages {
+        let order = draw.tev_orders[i];
+        let tex_enabled = ((order >> 6) & 1) != 0;
+        if tex_enabled {
+            mask |= 1 << (order & 7);
+        }
+    }
+
+    let num_ind = (draw.num_indirect_stages as usize).min(4);
+    for i in 0..num_ind {
+        let texmap = (draw.indirect_refs >> (i * 6)) & 7;
+        mask |= 1 << texmap;
+    }
+
+    mask
+}
+
+fn trim_bg_key(mut key: BindGroupCacheKey, active: u8) -> BindGroupCacheKey {
+    for slot in 0..8 {
+        if (active >> slot) & 1 == 0 {
+            key.tex_keys[slot] = None;
+            key.sampler_keys[slot] = None;
+        }
+    }
+    key
+}
 
 fn pack_u32_slice_to_uvec4x4(data: &[u32]) -> [UVec4; 4] {
     let get = |i: usize| if i < data.len() { data[i] } else { 0 };
@@ -24,6 +59,8 @@ impl GxRenderer {
             src_factor: blend.src_factor(),
             dst_factor: blend.dst_factor(),
             subtract: blend.subtract(),
+            logic_op_enable: blend.logic_op_enable(),
+            logic_op: blend.logic_op(),
             z_enable: zmode.enable(),
             z_func: zmode.func(),
             z_write: zmode.update_enable(),
@@ -41,14 +78,53 @@ impl GxRenderer {
         }
     }
 
-    /// Process a single [`GxAction`]. Called by the worker thread for each
-    /// action received from the channel. Draws are accumulated and flushed
-    /// lazily when a non-draw action arrives.
+    /// Replace the renderer's vertex scratch with `new_scratch`, returning the
+    /// previous buffer. For sinks (like web) that decouple vertex appending
+    /// from action processing vertices are collected in a shared `Vec`
+    /// while actions are queued, then both are drained together on the main
+    /// thread, at which point the drained scratch must become the renderer's
+    /// `scratch_vertices` so each `Draw`'s `base_vertex` indexes correctly.
+    pub fn replace_vertex_scratch(
+        &mut self,
+        new_scratch: Vec<gecko::host::DrawVertex>,
+    ) -> Vec<gecko::host::DrawVertex> {
+        std::mem::replace(&mut self.scratch_vertices, new_scratch)
+    }
+
+    /// Wrapper around [`Self::process_action`] for sinks that wrap a
+    /// `GxRenderer` in a `Mutex` (and therefore can't expose this renderer's
+    /// `scratch_vertices` directly to the gecko side via the `RenderSink`
+    /// trait). Maintains the invariant that `external_scratch` and
+    /// `self.scratch_vertices` stay length-synced across `exec` calls: any
+    /// new vertices appended to `external_scratch` since the last sync are
+    /// brought into `self.scratch_vertices` before processing the action,
+    /// and if `process_action` triggers a flush that clears the renderer's
+    /// scratch, `external_scratch` is truncated to match.
+    pub fn process_action_with_external_scratch(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        action: &GxAction,
+        external_scratch: &mut Vec<gecko::host::DrawVertex>,
+    ) {
+        if external_scratch.len() > self.scratch_vertices.len() {
+            let start = self.scratch_vertices.len();
+            self.scratch_vertices.extend_from_slice(&external_scratch[start..]);
+        }
+        self.process_action(device, queue, action);
+        if self.scratch_vertices.len() < external_scratch.len() {
+            external_scratch.truncate(self.scratch_vertices.len());
+        }
+    }
+
+    /// Process a single [`GxAction`]. Called on the render worker by the
+    /// backend-wgpu sink. Draws are accumulated and flushed lazily when a
+    /// non-draw action arrives.
     pub fn process_action(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, action: &GxAction) {
         let draw_stride = self.draw_uniform_stride as usize;
-        let draw_encase_size = DrawUniforms::min_size().get() as usize;
+        let draw_struct_size = DRAW_UNIFORMS_SIZE.get() as usize;
         let frame_stride = self.frame_stride;
-        let frame_encase_size = self.frame_encase_size;
+        let frame_struct_size = FRAME_UNIFORMS_SIZE.get() as usize;
 
         match action {
             GxAction::SetProjection { matrix, .. } => {
@@ -76,62 +152,86 @@ impl GxRenderer {
                 fmt,
                 rgba,
             } => {
-                let texture_label = format!(
-                    "gx_tex addr={:#010x}/{:08x} fmt={:?} size={}x{}",
-                    id.ram_addr, id.variant, *fmt, *width, *height
-                );
-                let tex = device.create_texture(&wgpu::TextureDescriptor {
-                    label: Some(&texture_label),
-                    size: wgpu::Extent3d {
-                        width: *width,
-                        height: *height,
-                        depth_or_array_layers: 1,
-                    },
-                    mip_level_count: 1,
-                    sample_count: 1,
-                    dimension: wgpu::TextureDimension::D2,
-                    format: wgpu::TextureFormat::Rgba8Unorm,
-                    usage: wgpu::TextureUsages::TEXTURE_BINDING
-                        | wgpu::TextureUsages::COPY_DST
-                        | wgpu::TextureUsages::COPY_SRC,
-                    view_formats: &[],
+                let tid = *id;
+                let copy_size = wgpu::Extent3d {
+                    width: *width,
+                    height: *height,
+                    depth_or_array_layers: 1,
+                };
+                let direct_copy_layout = wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(*width * 4),
+                    rows_per_image: None,
+                };
+
+                let keep_cached = self
+                    .efb_copy_cache
+                    .get(&tid.ram_addr)
+                    .is_some_and(|e| e.matches(*fmt, *width, *height));
+                if !keep_cached && let Some(entry) = self.efb_copy_cache.remove(&tid.ram_addr) {
+                    self.return_to_pool(entry.texture, entry.view);
+                }
+
+                if let Some((_, cached_tex, _)) = self.texture_cache.get(&tid) {
+                    let size = cached_tex.size();
+                    if size.width == *width && size.height == *height {
+                        let cached_tex = cached_tex.clone();
+                        let staged = self.stage_texture_upload(device, &cached_tex, rgba, *width, *height);
+
+                        if !staged {
+                            queue.write_texture(cached_tex.as_image_copy(), rgba, direct_copy_layout, copy_size);
+                        }
+
+                        if let Some((cached_fmt, _, _)) = self.texture_cache.get_mut(&tid) {
+                            *cached_fmt = *fmt;
+                        }
+
+                        return;
+                    }
+                }
+
+                let pooled = self.texture_pool.get_mut(&(*width, *height)).and_then(|v| v.pop());
+
+                let tex = pooled.unwrap_or_else(|| {
+                    let texture_label = format!(
+                        "gx_tex addr={:#010x}/{:08x} fmt={:?} size={}x{}",
+                        id.ram_addr, id.variant, *fmt, *width, *height
+                    );
+                    device.create_texture(&wgpu::TextureDescriptor {
+                        label: Some(&texture_label),
+                        size: copy_size,
+                        mip_level_count: 1,
+                        sample_count: 1,
+                        dimension: wgpu::TextureDimension::D2,
+                        format: wgpu::TextureFormat::Rgba8Unorm,
+                        usage: wgpu::TextureUsages::TEXTURE_BINDING
+                            | wgpu::TextureUsages::COPY_DST
+                            | wgpu::TextureUsages::COPY_SRC,
+                        view_formats: &[],
+                    })
                 });
-                queue.write_texture(
-                    tex.as_image_copy(),
-                    rgba,
-                    wgpu::TexelCopyBufferLayout {
-                        offset: 0,
-                        bytes_per_row: Some(*width * 4),
-                        rows_per_image: None,
-                    },
-                    wgpu::Extent3d {
-                        width: *width,
-                        height: *height,
-                        depth_or_array_layers: 1,
-                    },
-                );
+
+                let staged = self.stage_texture_upload(device, &tex, rgba, *width, *height);
+                if !staged {
+                    queue.write_texture(tex.as_image_copy(), rgba, direct_copy_layout, copy_size);
+                }
                 let view = tex.create_view(&Default::default());
 
-                // Invalidate bind groups that referenced the old entry for
-                // this exact cache id (variant-specific).
-                let tid = *id;
+                // Cached bind groups still hold the old TextureView for this
+                // key. Drop them so they get rebuilt against the new one.
                 self.bind_group_cache
                     .retain(|key, _| !key.tex_keys.iter().any(|k| *k == Some(tid)));
 
-                // A fresh RAM upload means the game wrote this address
-                // after a prior EFB copy. Return the stale GPU copy to
-                // its pool and let the RAM-decoded entry win. EFB copies
-                // are keyed by bare ram_addr (no TLUT variant).
-                if let Some((old_tex, old_view)) = self.efb_copy_cache.remove(&tid.ram_addr) {
-                    self.return_to_pool(old_tex, old_view);
+                let prior = self.texture_cache.insert(tid, (*fmt, tex, view));
+                if let Some((_, old_tex, _)) = prior {
+                    self.return_load_texture_to_pool(old_tex);
                 }
-
-                self.texture_cache.insert(*id, (*fmt, tex, view));
             }
             GxAction::InvalidateCaches => {
                 self.flush_pending_draws(device, queue);
+                self.submit_pending(queue);
                 self.texture_cache.clear();
-                let drained: Vec<_> = self.efb_copy_cache.drain().map(|(_, v)| v).collect();
+                let drained: Vec<_> = self.efb_copy_cache.drain().map(|(_, e)| (e.texture, e.view)).collect();
                 for (tex, view) in drained {
                     self.return_to_pool(tex, view);
                 }
@@ -161,19 +261,32 @@ impl GxRenderer {
             }
 
             GxAction::Draw(draw) => {
-                // Ensure pipeline for current tracked blend/depth state.
+                let shader_key = ShaderKey::from_draw(draw, self.current_alpha_compare);
+                if !self.shader_cache.contains_key(&shader_key) {
+                    let wgsl = shader_specialization::compile_variant(shader_key);
+                    let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                        label: Some(&format!("gx_shader_{shader_key:?}")),
+                        source: wgpu::ShaderSource::Wgsl(wgsl.into()),
+                    });
+                    self.shader_cache.insert(shader_key, module);
+                    tracing::info!(?shader_key, "compiled specialized shader variant");
+                }
                 let pipeline_key = self.current_pipeline_key();
-                if !self.pipeline_cache.contains_key(&pipeline_key) {
-                    let pipeline = self.create_pipeline(device, &pipeline_key);
-                    self.pipeline_cache.insert(pipeline_key, pipeline);
+                let full_key = FullPipelineKey {
+                    shader: shader_key,
+                    fixed: pipeline_key,
+                };
+                if !self.pipeline_cache.contains_key(&full_key) {
+                    let module = &self.shader_cache[&shader_key];
+                    let pipeline = self.create_pipeline(device, module, &full_key);
+                    self.pipeline_cache.insert(full_key, pipeline);
                 }
 
-                // Triangulate.
-                let prev_len = self.scratch_vertices.len();
-                triangulate_draw_data(draw, &mut self.scratch_vertices);
-                let added = self.scratch_vertices.len() - prev_len;
-                if added == 0 {
-                    tracing::warn!("draw call produced zero triangulated vertices, skipping");
+                let first_vertex = draw.base_vertex;
+                let first_index = self.scratch_indices.len() as u32;
+                let (vertex_count, index_count) = emit_draw_indices(draw, &mut self.scratch_indices);
+                if vertex_count == 0 {
+                    tracing::warn!("draw call produced zero vertices, skipping");
                     return;
                 }
 
@@ -183,61 +296,89 @@ impl GxRenderer {
 
                 let start = self.scratch_draws.len() * draw_stride;
                 self.scratch_uniform_bytes.resize(start + draw_stride, 0);
-                let mut draw_buf = UniformBuffer::new(&mut self.scratch_uniform_bytes[start..start + draw_encase_size]);
-                draw_buf.write(&draw_uniform).unwrap();
+                self.scratch_uniform_bytes[start..start + draw_struct_size]
+                    .copy_from_slice(bytemuck::bytes_of(&draw_uniform));
 
-                // Build per-draw frame uniform (TEV + lighting from DrawData,
-                // alpha compare from tracked state).
-                let alpha_cmp = self.current_alpha_compare;
-                let frame_uniform = FrameUniforms {
-                    tev_color_regs: draw.tev_color_regs.map(Vec4::from),
-                    tev_konst_colors: draw.tev_konst_colors.map(Vec4::from),
-                    tev_color_env: pack_u32_slice_to_uvec4x4(&draw.tev_color_env),
-                    tev_alpha_env: pack_u32_slice_to_uvec4x4(&draw.tev_alpha_env),
-                    tev_orders: pack_u32_slice_to_uvec4x4(&draw.tev_orders),
-                    tev_ksel: pack_u32_slice_to_uvec4x4(&draw.tev_ksel),
-                    num_tev_stages: draw.num_tev_stages as u32,
-                    alpha_ref0: alpha_cmp.ref0() as f32 / 255.0,
-                    alpha_ref1: alpha_cmp.ref1() as f32 / 255.0,
-                    alpha_comp0: alpha_cmp.comp0() as u32,
-                    alpha_comp1: alpha_cmp.comp1() as u32,
-                    alpha_op: alpha_cmp.op() as u32,
-                    indirect_matrices: draw.indirect_matrices.map(glam::IVec4::from),
-                    indirect_scales: draw.indirect_scales.map(glam::UVec4::from),
-                    indirect_refs: draw.indirect_refs,
-                    num_indirect_stages: draw.num_indirect_stages as u32,
-                    bump_imask: draw.bump_imask,
-                    tev_indirect: pack_u32_slice_to_uvec4x4(&draw.tev_indirect),
-                    light_colors: draw.lights.each_ref().map(|l| Vec4::from(l.color)),
-                    light_cosatt: draw.lights.each_ref().map(|l| Vec4::from(l.cosatt)),
-                    light_distatt: draw.lights.each_ref().map(|l| Vec4::from(l.distatt)),
-                    light_pos: draw.lights.each_ref().map(|l| Vec4::from(l.position)),
-                    light_dir: draw.lights.each_ref().map(|l| Vec4::from(l.direction)),
-                    color_ctrl0: draw.color_ctrl[0].raw(),
-                    alpha_ctrl0: draw.alpha_ctrl[0].raw(),
-                    color_ctrl1: draw.color_ctrl[1].raw(),
-                    alpha_ctrl1: draw.alpha_ctrl[1].raw(),
-                    ambient_color0: Vec4::from(draw.ambient_color[0]),
-                    ambient_color1: Vec4::from(draw.ambient_color[1]),
-                    material_color0: Vec4::from(draw.material_color[0]),
-                    material_color1: Vec4::from(draw.material_color[1]),
+                // Build a fresh FrameUniforms slot only when the producer
+                // signaled state changed since the last draw or this is the
+                // first draw of the flush.
+                let frame_idx = if draw.frame_dirty || self.last_frame_uniform_index.is_none() {
+                    let alpha_cmp = self.current_alpha_compare;
+                    let frame_uniform = FrameUniforms {
+                        tev_color_regs: draw.tev_color_regs.map(Vec4::from),
+                        tev_konst_colors: draw.tev_konst_colors.map(Vec4::from),
+                        tev_color_env: pack_u32_slice_to_uvec4x4(&draw.tev_color_env),
+                        tev_alpha_env: pack_u32_slice_to_uvec4x4(&draw.tev_alpha_env),
+                        tev_orders: pack_u32_slice_to_uvec4x4(&draw.tev_orders),
+                        tev_ksel: pack_u32_slice_to_uvec4x4(&draw.tev_ksel),
+                        num_tev_stages: draw.num_tev_stages as u32,
+                        alpha_ref0: alpha_cmp.ref0() as f32 / 255.0,
+                        alpha_ref1: alpha_cmp.ref1() as f32 / 255.0,
+                        alpha_comp0: alpha_cmp.comp0() as u32,
+                        alpha_comp1: alpha_cmp.comp1() as u32,
+                        alpha_op: alpha_cmp.op() as u32,
+                        _pad0: [0; 2],
+                        indirect_matrices: draw.indirect_matrices.map(glam::IVec4::from),
+                        indirect_scales: draw.indirect_scales.map(glam::UVec4::from),
+                        indirect_refs: draw.indirect_refs,
+                        num_indirect_stages: draw.num_indirect_stages as u32,
+                        bump_imask: draw.bump_imask,
+                        _pad1: 0,
+                        tev_indirect: pack_u32_slice_to_uvec4x4(&draw.tev_indirect),
+                        light_colors: draw.lights.each_ref().map(|l| Vec4::from(l.color)),
+                        light_cosatt: draw.lights.each_ref().map(|l| Vec4::from(l.cosatt)),
+                        light_distatt: draw.lights.each_ref().map(|l| Vec4::from(l.distatt)),
+                        light_pos: draw.lights.each_ref().map(|l| Vec4::from(l.position)),
+                        light_dir: draw.lights.each_ref().map(|l| Vec4::from(l.direction)),
+                        color_ctrl0: draw.color_ctrl[0].raw(),
+                        alpha_ctrl0: draw.alpha_ctrl[0].raw(),
+                        color_ctrl1: draw.color_ctrl[1].raw(),
+                        alpha_ctrl1: draw.alpha_ctrl[1].raw(),
+                        ambient_color0: Vec4::from(draw.ambient_color[0]),
+                        ambient_color1: Vec4::from(draw.ambient_color[1]),
+                        material_color0: Vec4::from(draw.material_color[0]),
+                        material_color1: Vec4::from(draw.material_color[1]),
+                    };
+
+                    let fstart = self.frame_uniform_bytes.len();
+                    self.frame_uniform_bytes.resize(fstart + frame_stride, 0);
+                    self.frame_uniform_bytes[fstart..fstart + frame_struct_size]
+                        .copy_from_slice(bytemuck::bytes_of(&frame_uniform));
+                    let idx = (fstart / frame_stride) as u32;
+                    self.last_frame_uniform_index = Some(idx);
+                    idx
+                } else {
+                    self.last_frame_uniform_index.unwrap()
                 };
 
-                let fstart = self.scratch_draws.len() * frame_stride;
-                self.frame_uniform_bytes.resize(fstart + frame_stride, 0);
-                let mut frame_buf =
-                    UniformBuffer::new(&mut self.frame_uniform_bytes[fstart..fstart + frame_encase_size]);
-                frame_buf.write(&frame_uniform).unwrap();
-
-                // Snapshot tracked state for this draw.
-                self.draw_pipeline_keys.push(pipeline_key);
-                self.draw_bg_keys.push(self.current_bind_group_key());
+                let active = draw_active_slot_mask(draw);
+                self.draw_pipeline_keys.push(full_key);
+                self.draw_bg_keys
+                    .push(trim_bg_key(self.current_bind_group_key(), active));
                 self.draw_viewports.push(self.current_viewport);
                 self.draw_scissors.push(self.current_scissor);
+                self.draw_frame_indices.push(frame_idx);
                 #[cfg(feature = "renderdoc-capture")]
                 self.draw_primitives.push(draw.primitive);
 
-                self.scratch_draws.push((prev_len as u32, added as u32));
+                // Compute packed vertex stride/offset for this draw. Stride
+                // matches the WESL `VsIn` layout gated by
+                // `TEXCOORD_N_ENABLED`: 5 fixed attrs (68b) + N texcoord
+                // attrs (12 byteroos each).
+                let stride = 68 + 12 * shader_key.active_texcoords as u32;
+                let packed_byte_offset = self
+                    .scratch_draws
+                    .last()
+                    .map(|d| d.packed_vertex_byte_offset + d.vertex_count * d.packed_vertex_stride)
+                    .unwrap_or(0);
+                self.scratch_draws.push(crate::DrawRecord {
+                    src_vertex_index: first_vertex,
+                    vertex_count,
+                    first_index,
+                    index_count,
+                    packed_vertex_byte_offset: packed_byte_offset,
+                    packed_vertex_stride: stride,
+                });
             }
 
             GxAction::CopyXfb {
@@ -288,9 +429,9 @@ impl GxRenderer {
                 src_y,
                 src_w,
                 src_h,
-                copy_format: _copy_format,
+                copy_format: raw_copy_format,
                 mipmap,
-                stride: _stride,
+                stride,
                 clear,
                 clear_color,
                 clear_z,
@@ -299,13 +440,9 @@ impl GxRenderer {
                 z_update,
                 alpha_supported,
                 depth_copy,
+                is_intensity,
             } => {
                 self.flush_pending_draws(device, queue);
-
-                // With `efb-writeback`: read the EFB back, encode it in
-                // `copy_format`, ship the bytes to the emu thread so they
-                // land in `Mmio::ram` at `dest_addr`. Expensive (GPU stall).
-                #[cfg(feature = "efb-writeback")]
                 self.execute_copy_efb_to_texture(
                     device,
                     queue,
@@ -314,35 +451,34 @@ impl GxRenderer {
                     *src_y,
                     *src_w,
                     *src_h,
-                    *_copy_format,
+                    *raw_copy_format,
                     *mipmap,
-                    *_stride,
+                    *stride,
                     *depth_copy,
-                    *clear,
-                    *clear_color,
-                    *clear_z,
-                    *color_update,
-                    *alpha_update,
-                    *z_update,
-                    *alpha_supported,
                 );
 
-                // Blit or resolve the EFB region into a GPU texture keyed by `dest_addr`.
-                if *depth_copy {
-                    self.cache_efb_copy_depth(device, queue, *dest_addr, *src_x, *src_y, *src_w, *src_h, *mipmap);
-                } else {
-                    self.cache_efb_copy_color(device, queue, *dest_addr, *src_x, *src_y, *src_w, *src_h, *mipmap);
+                if !*depth_copy
+                    && !*mipmap
+                    && let Some(copy_fmt) = CopyFormat::from_u8_color(*raw_copy_format)
+                {
+                    self.cache_efb_copy_color(
+                        device,
+                        queue,
+                        *dest_addr,
+                        *src_x,
+                        *src_y,
+                        *src_w,
+                        *src_h,
+                        *mipmap,
+                        copy_fmt,
+                        *is_intensity,
+                    );
                 }
 
                 if *clear {
-                    self.efb_clear.clear_region_masked(
+                    self.clear_efb_region(
                         device,
                         queue,
-                        &self.efb_msaa_view,
-                        &self.efb_view,
-                        &self.efb_depth_view,
-                        crate::EFB_WIDTH,
-                        crate::EFB_HEIGHT,
                         *src_x,
                         *src_y,
                         *src_w,
@@ -363,13 +499,19 @@ impl GxRenderer {
         if self.scratch_draws.is_empty() {
             return;
         }
+
+        if self.draw_bufs_write_pending {
+            self.submit_pending(queue);
+        }
+
         let fub = std::mem::take(&mut self.frame_uniform_bytes);
         self.upload_buffers(device, queue, &fub);
         self.frame_uniform_bytes = fub;
 
-        self.execute_action_render_pass(device, queue);
+        self.execute_action_render_pass(device);
 
         self.scratch_vertices.clear();
+        self.scratch_indices.clear();
         self.scratch_draws.clear();
         self.scratch_uniform_bytes.clear();
         self.frame_uniform_bytes.clear();
@@ -377,32 +519,40 @@ impl GxRenderer {
         self.draw_bg_keys.clear();
         self.draw_viewports.clear();
         self.draw_scissors.clear();
+        self.draw_frame_indices.clear();
+        self.last_frame_uniform_index = None;
         #[cfg(feature = "renderdoc-capture")]
         self.draw_primitives.clear();
     }
 
-    fn execute_action_render_pass(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
+    fn execute_action_render_pass(&mut self, device: &wgpu::Device) {
         let target_width = crate::EFB_WIDTH;
         let target_height = crate::EFB_HEIGHT;
         let fallback_sampler_key = (WrapMode::Clamp, WrapMode::Clamp, MagFilter::Linear, MinFilter::Linear);
         let frame_stride = self.frame_stride;
 
-        // Pre-build bind groups from tracked texture snapshots.
-        for bg_key in &self.draw_bg_keys {
-            self.bind_group_cache.entry(bg_key.clone()).or_insert_with(|| {
+        let num_draws = self.draw_bg_keys.len();
+        for i in 0..num_draws {
+            let bg_key = &self.draw_bg_keys[i];
+            if self.bind_group_cache.contains_key(bg_key) {
+                continue;
+            }
+
+            let new_bg = {
                 let mut tex_views: [&wgpu::TextureView; 8] = [&self.fallback_view; 8];
                 let mut tex_samplers: [&wgpu::Sampler; 8] = [&self.sampler_cache[&fallback_sampler_key]; 8];
 
                 for slot in 0..8 {
                     if let Some(tid) = &bg_key.tex_keys[slot] {
-                        // EFB copies (keyed by bare ram_addr) win over the
-                        // RAM-decoded `texture_cache` (keyed by full TextureKey).
-                        let view = self
-                            .efb_copy_cache
-                            .get(&tid.ram_addr)
-                            .map(|(_, v)| v)
-                            .or_else(|| self.texture_cache.get(tid).map(|(_, _, v)| v));
-                        if let Some(view) = view {
+                        let tex_entry = self.texture_cache.get(tid);
+                        let efb_match = tex_entry.and_then(|(tex_fmt, tex_tex, _)| {
+                            let size = tex_tex.size();
+                            self.efb_copy_cache
+                                .get(&tid.ram_addr)
+                                .filter(|e| e.matches(*tex_fmt, size.width, size.height))
+                                .map(|e| &e.view)
+                        });
+                        if let Some(view) = efb_match.or_else(|| tex_entry.map(|(_, _, v)| v)) {
                             tex_views[slot] = view;
                         }
 
@@ -418,17 +568,17 @@ impl GxRenderer {
                     0 => wgpu::BindGroupEntry {
                         binding: 0,
                         resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                            buffer: &self.frame_uniform_buffer,
-                            offset: 0,
-                            size: Some(FrameUniforms::min_size()),
+                            buffer: &self.draw_buffer,
+                            offset: self.draw_buffer_layout.frame_offset,
+                            size: Some(FRAME_UNIFORMS_SIZE),
                         }),
                     },
                     1 => wgpu::BindGroupEntry {
                         binding: 1,
                         resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                            buffer: &self.draw_uniform_buffer,
-                            offset: 0,
-                            size: Some(DrawUniforms::min_size()),
+                            buffer: &self.draw_buffer,
+                            offset: self.draw_buffer_layout.draw_offset,
+                            size: Some(DRAW_UNIFORMS_SIZE),
                         }),
                     },
                     2..=9 => wgpu::BindGroupEntry {
@@ -446,17 +596,18 @@ impl GxRenderer {
                     layout: &self.bind_group_layout,
                     entries: &entries,
                 })
-            });
+            };
+            self.bind_group_cache.insert(self.draw_bg_keys[i].clone(), new_bg);
         }
 
+        let mut encoder = self.take_or_create_encoder(device);
+        #[cfg(feature = "renderdoc-capture")]
         let group_label = format!(
             "GX FIFO Execution / EFB Rendering: draws={} vertices={}",
             self.scratch_draws.len(),
             self.scratch_vertices.len()
         );
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("gx_draw_flush_encoder"),
-        });
+        #[cfg(feature = "renderdoc-capture")]
         encoder.push_debug_group(&group_label);
         {
             let needs_initial_clear = self.efb_needs_clear;
@@ -503,57 +654,112 @@ impl GxRenderer {
                 timestamp_writes: None,
                 multiview_mask: None,
             });
-            rpass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-            if needs_initial_clear {
-                rpass.insert_debug_marker("EFB initial clear: color=black depth=1.0");
-            } else {
-                rpass.insert_debug_marker("EFB load existing color/depth");
-            }
-            if crate::EFB_SAMPLE_COUNT == 1 {
-                rpass.insert_debug_marker("EFB target: resolved color, no MSAA resolve");
-            } else {
-                rpass.insert_debug_marker("EFB target: MSAA color, resolve to efb_color_resolved");
+            let vertex_section_off = self.draw_buffer_layout.vertex_offset;
+            #[cfg(feature = "renderdoc-capture")]
+            {
+                if needs_initial_clear {
+                    rpass.insert_debug_marker("EFB initial clear: color=black depth=1.0");
+                } else {
+                    rpass.insert_debug_marker("EFB load existing color/depth");
+                }
+                if crate::EFB_SAMPLE_COUNT == 1 {
+                    rpass.insert_debug_marker("EFB target: resolved color, no MSAA resolve");
+                } else {
+                    rpass.insert_debug_marker("EFB target: MSAA color, resolve to efb_color_resolved");
+                }
             }
 
-            for (index, (first_vertex, vertex_count)) in self.scratch_draws.iter().copied().enumerate() {
-                #[cfg(feature = "renderdoc-capture")]
-                let draw_label = {
-                    let primitive = self.draw_primitives[index];
-                    format!(
-                        "GX Primitive Batch {index}: primitive={primitive:?} first_vertex={first_vertex} vertex_count={vertex_count}"
-                    )
-                };
-                #[cfg(not(feature = "renderdoc-capture"))]
-                let draw_label = format!("GX Draw {index}: first_vertex={first_vertex} vertex_count={vertex_count}");
-                rpass.push_debug_group(&draw_label);
-                let pipeline_key = &self.draw_pipeline_keys[index];
-                let pipeline = &self.pipeline_cache[pipeline_key];
-                rpass.set_pipeline(pipeline);
-                let pipeline_marker = format!(
-                    "Pipeline: blend={} z={} z_write={} color_update={} alpha_update={}",
-                    pipeline_key.blend_enable,
-                    pipeline_key.z_enable,
-                    pipeline_key.z_write,
-                    pipeline_key.color_update,
-                    pipeline_key.alpha_update
+            let index_used = (self.scratch_indices.len() * std::mem::size_of::<u32>()) as u64;
+            let index_off = self.draw_buffer_layout.index_offset;
+            if index_used > 0 {
+                rpass.set_index_buffer(
+                    self.draw_buffer.slice(index_off..index_off + index_used),
+                    wgpu::IndexFormat::Uint32,
                 );
-                rpass.insert_debug_marker(&pipeline_marker);
+            }
+
+            let mut last_pipeline_ptr: *const wgpu::RenderPipeline = std::ptr::null();
+            let mut last_vertex_slice: Option<(u64, u64)> = None;
+            let mut last_viewport: Option<(f32, f32, f32, f32, f32, f32)> = None;
+            let mut last_scissor: Option<(u32, u32, u32, u32)> = None;
+
+            for (index, draw) in self.scratch_draws.iter().copied().enumerate() {
+                let crate::DrawRecord {
+                    vertex_count,
+                    first_index,
+                    index_count,
+                    packed_vertex_byte_offset,
+                    packed_vertex_stride,
+                    src_vertex_index: _,
+                } = draw;
+
+                let first_vertex = 0u32;
+                let vertex_bytes = u64::from(vertex_count) * u64::from(packed_vertex_stride);
+                let vertex_slice_start = vertex_section_off + u64::from(packed_vertex_byte_offset);
+                let vertex_slice_end = vertex_slice_start + vertex_bytes;
+                if last_vertex_slice != Some((vertex_slice_start, vertex_slice_end)) {
+                    rpass.set_vertex_buffer(0, self.draw_buffer.slice(vertex_slice_start..vertex_slice_end));
+                    last_vertex_slice = Some((vertex_slice_start, vertex_slice_end));
+                }
+
+                #[cfg(feature = "renderdoc-capture")]
+                {
+                    let primitive = self.draw_primitives[index];
+                    let draw_label = format!(
+                        "GX Primitive Batch {index}: primitive={primitive:?} first_vertex={first_vertex} vertex_count={vertex_count} indices={index_count}"
+                    );
+                    rpass.push_debug_group(&draw_label);
+                }
+                let full_key = &self.draw_pipeline_keys[index];
+                let pipeline = &self.pipeline_cache[full_key];
+                let pipeline_ptr = pipeline as *const wgpu::RenderPipeline;
+                if pipeline_ptr != last_pipeline_ptr {
+                    rpass.set_pipeline(pipeline);
+                    last_pipeline_ptr = pipeline_ptr;
+                }
+
+                #[cfg(feature = "renderdoc-capture")]
+                {
+                    let pipeline_marker = format!(
+                        "Pipeline: blend={} z={} z_write={} color_update={} alpha_update={} shader={:?}",
+                        full_key.fixed.blend_enable,
+                        full_key.fixed.z_enable,
+                        full_key.fixed.z_write,
+                        full_key.fixed.color_update,
+                        full_key.fixed.alpha_update,
+                        full_key.shader,
+                    );
+                    rpass.insert_debug_marker(&pipeline_marker);
+                }
 
                 let bg_key = &self.draw_bg_keys[index];
                 let bind_group = &self.bind_group_cache[bg_key];
 
-                let frame_offset = (index * frame_stride) as u32;
+                let frame_offset = self.draw_frame_indices[index] * frame_stride as u32;
                 let draw_offset = (index as u64 * self.draw_uniform_stride) as u32;
                 rpass.set_bind_group(0, bind_group, &[frame_offset, draw_offset]);
-                let bind_marker = format!("Bind group offsets: frame={frame_offset} draw={draw_offset}");
-                rpass.insert_debug_marker(&bind_marker);
+                #[cfg(feature = "renderdoc-capture")]
+                {
+                    let bind_marker = format!("Bind group offsets: frame={frame_offset} draw={draw_offset}");
+                    rpass.insert_debug_marker(&bind_marker);
+                }
 
                 let vp = &self.draw_viewports[index];
                 let max_dim = target_width.max(target_height) as f32;
                 let vp_w = vp.w.clamp(1.0, max_dim);
                 let vp_h = vp.h.clamp(1.0, max_dim);
+
                 if vp.x.is_finite() && vp.y.is_finite() && vp_w.is_finite() && vp_h.is_finite() {
-                    rpass.set_viewport(vp.x, vp.y, vp_w, vp_h, vp.min_depth, vp.max_depth);
+                    let mut min_d = vp.min_depth.clamp(0.0, 1.0);
+                    let mut max_d = vp.max_depth.clamp(0.0, 1.0);
+                    if min_d > max_d {
+                        std::mem::swap(&mut min_d, &mut max_d);
+                    }
+                    let vp_tuple = (vp.x, vp.y, vp_w, vp_h, min_d, max_d);
+                    if last_viewport != Some(vp_tuple) {
+                        rpass.set_viewport(vp.x, vp.y, vp_w, vp_h, min_d, max_d);
+                        last_viewport = Some(vp_tuple);
+                    }
                 } else {
                     tracing::warn!(
                         x = vp.x,
@@ -569,20 +775,37 @@ impl GxRenderer {
                 let sc_y = sc.y.min(target_height);
                 let sc_w = sc.w.min(target_width - sc_x);
                 let sc_h = sc.h.min(target_height - sc_y);
-                rpass.set_scissor_rect(sc_x, sc_y, sc_w, sc_h);
-                let raster_marker = format!(
-                    "Raster state: viewport=({:.1},{:.1} {:.1}x{:.1}) scissor=({},{} {}x{})",
-                    vp.x, vp.y, vp_w, vp_h, sc_x, sc_y, sc_w, sc_h
-                );
-                rpass.insert_debug_marker(&raster_marker);
+                let sc_tuple = (sc_x, sc_y, sc_w, sc_h);
+                if last_scissor != Some(sc_tuple) {
+                    rpass.set_scissor_rect(sc_x, sc_y, sc_w, sc_h);
+                    last_scissor = Some(sc_tuple);
+                }
 
-                rpass.draw(first_vertex..first_vertex + vertex_count, 0..1);
+                #[cfg(feature = "renderdoc-capture")]
+                {
+                    let raster_marker = format!(
+                        "Raster state: viewport=({:.1},{:.1} {:.1}x{:.1}) scissor=({},{} {}x{})",
+                        vp.x, vp.y, vp_w, vp_h, sc_x, sc_y, sc_w, sc_h
+                    );
+                    rpass.insert_debug_marker(&raster_marker);
+                }
+
+                if index_count == 0 {
+                    rpass.draw(first_vertex..first_vertex + vertex_count, 0..1);
+                } else {
+                    rpass.draw_indexed(first_index..first_index + index_count, first_vertex as i32, 0..1);
+                }
+
+                #[cfg(feature = "renderdoc-capture")]
                 rpass.pop_debug_group();
             }
         }
+
+        #[cfg(feature = "renderdoc-capture")]
         encoder.pop_debug_group();
 
-        queue.submit([encoder.finish()]);
+        self.current_encoder = Some(encoder);
+        self.draw_bufs_write_pending = true;
     }
 
     fn ensure_sampler(&mut self, device: &wgpu::Device, key: &SamplerKey) {
@@ -599,69 +822,53 @@ impl GxRenderer {
     }
 }
 
-/// Triangulate a [`DrawData`] into GPU vertices.
-fn triangulate_draw_data(draw: &DrawData, out: &mut Vec<GpuVertex>) {
+/// Emit indices for a draw whose vertices already live in the renderer's
+/// `scratch_vertices` at `[base_vertex .. base_vertex + n]`. Indices are
+/// written into `indices_out` as offsets relative to `base_vertex`, since
+/// `draw_indexed` is called with `base_vertex` as `first_vertex`. Returns
+/// `(vertex_count, index_count)`.
+fn emit_draw_indices(draw: &DrawData, indices_out: &mut Vec<u32>) -> (u32, u32) {
     use gecko::flipper::gx::draw::Primitive;
 
-    let verts = &draw.vertices;
-    let to_gpu = |v: &gecko::host::DrawVertex| -> GpuVertex {
-        GpuVertex {
-            position: v.position,
-            color: v.color0,
-            color1: v.color1,
-            normal: v.normal,
-            pos_view: v.pos_view,
-            tex0: v.texcoords[0],
-            tex1: v.texcoords[1],
-            tex2: v.texcoords[2],
-            tex3: v.texcoords[3],
-            tex4: v.texcoords[4],
-            tex5: v.texcoords[5],
-            tex6: v.texcoords[6],
-            tex7: v.texcoords[7],
-        }
-    };
+    let n = draw.vertex_count;
 
     match draw.primitive {
-        Primitive::Triangles => {
-            out.extend(verts.iter().map(to_gpu));
-        }
+        Primitive::Triangles => (n, 0),
         Primitive::Quads => {
-            for quad in verts.chunks(4) {
-                if quad.len() < 4 {
-                    tracing::error!(count = quad.len(), "quad primitive with less than 4 vertices, skipping");
-                    continue;
-                }
-                out.push(to_gpu(&quad[0]));
-                out.push(to_gpu(&quad[1]));
-                out.push(to_gpu(&quad[2]));
-                out.push(to_gpu(&quad[0]));
-                out.push(to_gpu(&quad[2]));
-                out.push(to_gpu(&quad[3]));
+            let chunks = n / 4;
+            for q in 0..chunks {
+                let base = q * 4;
+                indices_out.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
             }
+            (n, chunks * 6)
         }
         Primitive::TriangleStrip => {
-            for i in 2..verts.len() {
-                if i % 2 == 0 {
-                    out.push(to_gpu(&verts[i - 2]));
-                    out.push(to_gpu(&verts[i - 1]));
-                    out.push(to_gpu(&verts[i]));
+            if n < 3 {
+                return (0, 0);
+            }
+            let tris = n - 2;
+            for i in 0..tris {
+                if i & 1 == 0 {
+                    indices_out.extend_from_slice(&[i, i + 1, i + 2]);
                 } else {
-                    out.push(to_gpu(&verts[i - 1]));
-                    out.push(to_gpu(&verts[i - 2]));
-                    out.push(to_gpu(&verts[i]));
+                    indices_out.extend_from_slice(&[i + 1, i, i + 2]);
                 }
             }
+            (n, tris * 3)
         }
         Primitive::TriangleFan => {
-            for i in 2..verts.len() {
-                out.push(to_gpu(&verts[0]));
-                out.push(to_gpu(&verts[i - 1]));
-                out.push(to_gpu(&verts[i]));
+            if n < 3 {
+                return (0, 0);
             }
+            let tris = n - 2;
+            for i in 0..tris {
+                indices_out.extend_from_slice(&[0, i + 1, i + 2]);
+            }
+            (n, tris * 3)
         }
         _ => {
-            tracing::error!(?draw.primitive, "triangulate: skipping unsupported primitive");
+            tracing::error!(?draw.primitive, "emit_draw_indices: skipping unsupported primitive");
+            (0, 0)
         }
     }
 }

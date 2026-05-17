@@ -2,10 +2,13 @@ use super::constants::*;
 use super::math::{Vec3, unpack_rgba};
 use super::regs::{self, *};
 use super::{GraphicsProcessor, draw};
-use crate::host::{DrawData, DrawVertex, GxAction, LightData, RenderSink};
+use crate::host::{DrawData, DrawVertex, GxAction, RenderSink};
 use crate::mmio::{Mmio, RamView};
 use crate::system::SystemId;
 use std::io::{Cursor, Read};
+
+#[cfg(feature = "jit")]
+use super::jit;
 
 /// Parsed vertex format descriptor from CP/VAT registers.
 struct VertexFormat {
@@ -41,13 +44,17 @@ struct VertexFormat {
 }
 
 impl GraphicsProcessor {
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     pub fn create_draw_call<const SYSTEM: SystemId>(
         &mut self,
         mmio: &mut Mmio<SYSTEM>,
         renderer: &mut dyn RenderSink,
         cmd: u8,
-        data: Vec<u8>,
+        data: &[u8],
     ) {
+        #[cfg(feature = "gx-stats")]
+        let _gx_stats_t0 = std::time::Instant::now();
+
         let Some(primitive) = draw::Primitive::from_cmd(cmd) else {
             tracing::error!(cmd, "goofy draw command");
             return;
@@ -62,74 +69,39 @@ impl GraphicsProcessor {
 
         let vertex_count = data.len() / vf.vertex_stride;
 
-        let mut vertices: Vec<draw::Vertex> = Vec::with_capacity(vertex_count);
-        let mut cur = Cursor::new(&data);
-
-        let view = mmio.ram_view();
-        for i in 0..vertex_count {
-            let vertex = self.decode_vertex(&mut cur, &data, &view, &vf, i);
-            vertices.push(vertex);
+        #[cfg(feature = "gx-stats")]
+        {
+            self.stats.draw_calls += 1;
+            self.stats.vertices += vertex_count as u64;
+            self.stats.fifo_bytes += data.len() as u64;
+            self.stats.draws_by_primitive[(primitive as usize) & 0x7] += 1;
         }
+
+        let mut boxed: Box<DrawData> = renderer.take_draw_data();
+
+        // Decode directly into the renderer's vertex scratch. No
+        // intermediate `draw_vertices_scratch`, no append memcpy. The
+        // interpreter pushes into `verts`, and the Cranelift JIT writes
+        // through `verts.as_mut_ptr().add(base)` then sets the new length.
+        let verts = renderer.vertex_scratch();
+        let base_vertex = verts.len() as u32;
+        verts.reserve(vertex_count);
+        self::dispatch_decode(self, mmio, cmd, data, vertex_count, &vf, verts);
 
         let modelview = self.build_modelview_matrix(vf.default_pos_mtx_idx);
 
-        tracing::debug!(
-            primitive = format!("{:?}", primitive),
-            vertices = format!("{:?}", vertices),
-            pos_mtx_idx = vf.default_pos_mtx_idx,
-            modelview = format!("{:?}", modelview),
-            projection = format!("{:?}", self.projection),
-            "draw call created"
-        );
-
-        // Resolve TEV color registers to f32 arrays for the snapshot
         let tev_color_regs = self.resolve_tev_color_regs();
         let tev_orders = self.resolve_tev_orders();
 
-        // Snapshot light data for the action stream
-        let light_colors = self.snapshot_light_field(XF_LIGHT_COLOR);
-        let light_cosatt = self.snapshot_light_field(XF_LIGHT_A0);
-        let light_distatt = self.snapshot_light_field(XF_LIGHT_K0);
-        let light_pos = self.snapshot_light_field(XF_LIGHT_PX);
-        let light_dir = self.snapshot_light_field(XF_LIGHT_NX);
+        self.rebuild_lighting_cache_if_dirty();
 
-        let color_ctrl = [
-            regs::ChanCtrl::from_raw(self.xf_mem[XF_COLOR_CTRL0]),
-            regs::ChanCtrl::from_raw(self.xf_mem[XF_COLOR_CTRL1]),
-        ];
-        let alpha_ctrl = [
-            regs::ChanCtrl::from_raw(self.xf_mem[XF_ALPHA_CTRL0]),
-            regs::ChanCtrl::from_raw(self.xf_mem[XF_ALPHA_CTRL1]),
-        ];
-        let ambient_color = [
-            unpack_rgba(self.xf_mem[XF_AMBIENT_COLOR0]),
-            unpack_rgba(self.xf_mem[XF_AMBIENT_COLOR1]),
-        ];
-        let material_color = [
-            unpack_rgba(self.xf_mem[XF_MATERIAL_COLOR0]),
-            unpack_rgba(self.xf_mem[XF_MATERIAL_COLOR1]),
-        ];
+        if self.konst_dirty {
+            self.resolve_konst_colors();
+            self.konst_dirty = false;
+        }
 
-        // Emit action to the render sink
-        let draw_vertices: Vec<DrawVertex> = vertices
-            .iter()
-            .map(|v| DrawVertex {
-                position: v.position,
-                normal: v.normal,
-                color0: v.color0,
-                color1: v.color1,
-                pos_view: v.pos_view,
-                texcoords: std::array::from_fn(|i| v.texcoords[i].unwrap_or([0.0, 0.0, 1.0])),
-            })
-            .collect();
-
-        let lights: [LightData; 8] = std::array::from_fn(|i| LightData {
-            color: light_colors[i],
-            cosatt: light_cosatt[i],
-            distatt: light_distatt[i],
-            position: light_pos[i],
-            direction: light_dir[i],
-        });
+        boxed.base_vertex = base_vertex;
+        boxed.vertex_count = vertex_count as u32;
 
         // Flatten the three indirect matrices to 6 rows. Row 2M is row
         // 0 of matrix M, row 2M+1 is row 1. The .w lane carries the
@@ -160,29 +132,35 @@ impl GraphicsProcessor {
             ],
         ];
 
-        renderer.exec(GxAction::Draw(DrawData {
-            primitive,
-            vertices: draw_vertices,
-            modelview: modelview.0,
-            tev_color_env: self.cur_tev_color_env.iter().map(|e| e.raw()).collect(),
-            tev_alpha_env: self.cur_tev_alpha_env.iter().map(|e| e.raw()).collect(),
-            tev_orders: tev_orders.iter().map(|o| o.raw()).collect(),
-            tev_ksel: (0..8).map(|i| self.bp_regs[BP_TEV_KSEL_0 + i]).collect(),
-            tev_color_regs,
-            tev_konst_colors: self.cur_tev_konst_colors,
-            num_tev_stages: self.cur_num_tev_stages,
-            indirect_matrices,
-            indirect_scales,
-            indirect_refs: self.cur_indirect_refs.raw(),
-            num_indirect_stages: self.cur_num_indirect_stages,
-            bump_imask: self.cur_bump_imask,
-            tev_indirect: self.cur_tev_indirect.iter().map(|c| c.raw()).collect(),
-            color_ctrl,
-            alpha_ctrl,
-            ambient_color,
-            material_color,
-            lights,
-        }));
+        boxed.primitive = primitive;
+        boxed.modelview = modelview.0;
+        boxed.tev_color_env = std::array::from_fn(|i| self.cur_tev_color_env[i].raw());
+        boxed.tev_alpha_env = std::array::from_fn(|i| self.cur_tev_alpha_env[i].raw());
+        boxed.tev_orders = std::array::from_fn(|i| tev_orders[i].raw());
+        boxed.tev_ksel = std::array::from_fn(|i| self.bp_regs[BP_TEV_KSEL_0 + i]);
+        boxed.tev_color_regs = tev_color_regs;
+        boxed.tev_konst_colors = self.cur_tev_konst_colors;
+        boxed.num_tev_stages = self.cur_num_tev_stages;
+        boxed.indirect_matrices = indirect_matrices;
+        boxed.indirect_scales = indirect_scales;
+        boxed.indirect_refs = self.cur_indirect_refs.raw();
+        boxed.num_indirect_stages = self.cur_num_indirect_stages;
+        boxed.bump_imask = self.cur_bump_imask;
+        boxed.tev_indirect = std::array::from_fn(|i| self.cur_tev_indirect[i].raw());
+        boxed.color_ctrl = self.cached_color_ctrl;
+        boxed.alpha_ctrl = self.cached_alpha_ctrl;
+        boxed.ambient_color = self.cached_ambient_color;
+        boxed.material_color = self.cached_material_color;
+        boxed.lights = self.cached_lights;
+        boxed.active_texcoords = (self.xf_mem[crate::flipper::gx::constants::XF_NUM_TEXGENS] as u8).min(8);
+        boxed.frame_dirty = self.frame_state_dirty;
+        self.frame_state_dirty = false;
+        renderer.exec(GxAction::Draw(boxed));
+
+        #[cfg(feature = "gx-stats")]
+        {
+            self.stats.create_draw_call_ns += _gx_stats_t0.elapsed().as_nanos() as u64;
+        }
     }
 
     fn build_vertex_format(&self, cmd: u8) -> VertexFormat {
@@ -337,14 +315,7 @@ impl GraphicsProcessor {
         }
     }
 
-    fn decode_vertex(
-        &self,
-        cur: &mut Cursor<&Vec<u8>>,
-        data: &[u8],
-        ram: &RamView<'_>,
-        vf: &VertexFormat,
-        vertex_idx: usize,
-    ) -> draw::Vertex {
+    fn decode_vertex(&self, cur: &mut Cursor<&[u8]>, data: &[u8], ram: &RamView<'_>, vf: &VertexFormat) -> DrawVertex {
         // Resolve an indexed vertex attribute (positions, normals, colors,
         // texcoords) to a slice in whichever bank holds it. If the address
         // falls outside both MEM1 and MEM2, fall back to a zero-filled
@@ -408,9 +379,6 @@ impl GraphicsProcessor {
             decode_normal(&data[start..start + vf.nrm_data_size], &vf.vat_a)
         } else if vf.nrm_attr != AttributeType::None {
             let nrm_index = read_index(cur, vf.nrm_attr);
-            // When nrm_index3 && NBT, the stream contains 3 separate indices
-            // (normal, binormal, tangent). Skip the extra 2, only the normal
-            // vector (first index) is needed for lighting.
             if vf.vat_a.nrm_index3() && vf.vat_a.nrm_cnt() == regs::NrmCount::Nbt {
                 let idx_size = if vf.nrm_attr == AttributeType::Index8 { 1 } else { 2 };
                 cur.set_position(cur.position() + (2 * idx_size) as u64);
@@ -496,27 +464,10 @@ impl GraphicsProcessor {
         let normal_view = Vec3::from(normal).transform(&nrm_mtx).normalize();
         let pos_view = self.xf_transform_3x4(pos_mtx_base, position);
 
-        // Texture coordinate generation (XF texgen)
-        // compute_texgen now returns [f32; 3] (s, t, q) with perspective
-        // divide deferred to the fragment shader.
-        let num_texgens = (self.xf_mem[XF_NUM_TEXGENS] as usize).min(8);
-        let mut texcoords: [Option<[f32; 3]>; 8] = [None; 8];
-        for tg_idx in 0..num_texgens {
-            texcoords[tg_idx] = Some(self.compute_texgen(tg_idx, position, normal, &raw_texcoords, &tex_mtx_idx));
-        }
-        // For texcoords beyond num_texgens, pass through raw values with q=1
-        for tg_idx in num_texgens..8 {
-            texcoords[tg_idx] = raw_texcoords[tg_idx].map(|st| [st[0], st[1], 1.0]);
-        }
+        let mut texcoords: [[f32; 3]; 8] = [[0.0, 0.0, 1.0]; 8];
+        self.apply_all_texgens(position, normal, &raw_texcoords, &tex_mtx_idx, &mut texcoords);
 
-        tracing::debug!(
-            vertex = vertex_idx,
-            position = format!("{:02X?}", position),
-            color0 = format!("{:?}", color0),
-            "Vertex"
-        );
-
-        draw::Vertex {
+        DrawVertex {
             position,
             color0,
             color1,
@@ -556,26 +507,70 @@ impl GraphicsProcessor {
         ])
     }
 
-    fn snapshot_light_field(&self, field_offset: usize) -> [[f32; 4]; 8] {
-        std::array::from_fn(|i| {
-            let base = XF_LIGHT_BASE + i * XF_LIGHT_STRIDE + field_offset;
-            if field_offset == XF_LIGHT_COLOR {
-                // Color is stored as packed RGBA, not float
-                unpack_rgba(self.xf_mem[base])
-            } else {
-                // Float vec3, w = 0
-                [
-                    f32::from_bits(self.xf_mem[base]),
-                    f32::from_bits(self.xf_mem[base + 1]),
-                    f32::from_bits(self.xf_mem[base + 2]),
-                    0.0,
-                ]
-            }
-        })
+    fn rebuild_lighting_cache_if_dirty(&mut self) {
+        if !self.lighting_dirty {
+            return;
+        }
+
+        self.cached_color_ctrl = [
+            regs::ChanCtrl::from_raw(self.xf_mem[XF_COLOR_CTRL0]),
+            regs::ChanCtrl::from_raw(self.xf_mem[XF_COLOR_CTRL1]),
+        ];
+
+        self.cached_alpha_ctrl = [
+            regs::ChanCtrl::from_raw(self.xf_mem[XF_ALPHA_CTRL0]),
+            regs::ChanCtrl::from_raw(self.xf_mem[XF_ALPHA_CTRL1]),
+        ];
+
+        self.cached_ambient_color = [
+            unpack_rgba(self.xf_mem[XF_AMBIENT_COLOR0]),
+            unpack_rgba(self.xf_mem[XF_AMBIENT_COLOR1]),
+        ];
+
+        self.cached_material_color = [
+            unpack_rgba(self.xf_mem[XF_MATERIAL_COLOR0]),
+            unpack_rgba(self.xf_mem[XF_MATERIAL_COLOR1]),
+        ];
+
+        for i in 0..8 {
+            let base = XF_LIGHT_BASE + i * XF_LIGHT_STRIDE;
+
+            self.cached_lights[i].color = unpack_rgba(self.xf_mem[base + XF_LIGHT_COLOR]);
+
+            self.cached_lights[i].cosatt = [
+                f32::from_bits(self.xf_mem[base + XF_LIGHT_A0]),
+                f32::from_bits(self.xf_mem[base + XF_LIGHT_A0 + 1]),
+                f32::from_bits(self.xf_mem[base + XF_LIGHT_A0 + 2]),
+                0.0,
+            ];
+
+            self.cached_lights[i].distatt = [
+                f32::from_bits(self.xf_mem[base + XF_LIGHT_K0]),
+                f32::from_bits(self.xf_mem[base + XF_LIGHT_K0 + 1]),
+                f32::from_bits(self.xf_mem[base + XF_LIGHT_K0 + 2]),
+                0.0,
+            ];
+
+            self.cached_lights[i].position = [
+                f32::from_bits(self.xf_mem[base + XF_LIGHT_PX]),
+                f32::from_bits(self.xf_mem[base + XF_LIGHT_PX + 1]),
+                f32::from_bits(self.xf_mem[base + XF_LIGHT_PX + 2]),
+                0.0,
+            ];
+
+            self.cached_lights[i].direction = [
+                f32::from_bits(self.xf_mem[base + XF_LIGHT_NX]),
+                f32::from_bits(self.xf_mem[base + XF_LIGHT_NX + 1]),
+                f32::from_bits(self.xf_mem[base + XF_LIGHT_NX + 2]),
+                0.0,
+            ];
+        }
+
+        self.lighting_dirty = false;
     }
 }
 
-fn read_index(cur: &mut Cursor<&Vec<u8>>, attr: AttributeType) -> usize {
+fn read_index(cur: &mut Cursor<&[u8]>, attr: AttributeType) -> usize {
     match attr {
         AttributeType::Index8 => {
             let mut buf = [0u8; 1];
@@ -591,47 +586,73 @@ fn read_index(cur: &mut Cursor<&Vec<u8>>, attr: AttributeType) -> usize {
     }
 }
 
+#[inline(always)]
 fn decode_position(data: &[u8], vat: &VatA) -> [f32; 3] {
     let num = vat.pos_cnt().components();
-    let fmt = vat.pos_fmt();
-    let divisor = (1u32 << vat.pos_shift()) as f32;
-    let mut result = [0.0f32; 3];
-    let mut off = 0;
+    let recip = 1.0f32 / ((1u32 << vat.pos_shift()) as f32);
+    self::decode_components::<3>(data, num, vat.pos_fmt(), recip)
+}
 
-    for i in 0..num {
-        result[i] = match fmt {
-            ComponentFormat::U8 => {
-                let v = data[off] as f32 / divisor;
-                off += 1;
-                v
+#[inline(always)]
+fn decode_normal(data: &[u8], vat: &VatA) -> [f32; 3] {
+    let cnt = vat.nrm_cnt().components().min(3);
+    let fmt = vat.nrm_fmt();
+    let recip = match fmt {
+        ComponentFormat::U8 | ComponentFormat::S8 => 1.0f32 / 64.0,
+        ComponentFormat::U16 | ComponentFormat::S16 => 1.0f32 / 16384.0,
+        ComponentFormat::F32 => 1.0f32,
+    };
+    self::decode_components::<3>(data, cnt, fmt, recip)
+}
+
+#[inline(always)]
+fn decode_texcoord(data: &[u8], fmt: ComponentFormat, shift: u8, cnt: TexCount) -> [f32; 2] {
+    let num = cnt.components();
+    let recip = 1.0f32 / ((1u32 << shift) as f32);
+    let r3 = self::decode_components::<3>(data, num, fmt, recip);
+    [r3[0], r3[1]]
+}
+
+#[inline(always)]
+fn decode_components<const N: usize>(data: &[u8], num: usize, fmt: ComponentFormat, recip: f32) -> [f32; N] {
+    let mut result = [0.0f32; N];
+
+    match fmt {
+        ComponentFormat::U8 => {
+            for i in 0..num {
+                result[i] = data[i] as f32 * recip;
             }
-            ComponentFormat::S8 => {
-                let v = data[off] as i8 as f32 / divisor;
-                off += 1;
-                v
+        }
+        ComponentFormat::S8 => {
+            for i in 0..num {
+                result[i] = (data[i] as i8) as f32 * recip;
             }
-            ComponentFormat::U16 => {
-                let v = u16::from_be_bytes([data[off], data[off + 1]]) as f32 / divisor;
-                off += 2;
-                v
+        }
+        ComponentFormat::U16 => {
+            for i in 0..num {
+                let off = i * 2;
+                result[i] = u16::from_be_bytes([data[off], data[off + 1]]) as f32 * recip;
             }
-            ComponentFormat::S16 => {
-                let v = i16::from_be_bytes([data[off], data[off + 1]]) as f32 / divisor;
-                off += 2;
-                v
+        }
+        ComponentFormat::S16 => {
+            for i in 0..num {
+                let off = i * 2;
+                result[i] = i16::from_be_bytes([data[off], data[off + 1]]) as f32 * recip;
             }
-            ComponentFormat::F32 => {
-                let v = f32::from_bits(u32::from_be_bytes([
+        }
+        ComponentFormat::F32 => {
+            for i in 0..num {
+                let off = i * 4;
+                result[i] = f32::from_bits(u32::from_be_bytes([
                     data[off],
                     data[off + 1],
                     data[off + 2],
                     data[off + 3],
                 ]));
-                off += 4;
-                v
             }
-        };
+        }
     }
+
     result
 }
 
@@ -683,93 +704,114 @@ fn decode_color(data: &[u8], fmt: regs::ColorFormat, cnt: regs::ColorCount) -> [
     }
 }
 
-fn decode_normal(data: &[u8], vat: &VatA) -> [f32; 3] {
-    let cnt = vat.nrm_cnt().components().min(3);
-    let fmt = vat.nrm_fmt();
-    let mut result = [0.0f32; 3];
-    let mut off = 0;
-
-    // Hardware uses fixed-point: 6 fractional bits for byte types, 14 for word types.
-    const SHIFT_BYTE: f32 = (1u32 << 6) as f32; // 64.0
-    const SHIFT_WORD: f32 = (1u32 << 14) as f32; // 16384.0
-
-    for i in 0..cnt {
-        result[i] = match fmt {
-            ComponentFormat::U8 => {
-                let v = data[off] as f32 / SHIFT_BYTE;
-                off += 1;
-                v
-            }
-            ComponentFormat::S8 => {
-                let v = data[off] as i8 as f32 / SHIFT_BYTE;
-                off += 1;
-                v
-            }
-            ComponentFormat::U16 => {
-                let v = u16::from_be_bytes([data[off], data[off + 1]]) as f32 / SHIFT_WORD;
-                off += 2;
-                v
-            }
-            ComponentFormat::S16 => {
-                let v = i16::from_be_bytes([data[off], data[off + 1]]) as f32 / SHIFT_WORD;
-                off += 2;
-                v
-            }
-            ComponentFormat::F32 => {
-                let v = f32::from_bits(u32::from_be_bytes([
-                    data[off],
-                    data[off + 1],
-                    data[off + 2],
-                    data[off + 3],
-                ]));
-                off += 4;
-                v
-            }
+#[cfg_attr(feature = "hotpath", hotpath::measure)]
+fn dispatch_decode<const SYSTEM: SystemId>(
+    gp: &mut GraphicsProcessor,
+    mmio: &mut Mmio<SYSTEM>,
+    #[cfg_attr(not(feature = "jit"), allow(unused_variables))] cmd: u8,
+    data: &[u8],
+    vertex_count: usize,
+    vf: &VertexFormat,
+    verts: &mut Vec<DrawVertex>,
+) {
+    #[cfg(feature = "jit")]
+    {
+        let vat_index = (cmd & 0b111) as usize;
+        let key = jit::VtxKey::from_cp_regs(&gp.cp_regs, vat_index);
+        let view = mmio.ram_view();
+        let arrays_ok = jit::resolve_arrays_for_draw(&gp.cp_regs, &key, view.mem1, view.mem2, &mut gp.jit_vtx_arrays);
+        let parser = if arrays_ok {
+            gp.jit_vtx.lookup_or_compile(key)
+        } else {
+            None
         };
+
+        if let Some(parser) = parser {
+            let gp_raw = gp as *mut GraphicsProcessor as *mut std::ffi::c_void;
+            let xf_mem_ptr = gp.xf_mem.as_ptr();
+            let arrays_ptr = gp.jit_vtx_arrays.0.as_ptr();
+            let base = verts.len();
+            let out_ptr = unsafe { verts.as_mut_ptr().add(base) };
+
+            unsafe {
+                parser(
+                    gp_raw,
+                    xf_mem_ptr,
+                    arrays_ptr,
+                    data.as_ptr(),
+                    out_ptr,
+                    vertex_count as u32,
+                );
+                verts.set_len(base + vertex_count);
+            }
+
+            #[cfg(feature = "vtx-jit-validate")]
+            self::run_validator(gp, mmio, cmd, key, data, vertex_count, vf, verts, base);
+            return;
+        }
     }
 
-    result
+    self::run_interpreter(gp, mmio, data, vertex_count, vf, verts);
 }
 
-fn decode_texcoord(data: &[u8], fmt: ComponentFormat, shift: u8, cnt: TexCount) -> [f32; 2] {
-    let num = cnt.components();
-    let divisor = (1u32 << shift) as f32;
-    let mut result = [0.0f32; 2];
-    let mut off = 0;
-
-    for i in 0..num {
-        result[i] = match fmt {
-            ComponentFormat::U8 => {
-                let v = data[off] as f32 / divisor;
-                off += 1;
-                v
-            }
-            ComponentFormat::S8 => {
-                let v = data[off] as i8 as f32 / divisor;
-                off += 1;
-                v
-            }
-            ComponentFormat::U16 => {
-                let v = u16::from_be_bytes([data[off], data[off + 1]]) as f32 / divisor;
-                off += 2;
-                v
-            }
-            ComponentFormat::S16 => {
-                let v = i16::from_be_bytes([data[off], data[off + 1]]) as f32 / divisor;
-                off += 2;
-                v
-            }
-            ComponentFormat::F32 => {
-                let v = f32::from_bits(u32::from_be_bytes([
-                    data[off],
-                    data[off + 1],
-                    data[off + 2],
-                    data[off + 3],
-                ]));
-                off += 4;
-                v
-            }
-        };
+#[cfg_attr(feature = "hotpath", hotpath::measure(label = "vtx_run_interpreter"))]
+fn run_interpreter<const SYSTEM: SystemId>(
+    gp: &mut GraphicsProcessor,
+    mmio: &mut Mmio<SYSTEM>,
+    data: &[u8],
+    vertex_count: usize,
+    vf: &VertexFormat,
+    verts: &mut Vec<DrawVertex>,
+) {
+    let view = mmio.ram_view();
+    let mut cur = Cursor::new(data);
+    for _ in 0..vertex_count {
+        let v = gp.decode_vertex(&mut cur, data, &view, vf);
+        verts.push(v);
     }
-    result
+}
+
+#[cfg(feature = "vtx-jit-validate")]
+fn run_validator<const SYSTEM: SystemId>(
+    gp: &mut GraphicsProcessor,
+    mmio: &mut Mmio<SYSTEM>,
+    cmd: u8,
+    key: jit::VtxKey,
+    data: &[u8],
+    vertex_count: usize,
+    vf: &VertexFormat,
+    verts: &mut Vec<DrawVertex>,
+    base: usize,
+) {
+    if !gp.jit_vtx_validator.enabled {
+        return;
+    }
+
+    let mut interp_buf = std::mem::take(&mut gp.jit_vtx_validator.interp_scratch);
+    interp_buf.clear();
+    interp_buf.reserve(vertex_count);
+
+    {
+        let view = mmio.ram_view();
+        let mut cur = Cursor::new(data);
+        for _ in 0..vertex_count {
+            let v = gp.decode_vertex(&mut cur, data, &view, vf);
+            interp_buf.push(v);
+        }
+    }
+
+    let ctx = jit::validate::CompareCtx {
+        key,
+        draw_cmd: cmd,
+        vertex_count: vertex_count as u32,
+    };
+    let jit_slice = &verts[base..base + vertex_count];
+    let mismatches = jit::validate::compare_draw_vertices(jit_slice, &interp_buf, &ctx);
+    gp.jit_vtx_validator.record(&ctx, &mismatches);
+
+    if !gp.jit_vtx_validator.use_jit_output_downstream {
+        verts[base..base + vertex_count].copy_from_slice(&interp_buf);
+    }
+
+    gp.jit_vtx_validator.interp_scratch = interp_buf;
 }

@@ -4,10 +4,19 @@ version = "0.1.0"
 edition = "2024"
 
 [features]
-idle-skip = ["gecko/idle-skip"]
-hooks = ["gecko/hooks", "dep:scripting"]
-hooks-mut-traps = ["hooks", "gecko/hooks-mut-traps", "scripting/hooks-mut-traps"]
-efb-writeback = ["backend-wgpu/efb-writeback", "gecko/efb-writeback"]
+default = ["fps-counter"]
+scripting = ["gecko/hooks", "dep:scripting"]
+scripting-mut-traps = ["scripting", "gecko/hooks-mut-traps", "scripting/hooks-mut-traps"]
+renderdoc-capture = ["backend-wgpu/renderdoc-capture"]
+audio-wav-dump = ["gecko/audio-wav-dump"]
+fps-counter = ["gecko/fps-counter"]
+jit-stats = ["gecko/jit-stats"]
+gx-stats = ["gecko/gx-stats"]
+profile = ["gecko/profile"]
+hotpath = ["dep:hotpath", "gecko/hotpath", "backend-wgpu/hotpath"]
+hotpath-alloc = ["hotpath", "hotpath/hotpath-alloc"]
+hotpath-cpu = ["hotpath", "hotpath/hotpath-cpu"]
+hotpath-tui = ["hotpath", "hotpath/tui"]
 
 [dependencies]
 gecko = { path = "../gecko" }
@@ -20,7 +29,12 @@ pollster = "0.4.0"
 egui = "0.33.3"
 egui-wgpu = "0.33.3"
 egui-winit = { version = "0.33.3", features = ["wayland", "x11"] }
-egui_plot = "0.34.1"
+tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 clap = { version = "4.6.0", features = ["derive"] }
-crossbeam-channel = "0.5.15"
+cpal = "0.17.3"
+ringbuf = "0.5.0"
+ctrlc = "3.5.2"
+mimalloc = { version = "0.1.50", default-features = false }
+spin_sleep = "1.3.3"
+hotpath = { version = "0.16.0", optional = true }

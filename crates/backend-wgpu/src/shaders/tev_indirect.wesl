@@ -72,6 +72,24 @@ struct IndirectSamples {
     samples: array<vec3<f32>, 4>,
 }
 
+fn sample_indirect_one(i: u32, in: VsOut, result: ptr<function, IndirectSamples>) {
+    let shift = i * 6u;
+    let texmap = (frame.indirect_refs >> shift) & 7u;
+    let texcoord = (frame.indirect_refs >> (shift + 3u)) & 7u;
+    let scale_pair = frame.indirect_scales[i / 2u];
+    let scale_s: u32 = select(scale_pair.x, scale_pair.z, (i & 1u) == 1u);
+    let scale_t: u32 = select(scale_pair.y, scale_pair.w, (i & 1u) == 1u);
+
+    let stq = select_texcoord(in, texcoord);
+    let direct_uv = stq_to_uv(stq);
+    let sample_uv = vec2<f32>(
+        direct_uv.x * exp2(-f32(scale_s)),
+        direct_uv.y * exp2(-f32(scale_t)),
+    );
+    let sample = sample_texmap(texmap, sample_uv);
+    (*result).samples[i] = sample.abg;
+}
+
 fn sample_indirect_textures(in: VsOut) -> IndirectSamples {
     var result: IndirectSamples;
     result.samples[0] = vec3<f32>(0.0);
@@ -79,29 +97,10 @@ fn sample_indirect_textures(in: VsOut) -> IndirectSamples {
     result.samples[2] = vec3<f32>(0.0);
     result.samples[3] = vec3<f32>(0.0);
 
-    let num_stages = frame.num_indirect_stages;
-    for (var i = 0u; i < 4u; i = i + 1u) {
-        if i >= num_stages {
-            break;
-        }
-
-        let shift = i * 6u;
-        let texmap = (frame.indirect_refs >> shift) & 7u;
-        let texcoord = (frame.indirect_refs >> (shift + 3u)) & 7u;
-        let scale_pair = frame.indirect_scales[i / 2u];
-        let scale_s: u32 = select(scale_pair.x, scale_pair.z, (i & 1u) == 1u);
-        let scale_t: u32 = select(scale_pair.y, scale_pair.w, (i & 1u) == 1u);
-
-        let stq = select_texcoord(in, texcoord);
-        let direct_uv = stq_to_uv(stq);
-        let sample_uv = vec2<f32>(
-            direct_uv.x * exp2(-f32(scale_s)),
-            direct_uv.y * exp2(-f32(scale_t)),
-        );
-        let sample = sample_texmap(texmap, sample_uv);
-
-        result.samples[i] = sample.abg;
-    }
+    @if(IND_STAGE_0_ENABLED) { sample_indirect_one(0u, in, &result); }
+    @if(IND_STAGE_1_ENABLED) { sample_indirect_one(1u, in, &result); }
+    @if(IND_STAGE_2_ENABLED) { sample_indirect_one(2u, in, &result); }
+    @if(IND_STAGE_3_ENABLED) { sample_indirect_one(3u, in, &result); }
     return result;
 }
 
@@ -111,7 +110,7 @@ struct IndirectResult {
 }
 
 fn apply_indirect(
-    stage: u32,
+    cmd: u32,
     direct_uv: vec2<f32>,
     direct_tex_size: vec2<f32>,
     presampled: IndirectSamples,
@@ -121,72 +120,76 @@ fn apply_indirect(
     result.uv = direct_uv;
     result.bump_alpha = 0.0;
 
-    let cmd = read_packed(frame.tev_indirect, stage);
-    let source_stage = cmd & 3u;
-    let format = (cmd >> 2u) & 3u;
-    let bias_s = (cmd >> 4u) & 1u;
-    let bias_t = (cmd >> 5u) & 1u;
-    let bias_u = (cmd >> 6u) & 1u;
-    let bump_source = (cmd >> 7u) & 3u;
-    let matrix_index = (cmd >> 9u) & 3u;
-    let matrix_mode = (cmd >> 11u) & 3u;
-    let wrap_s = (cmd >> 13u) & 7u;
-    let wrap_t = (cmd >> 16u) & 7u;
-    let add_previous = ((cmd >> 20u) & 1u) != 0u;
-    // TODO: bit 19?
-
-    let sample = presampled.samples[source_stage];
-
-    if bump_source != 0u {
-        var raw_byte: f32 = 0.0;
-        switch bump_source {
-            case 1u: { raw_byte = sample.x; }
-            case 2u: { raw_byte = sample.y; }
-            case 3u: { raw_byte = sample.z; }
-            default: {}
-        }
-        let byte_u8 = u32(floor(raw_byte * 255.0));
-        result.bump_alpha = f32(ind_bump_alpha_byte(byte_u8, format)) / 255.0;
-    }
-
-    let has_offset = matrix_index != 0u || wrap_s != 0u || wrap_t != 0u || add_previous;
-    if !has_offset {
+    @if(!IND_STAGE_0_ENABLED) {
         return result;
     }
 
-    let quantized = ind_quantize_and_bias(sample, format, bias_s, bias_t, bias_u);
+    @if(IND_STAGE_0_ENABLED) {
+        let source_stage = cmd & 3u;
+        let format = (cmd >> 2u) & 3u;
+        let bias_s = (cmd >> 4u) & 1u;
+        let bias_t = (cmd >> 5u) & 1u;
+        let bias_u = (cmd >> 6u) & 1u;
+        let bump_source = (cmd >> 7u) & 3u;
+        let matrix_index = (cmd >> 9u) & 3u;
+        let matrix_mode = (cmd >> 11u) & 3u;
+        let wrap_s = (cmd >> 13u) & 7u;
+        let wrap_t = (cmd >> 16u) & 7u;
+        let add_previous = ((cmd >> 20u) & 1u) != 0u;
 
-    var offset_uv = vec2<f32>(0.0);
-    if matrix_index != 0u {
-        let idx = matrix_index - 1u;
-        let row0 = vec3<f32>(frame.indirect_matrices[idx * 2u].xyz) * (1.0 / 1024.0);
-        let row1 = vec3<f32>(frame.indirect_matrices[idx * 2u + 1u].xyz) * (1.0 / 1024.0);
-        let scale_exp = frame.indirect_matrices[idx * 2u].w;
-        let inv_scale = exp2(-f32(scale_exp));
-        switch matrix_mode {
-            case 0u: {
-                offset_uv = vec2<f32>(dot(row0, quantized), dot(row1, quantized))
-                          * inv_scale
-                          / direct_tex_size;
+        let sample = presampled.samples[source_stage];
+
+        if bump_source != 0u {
+            var raw_byte: f32 = 0.0;
+            switch bump_source {
+                case 1u: { raw_byte = sample.x; }
+                case 2u: { raw_byte = sample.y; }
+                case 3u: { raw_byte = sample.z; }
+                default: {}
             }
-            case 1u: {
-                offset_uv = direct_uv * (quantized.x * (1.0 / 256.0) * inv_scale);
-            }
-            case 2u: {
-                offset_uv = direct_uv * (quantized.y * (1.0 / 256.0) * inv_scale);
-            }
-            default: {}
+            let byte_u8 = u32(floor(raw_byte * 255.0));
+            result.bump_alpha = f32(ind_bump_alpha_byte(byte_u8, format)) / 255.0;
         }
-    }
 
-    let wrapped = vec2<f32>(
-        ind_wrap_axis(direct_uv.x, wrap_s, direct_tex_size.x),
-        ind_wrap_axis(direct_uv.y, wrap_t, direct_tex_size.y),
-    );
-    var final_uv = wrapped + offset_uv;
-    if add_previous {
-        final_uv = final_uv + previous_uv;
+        let has_offset = matrix_index != 0u || wrap_s != 0u || wrap_t != 0u || add_previous;
+        if !has_offset {
+            return result;
+        }
+
+        let quantized = ind_quantize_and_bias(sample, format, bias_s, bias_t, bias_u);
+
+        var offset_uv = vec2<f32>(0.0);
+        if matrix_index != 0u {
+            let idx = matrix_index - 1u;
+            let row0 = vec3<f32>(frame.indirect_matrices[idx * 2u].xyz) * (1.0 / 1024.0);
+            let row1 = vec3<f32>(frame.indirect_matrices[idx * 2u + 1u].xyz) * (1.0 / 1024.0);
+            let scale_exp = frame.indirect_matrices[idx * 2u].w;
+            let inv_scale = exp2(-f32(scale_exp));
+            switch matrix_mode {
+                case 0u: {
+                    offset_uv = vec2<f32>(dot(row0, quantized), dot(row1, quantized))
+                              * inv_scale
+                              / direct_tex_size;
+                }
+                case 1u: {
+                    offset_uv = direct_uv * (quantized.x * (1.0 / 256.0) * inv_scale);
+                }
+                case 2u: {
+                    offset_uv = direct_uv * (quantized.y * (1.0 / 256.0) * inv_scale);
+                }
+                default: {}
+            }
+        }
+
+        let wrapped = vec2<f32>(
+            ind_wrap_axis(direct_uv.x, wrap_s, direct_tex_size.x),
+            ind_wrap_axis(direct_uv.y, wrap_t, direct_tex_size.y),
+        );
+        var final_uv = wrapped + offset_uv;
+        if add_previous {
+            final_uv = final_uv + previous_uv;
+        }
+        result.uv = final_uv;
+        return result;
     }
-    result.uv = final_uv;
-    return result;
 }

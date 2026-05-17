@@ -1,18 +1,18 @@
-include "../../submodules/chipi-spec/gamecube/gekko.chipi"
+include "../../../submodules/chipi-spec/gamecube/gekko.chipi"
 
 target rust {
     dispatch Gekko {
-        output "$OUT_DIR/gekko_lut.rs"
+        output "$OUT_DIR/gekko_jit_lut.rs"
 
-        context crate::gamecube::GameCube
-        handlers crate::gekko::interpreter
+        context crate::gekko::jit::translator::JitTranslator
+        handlers crate::gekko::jit::handlers
         handler_const crate::system::GC
         strategy fn_ptr_lut
 
-        invalid_handler crate::gekko::interpreter::invalid
+        invalid_handler crate::gekko::jit::handlers::invalid
 
         instruction_type crate::gekko::instruction::Instruction {
-            output "$OUT_DIR/gekko_instr.rs"
+            output "$OUT_DIR/gekko_jit_instr.rs"
         }
 
         handler branch {
@@ -162,12 +162,15 @@ target rust {
             dcba
             dcbz
             dcbz_l
-            icbi
             tlbie
             tlbia
             tlbsync
             tlbld
             tlbli
+        }
+
+        handler icbi {
+            icbi
         }
 
         handler logical {

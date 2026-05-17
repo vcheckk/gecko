@@ -194,6 +194,8 @@ impl<const SYSTEM: SystemId> System<SYSTEM> {
         bus_write_hooks!(self, addr, phys, 1, val, {
             if phys <= RAM_END {
                 self.mmio.ram_write_u8(phys, val);
+                #[cfg(feature = "jit")]
+                self.mmio.queue_icbi_for_range(phys, 1);
             } else {
                 self.write_u8_mmio(phys, addr, val);
             }
@@ -206,6 +208,8 @@ impl<const SYSTEM: SystemId> System<SYSTEM> {
         bus_write_hooks!(self, addr, phys, 2, val, {
             if phys <= RAM_END - 1 {
                 self.mmio.ram_write_u16(phys, val);
+                #[cfg(feature = "jit")]
+                self.mmio.queue_icbi_for_range(phys, 2);
             } else {
                 self.write_u16_mmio(phys, addr, val);
             }
@@ -218,6 +222,8 @@ impl<const SYSTEM: SystemId> System<SYSTEM> {
         bus_write_hooks!(self, addr, phys, 4, val, {
             if phys <= RAM_END - 3 {
                 self.mmio.ram_write_u32(phys, val);
+                #[cfg(feature = "jit")]
+                self.mmio.queue_icbi_for_range(phys, 4);
             } else {
                 self.write_u32_mmio(phys, addr, val);
             }
@@ -817,13 +823,7 @@ impl<const SYSTEM: SystemId> System<SYSTEM> {
                 self.mmio.phys_write_u8(phys, val);
             }
             GX_FIFO_BASE..=GX_FIFO_END => {
-                let wptr = self.pi.fifo_wptr;
-                self.mmio.phys_write_u8(wptr, val);
-                self.pi.advance_fifo_wptr(1);
-                if self.cp.control.gp_link_enable() {
-                    self.gx.mmio_write_u8(&mut self.mmio, self.render_sink.as_mut(), val);
-                    self.check_gx_pe_interrupts();
-                }
+                crate::flipper::cp::gather_pipe_write_u8(self, val);
             }
             HW_REG_BASE..=HW_REG_END => {
                 tracing::warn!(
@@ -993,13 +993,7 @@ impl<const SYSTEM: SystemId> System<SYSTEM> {
                 self.mmio.phys_write_u16(phys, val);
             }
             GX_FIFO_BASE..=GX_FIFO_END => {
-                let wptr = self.pi.fifo_wptr;
-                self.mmio.phys_write_u16(wptr, val);
-                self.pi.advance_fifo_wptr(2);
-                if self.cp.control.gp_link_enable() {
-                    self.gx.mmio_write_u16(&mut self.mmio, self.render_sink.as_mut(), val);
-                    self.check_gx_pe_interrupts();
-                }
+                crate::flipper::cp::gather_pipe_write_u16(self, val);
             }
             HW_REG_BASE..=HW_REG_END => {
                 tracing::warn!(
@@ -1168,13 +1162,7 @@ impl<const SYSTEM: SystemId> System<SYSTEM> {
                 self.mmio.phys_write_u32(phys, val);
             }
             GX_FIFO_BASE..=GX_FIFO_END => {
-                let wptr = self.pi.fifo_wptr;
-                self.mmio.phys_write_u32(wptr, val);
-                self.pi.advance_fifo_wptr(4);
-                if self.cp.control.gp_link_enable() {
-                    self.gx.mmio_write_u32(&mut self.mmio, self.render_sink.as_mut(), val);
-                    self.check_gx_pe_interrupts();
-                }
+                crate::flipper::cp::gather_pipe_write_u32(self, val);
             }
             HW_REG_BASE..=HW_REG_END => {
                 tracing::warn!(

@@ -76,7 +76,7 @@ pub enum GxAction {
     /// Issue a draw call. The renderer uses its tracked state (projection,
     /// viewport, scissor, depth, blend, alpha, textures) plus the per-draw
     /// TEV/lighting snapshot carried here.
-    Draw(DrawData),
+    Draw(Box<DrawData>),
 
     /// Copy the EFB source region to a temporary texture identified by `id`.
     /// The renderer stores this until the next [`PresentXfb`] composites it
@@ -135,23 +135,8 @@ pub enum GxAction {
         z_update: bool,
         alpha_supported: bool,
         depth_copy: bool,
+        is_intensity: bool,
     },
-}
-
-/// Payload sent from the renderer worker back to the emulator thread after
-/// an EFB-to-texture copy completes. The emu thread copies `bytes` into
-/// `Mmio::ram` at `dest_addr` and invalidates the texture-hash cache so the
-/// next `TX_SETIMAGE3` at that address re-decodes.
-///
-/// Only compiled when the `efb-writeback` feature is enabled.
-#[cfg(feature = "efb-writeback")]
-#[derive(Debug)]
-pub struct EfbWriteback {
-    pub dest_addr: Address,
-    pub bytes: Vec<u8>,
-    pub row_bytes: usize,
-    pub row_count: usize,
-    pub dest_stride_bytes: usize,
 }
 
 /// Identifies one tile in a composited XFB frame. The `id` matches the
@@ -164,19 +149,24 @@ pub struct XfbPart {
     pub offset_y: u32,
 }
 
-/// Per-draw data: primitive type, decoded vertices, modelview transform,
+/// Per-draw data: primitive type, vertex range, modelview transform,
 /// and TEV/lighting configuration (snapshotted at draw time since TEV is
-/// built up incrementally via BP writes).
-#[derive(Debug)]
+/// built up incrementally via BP writes). Vertices live in the renderer's
+/// scratch buffer (see [`RenderSink::vertex_scratch`]); `base_vertex` is
+/// the index into that buffer where this draw's vertices start and
+/// `vertex_count` is how many of them belong to this draw.
+#[derive(Debug, Default)]
 pub struct DrawData {
     pub primitive: Primitive,
-    pub vertices: Vec<DrawVertex>,
+    pub base_vertex: u32,
+    pub vertex_count: u32,
+    pub active_texcoords: u8,
     pub modelview: [[f32; 4]; 4],
     // TEV combiner state
-    pub tev_color_env: Vec<u32>,
-    pub tev_alpha_env: Vec<u32>,
-    pub tev_orders: Vec<u32>,
-    pub tev_ksel: Vec<u32>,
+    pub tev_color_env: [u32; 16],
+    pub tev_alpha_env: [u32; 16],
+    pub tev_orders: [u32; 16],
+    pub tev_ksel: [u32; 8],
     pub tev_color_regs: [[f32; 4]; 4],
     pub tev_konst_colors: [[f32; 4]; 16],
     pub num_tev_stages: u8,
@@ -189,29 +179,33 @@ pub struct DrawData {
     pub indirect_refs: u32,
     pub num_indirect_stages: u8,
     pub bump_imask: u32,
-    pub tev_indirect: Vec<u32>,
+    pub tev_indirect: [u32; 16],
     // Lighting state (2 channels: COLOR0/ALPHA0 and COLOR1/ALPHA1)
     pub color_ctrl: [ChanCtrl; 2],
     pub alpha_ctrl: [ChanCtrl; 2],
     pub ambient_color: [[f32; 4]; 2],
     pub material_color: [[f32; 4]; 2],
     pub lights: [LightData; 8],
+    pub frame_dirty: bool,
 }
 
-/// Per-vertex data after decode, ready for the renderer.
-#[derive(Debug, Clone, Default)]
+/// Per-vertex data after decode, ready for the renderer. Field order
+/// matches `backend_wgpu::GpuVertex` and the wgpu vertex attribute layout
+/// in `backend_wgpu::pipeline`, so a slice of `DrawVertex` can be uploaded
+/// directly via `bytemuck::cast_slice` without any field-shuffle copy.
+#[derive(Debug, Clone, Copy, Default, bytemuck::Pod, bytemuck::Zeroable)]
 #[repr(C)]
 pub struct DrawVertex {
     pub position: [f32; 3],
-    pub normal: [f32; 3],
     pub color0: [f32; 4],
     pub color1: [f32; 4],
+    pub normal: [f32; 3],
     pub pos_view: [f32; 3],
     pub texcoords: [[f32; 3]; 8],
 }
 
 /// Per-light snapshot for the draw call.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct LightData {
     pub color: [f32; 4],
     pub cosatt: [f32; 4],
@@ -220,19 +214,47 @@ pub struct LightData {
     pub direction: [f32; 4],
 }
 
-/// One-way sink for GX actions. The emulator pushes actions here; the
-/// renderer consumes them (typically on a separate thread).
+/// One-way sink for GX actions. The emulator pushes actions here.
 pub trait RenderSink: Send {
-    /// Submit a single action. Implementations should not block unless
-    /// back-pressure from the renderer requires it.
+    /// Submit a single action.
     fn exec(&mut self, action: GxAction);
+
+    /// Mutable handle to the sink's vertex scratch buffer. Callers append
+    /// per-draw vertices here before issuing [`GxAction::Draw`] and store the
+    /// pre-append length as [`DrawData::base_vertex`]. Real renderers
+    /// (e.g. wgpu) keep this buffer alive across draws and upload it in one
+    /// shot at flush time; headless sinks can use a throwaway local.
+    fn vertex_scratch(&mut self) -> &mut Vec<DrawVertex>;
+
+    fn flush_efb_copies(&mut self, ram: &mut crate::mmio::RamViewMut<'_>) {
+        let _ = ram;
+    }
+
+    /// Acquire a `DrawData` box for the next draw call. The default impl
+    /// allocates fresh. Real renderers override to recycle boxes that come
+    /// back through [`Self::exec`] as `GxAction::Draw(box)`. The caller
+    /// overwrites every field before issuing the action, so pool entries
+    /// don't need to be reset.
+    fn take_draw_data(&mut self) -> Box<DrawData> {
+        Box::default()
+    }
 }
 
 /// Swallows every action. Used by headless runners (tinybench, tinytracer)
 /// and as the default when no renderer is installed.
-#[derive(Debug, Clone, Copy)]
-pub struct EmptyRenderSink;
+#[derive(Debug, Default)]
+pub struct EmptyRenderSink {
+    scratch: Vec<DrawVertex>,
+}
 
 impl RenderSink for EmptyRenderSink {
-    fn exec(&mut self, _: GxAction) {}
+    fn exec(&mut self, _action: GxAction) {
+        #[cfg(feature = "rendersink-blackbox")]
+        std::hint::black_box(&_action);
+        self.scratch.clear();
+    }
+
+    fn vertex_scratch(&mut self) -> &mut Vec<DrawVertex> {
+        &mut self.scratch
+    }
 }

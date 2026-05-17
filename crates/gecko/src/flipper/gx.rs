@@ -2,6 +2,8 @@ mod bp;
 pub mod constants;
 pub mod draw;
 pub mod fifo;
+#[cfg(feature = "jit")]
+pub mod jit;
 pub mod math;
 pub mod regs;
 pub mod tev;
@@ -12,11 +14,10 @@ mod xf;
 
 use crate::flipper::gx::constants::{BP_REG_SIZE, CP_REG_SIZE, TLUT_MEM_ENTRIES, XF_MEM_SIZE};
 use crate::flipper::gx::draw::Matrix4;
-use crate::flipper::gx::regs::{AlphaCompare, BlendMode, TevAlphaEnv, TevColorEnv, TevRegisterH, TevRegisterL, ZMode};
-#[cfg(feature = "efb-writeback")]
-use crate::host::EfbWriteback;
-use crate::host::{GxAction, RenderSink, TextureKey, XfbPart};
-use crate::mmio::Mmio;
+use crate::flipper::gx::regs::{
+    AlphaCompare, BlendMode, ChanCtrl, TevAlphaEnv, TevColorEnv, TevRegisterH, TevRegisterL, ZMode,
+};
+use crate::host::{GxAction, LightData, TextureKey, XfbPart};
 use crate::system::{System, SystemId};
 use rustc_hash::FxHashMap;
 
@@ -27,9 +28,11 @@ pub struct GraphicsProcessor {
     pub token_dirty: bool,
     pub projection: Matrix4,
     pub bp_regs: Vec<u32>,
+    pub bp_mask: u32,
     pub cp_regs: Vec<u32>,
     pub xf_mem: Vec<u32>,
     pub fifo: Vec<u8>,
+    pub dl_scratch: Vec<u8>,
 
     // Current GX state to snapshot into a Draw action later
     pub cur_textures: [Option<draw::TextureDescriptor>; 8],
@@ -70,18 +73,27 @@ pub struct GraphicsProcessor {
     // XFB copies accumulated since the last vblank. `present_xfb()` drains
     // this at each field boundary to emit a PresentXfb action.
     pub xfb_copies: Vec<XfbCopy>,
+    #[cfg(feature = "jit")]
+    pub jit_vtx: jit::JitVertexEngine,
+    #[cfg(feature = "jit")]
+    pub jit_vtx_arrays: jit::ResolvedArrays,
+    #[cfg(feature = "vtx-jit-validate")]
+    pub jit_vtx_validator: jit::validate::VertexJitValidator,
+    pub lighting_dirty: bool,
+    pub konst_dirty: bool,
+    pub frame_state_dirty: bool,
+    pub cached_color_ctrl: [ChanCtrl; 2],
+    pub cached_alpha_ctrl: [ChanCtrl; 2],
+    pub cached_ambient_color: [[f32; 4]; 2],
+    pub cached_material_color: [[f32; 4]; 2],
+    pub cached_lights: [LightData; 8],
+    #[cfg(feature = "gx-stats")]
+    pub(crate) stats: GxStats,
     // Hash of the raw texture data at each cache key; used to detect when
     // texture content changes and avoid redundant decodes + LoadTexture
     // sends. Keyed by the same `TextureKey` sent to the renderer in
     // [`GxAction::LoadTexture`].
     pub texture_hashes: FxHashMap<TextureKey, u64>,
-    // Receiver for encoded EFB-to-texture bytes coming back from the
-    // renderer worker. `efb_copy` drains this synchronously right after
-    // emitting the copy action, so the next FIFO command in the same burst
-    // (usually a `TX_SETIMAGE3` that samples the just-written region)
-    // sees fresh RAM. Only present when the `efb-writeback` feature is on.
-    #[cfg(feature = "efb-writeback")]
-    pub efb_writeback_rx: Option<crossbeam_channel::Receiver<EfbWriteback>>,
 }
 
 /// A single EFB-to-XFB copy, stored until `present_xfb` computes the layout.
@@ -89,6 +101,20 @@ pub struct XfbCopy {
     pub dest_addr: u32,
     pub dest_stride: u32,
     pub src_h: u32,
+}
+
+#[cfg(feature = "gx-stats")]
+#[derive(Default, Clone)]
+pub(crate) struct GxStats {
+    pub draw_calls: u64,
+    pub vertices: u64,
+    pub fifo_bytes: u64,
+    pub create_draw_call_ns: u64,
+    pub draws_by_primitive: [u64; 8],
+    pub texture_loads: u64,
+    pub xfb_presents: u64,
+    pub bp_writes: u64,
+    pub xf_writes: u64,
 }
 
 impl GraphicsProcessor {
@@ -99,9 +125,11 @@ impl GraphicsProcessor {
             pending_token: 0,
             token_dirty: false,
             bp_regs: vec![0; BP_REG_SIZE],
+            bp_mask: 0x00ff_ffff,
             cp_regs: vec![0; CP_REG_SIZE],
             xf_mem: vec![0; XF_MEM_SIZE],
             fifo: Vec::with_capacity(256),
+            dl_scratch: Vec::with_capacity(4096),
             projection: Matrix4::default(),
             cur_textures: Default::default(),
             cur_tluts: [draw::TlutRef::default(); 8],
@@ -130,76 +158,62 @@ impl GraphicsProcessor {
             cur_scissor_offset_x: 0,
             cur_scissor_offset_y: 0,
             xfb_copies: Vec::new(),
+            #[cfg(feature = "jit")]
+            jit_vtx: jit::JitVertexEngine::new(),
+            #[cfg(feature = "jit")]
+            jit_vtx_arrays: jit::ResolvedArrays::default(),
+            #[cfg(feature = "vtx-jit-validate")]
+            jit_vtx_validator: jit::validate::VertexJitValidator::new(),
+            lighting_dirty: true,
+            konst_dirty: true,
+            frame_state_dirty: true,
+            cached_color_ctrl: [ChanCtrl::default(); 2],
+            cached_alpha_ctrl: [ChanCtrl::default(); 2],
+            cached_ambient_color: [[0.0; 4]; 2],
+            cached_material_color: [[0.0; 4]; 2],
+            cached_lights: std::array::from_fn(|_| LightData::default()),
+            #[cfg(feature = "gx-stats")]
+            stats: GxStats::default(),
             texture_hashes: FxHashMap::default(),
-            #[cfg(feature = "efb-writeback")]
-            efb_writeback_rx: None,
         }
-    }
-
-    pub fn mmio_write_u8<const SYSTEM: SystemId>(
-        &mut self,
-        mmio: &mut Mmio<SYSTEM>,
-        renderer: &mut dyn RenderSink,
-        val: u8,
-    ) {
-        self.push_u8(val);
-        self.drain_fifo(mmio, renderer);
-    }
-
-    pub fn mmio_write_u16<const SYSTEM: SystemId>(
-        &mut self,
-        mmio: &mut Mmio<SYSTEM>,
-        renderer: &mut dyn RenderSink,
-        val: u16,
-    ) {
-        self.push_u16(val);
-        self.drain_fifo(mmio, renderer);
-    }
-
-    pub fn mmio_write_u32<const SYSTEM: SystemId>(
-        &mut self,
-        mmio: &mut Mmio<SYSTEM>,
-        renderer: &mut dyn RenderSink,
-        val: u32,
-    ) {
-        self.push_u32(val);
-        self.drain_fifo(mmio, renderer);
-    }
-
-    fn execute_display_list<const SYSTEM: SystemId>(
-        &mut self,
-        mmio: &mut Mmio<SYSTEM>,
-        renderer: &mut dyn RenderSink,
-        data: &[u8],
-    ) {
-        let saved = std::mem::take(&mut self.fifo);
-        self.fifo = data.to_vec();
-        self.drain_fifo(mmio, renderer);
-        self.fifo = saved;
     }
 }
 
-pub fn present_xfb<const SYSTEM: SystemId>(gc: &mut System<SYSTEM>) {
-    if gc.gx.xfb_copies.is_empty() {
+#[cfg_attr(feature = "hotpath", hotpath::measure)]
+pub fn present_xfb<const SYSTEM: SystemId>(sys: &mut System<SYSTEM>) {
+    sys.vi_present_seen_this_frame = true;
+    sys.vsync_pending = true;
+
+    #[cfg(feature = "fps-counter")]
+    {
+        sys.fps_counter.vsync_count += 1;
+    }
+
+    if sys.gx.xfb_copies.is_empty() {
         return;
     }
 
-    let (frame_w, frame_h) = gc.vi.frame_dimensions();
-    let vi_base = gc.vi.xfb_addr();
+    #[cfg(feature = "gx-stats")]
+    {
+        sys.gx.stats.xfb_presents += 1;
+    }
+
+    let (frame_w, frame_h) = sys.vi.frame_dimensions();
+    let vi_base = sys.vi.xfb_addr();
 
     // All copies in a frame share the same stride.
-    let bytes_per_row = gc.gx.xfb_copies[0].dest_stride as u64;
+    let bytes_per_row = sys.gx.xfb_copies[0].dest_stride as u64;
     if bytes_per_row == 0 {
         tracing::warn!("present_xfb: zero bytes_per_row, dropping XFB copies");
-        gc.gx.xfb_copies.clear();
+        sys.gx.xfb_copies.clear();
         return;
     }
     let xfb_bytes = bytes_per_row * frame_h as u64;
     let stride_in_pixels = (bytes_per_row / 2) as u32;
 
     let build_parts = |base_addr: u32| -> Vec<XfbPart> {
-        let mut parts = Vec::with_capacity(gc.gx.xfb_copies.len());
-        for (id, copy) in gc.gx.xfb_copies.iter().enumerate() {
+        let mut parts = Vec::with_capacity(sys.gx.xfb_copies.len());
+        for (id, copy) in sys.gx.xfb_copies.iter().enumerate() {
             if copy.dest_addr < base_addr {
                 continue;
             }
@@ -234,7 +248,7 @@ pub fn present_xfb<const SYSTEM: SystemId>(gc: &mut System<SYSTEM>) {
         parts
     };
 
-    let min_base = gc.gx.xfb_copies.iter().map(|c| c.dest_addr).min().unwrap_or(0);
+    let min_base = sys.gx.xfb_copies.iter().map(|c| c.dest_addr).min().unwrap_or(0);
 
     let parts = if vi_base != 0 {
         let p = build_parts(vi_base);
@@ -245,16 +259,16 @@ pub fn present_xfb<const SYSTEM: SystemId>(gc: &mut System<SYSTEM>) {
 
     if parts.is_empty() {
         tracing::warn!("present_xfb: no XFB copies matched the frame buffer region");
-        gc.gx.xfb_copies.clear();
+        sys.gx.xfb_copies.clear();
         return;
     }
 
-    gc.render_sink.exec(GxAction::PresentXfb {
+    sys.render_sink.exec(GxAction::PresentXfb {
         width: frame_w,
         height: frame_h,
         parts,
     });
-    gc.gx.xfb_copies.clear();
+    sys.gx.xfb_copies.clear();
 }
 
 impl<const SYSTEM: SystemId> System<SYSTEM> {

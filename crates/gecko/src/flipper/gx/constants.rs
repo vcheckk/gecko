@@ -143,6 +143,7 @@ pub const BP_IND_MTX_A2: usize = 0x0C;
 pub const BP_IND_MTX_B2: usize = 0x0D;
 pub const BP_IND_MTX_C2: usize = 0x0E;
 pub const BP_BUMP_IMASK: usize = 0x0F;
+pub const BP_BP_MASK: usize = 0xFE;
 // 16 per-TEV-stage indirect command registers at 0x10..=0x1F
 pub const BP_IND_CMD_0: usize = 0x10;
 pub const BP_IND_CMD_COUNT: usize = 16;

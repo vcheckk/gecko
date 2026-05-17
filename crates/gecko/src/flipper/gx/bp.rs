@@ -3,14 +3,26 @@ use super::regs::*;
 use super::{GraphicsProcessor, draw, texture};
 use crate::host::{GxAction, RenderSink, TextureKey};
 use crate::mmio::{RamView, RamViewMut};
-#[cfg(feature = "efb-writeback")]
-use std::time::Duration;
 
 impl GraphicsProcessor {
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
     pub fn load_bp(&mut self, renderer: &mut dyn RenderSink, ram: &mut RamViewMut<'_>, data: &[u8]) {
         let idx = data[0] as usize;
-        let val = u32::from_be_bytes([0, data[1], data[2], data[3]]);
+        let raw_val = u32::from_be_bytes([0, data[1], data[2], data[3]]);
+
+        let old = self.bp_regs[idx];
+        let val = (old & !self.bp_mask) | (raw_val & self.bp_mask);
         self.bp_regs[idx] = val;
+        if idx == BP_BP_MASK {
+            self.bp_mask = val & 0x00ff_ffff;
+        } else {
+            self.bp_mask = 0x00ff_ffff;
+        }
+
+        #[cfg(feature = "gx-stats")]
+        {
+            self.stats.bp_writes += 1;
+        }
 
         tracing::debug!(
             reg_idx = format!("{idx:02X}"),
@@ -77,6 +89,7 @@ impl GraphicsProcessor {
             }
             BP_PE_ALPHA_COMPARE => {
                 self.cur_alpha_compare = AlphaCompare::from_raw(val);
+                self.frame_state_dirty = true;
                 renderer.exec(GxAction::SetAlphaCompare(self.cur_alpha_compare));
             }
             _ => {}
@@ -86,16 +99,19 @@ impl GraphicsProcessor {
         // Even addresses = color env, odd = alpha env
         if idx >= BP_TEV_COLOR_ENV_0 && idx < BP_TEV_COLOR_ENV_0 + 32 {
             self.load_tev_env(idx, val);
+            self.frame_state_dirty = true;
         }
 
         // TEV rasterizer order registers (RAS1_TREF0-7, 0x28-0x2F)
         if idx >= BP_RAS1_TREF0 && idx < BP_RAS1_TREF0 + BP_RAS1_TREF_COUNT {
             self.cur_tev_orders[idx - BP_RAS1_TREF0] = TevOrder::from_raw(val);
+            self.frame_state_dirty = true;
         }
 
         // TEV color registers (0xE0-0xE7): pairs of lo/hi writes
         if idx >= BP_TEV_REGISTERL_0 && idx <= BP_TEV_REGISTERL_0 + 7 {
             self.load_tev_register(idx, val);
+            self.frame_state_dirty = true;
         }
 
         // GEN_MODE, extract num TEV stages + cull mode + num indirect stages
@@ -110,67 +126,74 @@ impl GraphicsProcessor {
             );
             self.cur_num_tev_stages = stages;
             self.cur_num_indirect_stages = indirect_stages;
-            self.resolve_konst_colors();
+            self.konst_dirty = true;
+            self.frame_state_dirty = true;
             renderer.exec(GxAction::SetCullMode(gen_mode.cull_mode()));
         }
 
-        // Indirect-matrix rows at 0x06..=0x0E. Each write lands in one
-        // of the A, B, or C rows of one of three matrices.
-        match idx {
-            BP_IND_MTX_A0 => self.cur_indirect_matrices[0].a = val,
-            BP_IND_MTX_B0 => self.cur_indirect_matrices[0].b = val,
-            BP_IND_MTX_C0 => self.cur_indirect_matrices[0].c = val,
-            BP_IND_MTX_A1 => self.cur_indirect_matrices[1].a = val,
-            BP_IND_MTX_B1 => self.cur_indirect_matrices[1].b = val,
-            BP_IND_MTX_C1 => self.cur_indirect_matrices[1].c = val,
-            BP_IND_MTX_A2 => self.cur_indirect_matrices[2].a = val,
-            BP_IND_MTX_B2 => self.cur_indirect_matrices[2].b = val,
-            BP_IND_MTX_C2 => self.cur_indirect_matrices[2].c = val,
-            _ => {}
+        // Indirect-matrix rows at 0x06..=0x0E
+        if (BP_IND_MTX_A0..=BP_IND_MTX_C2).contains(&idx) {
+            let off = idx - BP_IND_MTX_A0;
+            let mtx = &mut self.cur_indirect_matrices[off / 3];
+            match off % 3 {
+                0 => mtx.a = val,
+                1 => mtx.b = val,
+                _ => mtx.c = val,
+            }
+            self.frame_state_dirty = true;
         }
 
         // TODO: BumpIMask is captured for measure but never read on the
         // GPU side. AFAICT it's unused. Dolphin agrees.
         if idx == BP_BUMP_IMASK {
             self.cur_bump_imask = val;
+            self.frame_state_dirty = true;
         }
 
         // Per TEV stage indirect commands at 0x10..=0x1F.
         if idx >= BP_IND_CMD_0 && idx < BP_IND_CMD_0 + BP_IND_CMD_COUNT {
             self.cur_tev_indirect[idx - BP_IND_CMD_0] = TevIndirect::from_raw(val);
+            self.frame_state_dirty = true;
         }
 
         // Indirect texcoord scale pair. SS0 covers indirect stages 0-1,
         // SS1 covers 2-3.
         if idx == BP_RAS1_SS0 {
             self.cur_indirect_scales[0] = Ras1Ss::from_raw(val);
+            self.frame_state_dirty = true;
         } else if idx == BP_RAS1_SS1 {
             self.cur_indirect_scales[1] = Ras1Ss::from_raw(val);
+            self.frame_state_dirty = true;
         }
 
         if idx == BP_RAS1_IREF {
             self.cur_indirect_refs = Ras1IRef::from_raw(val);
+            self.frame_state_dirty = true;
         }
 
         // TEV KSEL (constant color selection) registers: recalculate konst colors
         if idx >= BP_TEV_KSEL_0 && idx <= BP_TEV_KSEL_0 + 7 {
-            self.resolve_konst_colors();
+            self.konst_dirty = true;
+            self.frame_state_dirty = true;
         }
 
         // TEV color register writes also affect konst colors
         if idx >= BP_TEV_REGISTERL_0 && idx <= BP_TEV_REGISTERL_0 + 7 {
-            self.resolve_konst_colors();
+            self.konst_dirty = true;
+            self.frame_state_dirty = true;
         }
 
         // PE finish
         if idx == BP_PE_DONE && (val & BP_PE_DONE_FINISH_BIT) != 0 {
             self.raise_interrupt = true;
+            renderer.flush_efb_copies(ram);
         }
 
         // PE token (0x47): store token value only
         if idx == BP_PE_TOKEN {
             self.pending_token = (val & 0xFFFF) as u16;
             self.token_dirty = true;
+            renderer.flush_efb_copies(ram);
         }
 
         // PE token interrupt (0x48): store token value + raise interrupt
@@ -179,6 +202,7 @@ impl GraphicsProcessor {
             self.pending_token = (val & 0xFFFF) as u16;
             self.token_dirty = true;
             self.raise_token_interrupt = true;
+            renderer.flush_efb_copies(ram);
         }
 
         // Scissor registers (BP 0x20 = TL, 0x21 = BR, 0x59 = OFFSET).
@@ -197,7 +221,7 @@ impl GraphicsProcessor {
 
         // EFB copy trigger (BP 0x52)
         if idx == BP_PE_COPY_CMD {
-            self.efb_copy(renderer, ram, val);
+            self.efb_copy(renderer, val);
         }
     }
 
@@ -276,6 +300,12 @@ impl GraphicsProcessor {
                 mag_filter: mode0.mag_filter(),
                 min_filter: mode0.min_filter(),
             };
+
+            #[cfg(feature = "gx-stats")]
+            {
+                self.stats.texture_loads += 1;
+            }
+
             renderer.exec(GxAction::LoadTexture {
                 id: cache_id,
                 width,
@@ -391,7 +421,8 @@ impl GraphicsProcessor {
         }
     }
 
-    fn efb_copy(&mut self, renderer: &mut dyn RenderSink, ram: &mut RamViewMut<'_>, trigger: u32) {
+    #[cfg_attr(feature = "hotpath", hotpath::measure)]
+    fn efb_copy(&mut self, renderer: &mut dyn RenderSink, trigger: u32) {
         let src = EfbCopySrc::from_raw(self.bp_regs[BP_PE_COPY_SRC]);
         let dims = EfbCopyDims::from_raw(self.bp_regs[BP_PE_COPY_DIMS]);
         let src_x = src.left() as u32;
@@ -480,6 +511,7 @@ impl GraphicsProcessor {
             let alpha_update = self.cur_blend_mode.alpha_update();
             let z_update = self.cur_zmode.update_enable();
 
+            let depth_copy = self.cur_pe_control.pixel_format().is_depth_only();
             renderer.exec(GxAction::CopyEfbToTexture {
                 dest_addr,
                 src_x,
@@ -496,38 +528,14 @@ impl GraphicsProcessor {
                 alpha_update,
                 z_update,
                 alpha_supported: self.cur_pe_control.pixel_format().has_alpha(),
-                depth_copy: self.cur_pe_control.pixel_format().is_depth_only(),
+                depth_copy,
+                is_intensity: cmd.intensity_fmt(),
             });
 
-            // Writeback overwrites RAM, so drop every cached hash that
-            // points at this ram_addr (any TLUT variant) to force a redecode.
-            #[cfg(feature = "efb-writeback")]
+            // Drop cached hashes for this ram_addr (any TLUT variant) so the
+            // next snapshot at this address re decodes once the deferred
+            // RAM writeback lands.
             self.texture_hashes.retain(|k, _| k.ram_addr != dest_addr);
-            let _ = ram;
-
-            // With `efb-writeback`: block until the renderer finishes the
-            // readback + encode and ships the encoded bytes back. This
-            // preserves ordering with subsequent FIFO commands (a
-            // `TX_SETIMAGE3` at `dest_addr` immediately after this copy
-            // sees up-to-date RAM + a freshly re-hashable texture).
-            #[cfg(feature = "efb-writeback")]
-            if let Some(rx) = &self.efb_writeback_rx {
-                match rx.recv_timeout(Duration::from_secs(2)) {
-                    Ok(wb) => {
-                        texture::write_strided_copy_to_ram(
-                            ram,
-                            wb.dest_addr,
-                            &wb.bytes,
-                            wb.row_bytes,
-                            wb.row_count,
-                            wb.dest_stride_bytes,
-                        );
-                    }
-                    Err(err) => {
-                        tracing::warn!(?err, "efb writeback recv timed out");
-                    }
-                }
-            }
         }
     }
 

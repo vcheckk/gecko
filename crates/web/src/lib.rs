@@ -4,10 +4,11 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 use egui::ViewportId;
-use gecko::flipper::si::pad::{self, PadStatus, STICK_CENTER};
+use gecko::HostInput;
+use gecko::flipper::si::pad::{self, PadStatus, STICK_CENTER, STICK_MAX, STICK_MIN, TRIGGER_MAX, TRIGGER_MIN};
 use gecko::flipper::vi::regs::RefreshRate;
 use gecko::gamecube::GameCube;
-use gecko::host::{GxAction, RenderSink};
+use gecko::host::{DrawVertex, GxAction, RenderSink};
 use image::Dol;
 use wasm_bindgen::prelude::*;
 use winit::application::ApplicationHandler;
@@ -45,16 +46,50 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
 }
 ";
 
-type ActionQueue = Arc<Mutex<Vec<GxAction>>>;
+/// Shared between [`WebSink`] (running on the emulator side) and the main
+/// thread that drains the queue. The `epoch` is bumped each time the main
+/// thread drains; the sink uses it to know when to reset its mirrored
+/// vertex scratch.
+struct WebSinkShared {
+    actions: Vec<GxAction>,
+    scratch: Vec<DrawVertex>,
+    epoch: u64,
+}
+
+type WebSinkQueue = Arc<Mutex<WebSinkShared>>;
 
 /// RenderSink that queues actions for synchronous processing on the main thread.
 struct WebSink {
-    queue: ActionQueue,
+    shared: WebSinkQueue,
+    /// Mirror of `shared.scratch`, written by the gecko side via
+    /// [`RenderSink::vertex_scratch`]. Synced into `shared.scratch` on every
+    /// `exec`. Cleared when the main thread bumps `shared.epoch`.
+    scratch: Vec<DrawVertex>,
+    last_epoch: u64,
 }
 
 impl RenderSink for WebSink {
     fn exec(&mut self, action: GxAction) {
-        self.queue.lock().unwrap().push(action);
+        let mut s = self.shared.lock().unwrap();
+        if s.epoch != self.last_epoch {
+            self.scratch.clear();
+            self.last_epoch = s.epoch;
+        }
+        if self.scratch.len() > s.scratch.len() {
+            let start = s.scratch.len();
+            s.scratch.extend_from_slice(&self.scratch[start..]);
+        }
+        s.actions.push(action);
+    }
+
+    fn vertex_scratch(&mut self) -> &mut Vec<DrawVertex> {
+        let s = self.shared.lock().unwrap();
+        if s.epoch != self.last_epoch {
+            self.scratch.clear();
+            self.last_epoch = s.epoch;
+        }
+        drop(s);
+        &mut self.scratch
     }
 }
 
@@ -244,7 +279,7 @@ impl State {
     fn render(
         &mut self,
         emulator: &mut GameCube,
-        action_queue: &ActionQueue,
+        action_queue: &WebSinkQueue,
         #[cfg(feature = "debug")] debug_state: &mut debug_ui::DebugState,
         window: &Window,
     ) {
@@ -269,8 +304,15 @@ impl State {
         #[cfg(not(feature = "debug"))]
         emulator.run_until_vsync();
 
-        // Drain and process all queued GxActions.
-        let actions: Vec<GxAction> = action_queue.lock().unwrap().drain(..).collect();
+        // Drain queued GxActions and the matching vertex scratch.
+        let (actions, scratch): (Vec<GxAction>, Vec<DrawVertex>) = {
+            let mut s = action_queue.lock().unwrap();
+            s.epoch = s.epoch.wrapping_add(1);
+            (std::mem::take(&mut s.actions), std::mem::take(&mut s.scratch))
+        };
+        // Make the drained scratch the renderer's vertex buffer for this drain so
+        // each `Draw` action's `base_vertex` indexes into it correctly.
+        let _old = self.gx_renderer.replace_vertex_scratch(scratch);
         for action in &actions {
             self.gx_renderer.process_action(&self.device, &self.queue, action);
         }
@@ -400,7 +442,8 @@ type SharedState = Rc<RefCell<Option<State>>>;
 
 struct App {
     emulator: GameCube,
-    action_queue: ActionQueue,
+    input: HostInput,
+    action_queue: WebSinkQueue,
     window: Option<Arc<Window>>,
     state: SharedState,
     #[cfg(feature = "debug")]
@@ -449,7 +492,10 @@ impl ApplicationHandler for App {
             WindowEvent::KeyboardInput { event, .. } => {
                 let pressed = event.state.is_pressed();
                 if let PhysicalKey::Code(key) = event.physical_key {
-                    update_pad(self.emulator.primary_controller_mut(), key, pressed);
+                    if let HostInput::Gc(pad) = &mut self.input {
+                        update_pad(pad, key, pressed);
+                    }
+                    self.emulator.apply_host_input(&self.input);
                 }
             }
             WindowEvent::RedrawRequested => {
@@ -487,20 +533,25 @@ pub fn start_emulator(rom_data: &[u8], filename: String, dsp_irom: Option<Vec<u8
         emulator.dsp.load_irom(&irom);
     }
 
-    emulator.add_primary_controller(PadStatus {
-        connected: true,
-        ..PadStatus::default()
-    });
+    let input = HostInput::gc_connected();
+    emulator.apply_host_input(&input);
 
     // Install the WebSink as the emulator's render sink.
-    let action_queue: ActionQueue = Arc::new(Mutex::new(Vec::new()));
+    let action_queue: WebSinkQueue = Arc::new(Mutex::new(WebSinkShared {
+        actions: Vec::new(),
+        scratch: Vec::new(),
+        epoch: 0,
+    }));
     emulator.render_sink = Box::new(WebSink {
-        queue: action_queue.clone(),
+        shared: action_queue.clone(),
+        scratch: Vec::new(),
+        last_epoch: 0,
     });
 
     let event_loop = EventLoop::new().unwrap();
     let app = App {
         emulator,
+        input,
         action_queue,
         window: None,
         state: Rc::new(RefCell::new(None)),
@@ -521,10 +572,10 @@ fn update_pad(pad: &mut PadStatus, key: KeyCode, pressed: bool) {
     };
 
     match key {
-        KeyCode::ArrowUp => pad.stick_y = if pressed { 255 } else { STICK_CENTER },
-        KeyCode::ArrowDown => pad.stick_y = if pressed { 0 } else { STICK_CENTER },
-        KeyCode::ArrowLeft => pad.stick_x = if pressed { 0 } else { STICK_CENTER },
-        KeyCode::ArrowRight => pad.stick_x = if pressed { 255 } else { STICK_CENTER },
+        KeyCode::ArrowUp => pad.stick_y = if pressed { STICK_MAX } else { STICK_CENTER },
+        KeyCode::ArrowDown => pad.stick_y = if pressed { STICK_MIN } else { STICK_CENTER },
+        KeyCode::ArrowLeft => pad.stick_x = if pressed { STICK_MIN } else { STICK_CENTER },
+        KeyCode::ArrowRight => pad.stick_x = if pressed { STICK_MAX } else { STICK_CENTER },
         KeyCode::KeyX => set_button(&mut pad.buttons, pad::A, pressed),
         KeyCode::KeyZ => set_button(&mut pad.buttons, pad::B, pressed),
         KeyCode::KeyC => set_button(&mut pad.buttons, pad::X, pressed),
@@ -532,11 +583,11 @@ fn update_pad(pad: &mut PadStatus, key: KeyCode, pressed: bool) {
         KeyCode::Enter => set_button(&mut pad.buttons, pad::START, pressed),
         KeyCode::KeyA => {
             set_button(&mut pad.buttons, pad::L, pressed);
-            pad.trigger_left = if pressed { 255 } else { 0 };
+            pad.trigger_left = if pressed { TRIGGER_MAX } else { TRIGGER_MIN };
         }
         KeyCode::KeyS => {
             set_button(&mut pad.buttons, pad::R, pressed);
-            pad.trigger_right = if pressed { 255 } else { 0 };
+            pad.trigger_right = if pressed { TRIGGER_MAX } else { TRIGGER_MIN };
         }
         KeyCode::KeyD => set_button(&mut pad.buttons, pad::Z, pressed),
         KeyCode::KeyI => set_button(&mut pad.buttons, pad::DPAD_UP, pressed),

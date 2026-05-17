@@ -1,16 +1,16 @@
 use crate::GxRenderer;
-use crossbeam_channel::{Receiver, Sender, bounded};
-#[cfg(feature = "efb-writeback")]
-use gecko::host::EfbWriteback;
-use gecko::host::{GxAction, RenderSink};
-use std::sync::{Arc, Mutex};
-#[cfg(feature = "renderdoc-capture")]
-use std::time::Duration;
 
-const CHANNEL_CAPACITY: usize = 8192;
+use gecko::host::{DrawData, DrawVertex, GxAction, RenderSink};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::thread::JoinHandle;
+use std::time::Instant;
 
-/// Holds the XFB output texture view that the worker updates and the main
-/// thread reads for blitting.
+pub type FrameReadyCallback = Box<dyn Fn(Instant) + Send + Sync>;
+
+const WORK_QUEUE_LIMIT: usize = 4096;
+
+/// Holds the XFB output texture view that the render worker updates and the
+/// windowing thread reads for blitting.
 pub struct Shared {
     pub output: Mutex<wgpu::TextureView>,
 }
@@ -24,134 +24,211 @@ pub enum TargetAspect {
     Ratio(f32),
 }
 
-enum WorkerMsg {
-    Action(GxAction),
-    #[cfg(feature = "renderdoc-capture")]
-    BeginEmulatedFrame {
-        ack: Sender<()>,
-    },
-    #[cfg(feature = "renderdoc-capture")]
-    EndEmulatedFrame,
-    #[cfg(feature = "renderdoc-capture")]
-    CaptureNextEmulatedFrame,
-    #[cfg(feature = "renderdoc-capture")]
-    StartFrameCapture,
-    #[cfg(feature = "renderdoc-capture")]
-    EndFrameCapture,
-    #[cfg(feature = "renderdoc-capture")]
-    TriggerCapture,
+pub struct ThreadedSink {
+    work_tx: crossbeam_channel::Sender<WorkerCommand>,
+    recycled_draw_data_rx: crossbeam_channel::Receiver<Box<DrawData>>,
+    worker_thread: Option<JoinHandle<()>>,
+    scratch: Vec<DrawVertex>,
+    scratch_sent_len: usize,
 }
 
-fn worker(mut gx: GxRenderer, device: wgpu::Device, queue: wgpu::Queue, shared: Arc<Shared>, rx: Receiver<WorkerMsg>) {
-    #[cfg(feature = "renderdoc-capture")]
-    let mut renderdoc = crate::renderdoc_capture::RenderDocCapture::new();
+struct RenderWorker {
+    gx: GxRenderer,
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    shared: Arc<Shared>,
+    frame_ready_cb: Arc<OnceLock<FrameReadyCallback>>,
+    recycled_draw_data_tx: crossbeam_channel::Sender<Box<DrawData>>,
+}
 
-    while let Ok(msg) = rx.recv() {
-        let action = match msg {
-            WorkerMsg::Action(action) => action,
-            #[cfg(feature = "renderdoc-capture")]
-            WorkerMsg::BeginEmulatedFrame { ack } => {
-                renderdoc.begin_emulated_frame();
-                submit_debug_marker(&device, &queue, "Emulated Frame Begin", "GX FIFO execution begins");
-                let _ = ack.send(());
-                continue;
+struct ActionMessage {
+    action: GxAction,
+    vertices: Vec<DrawVertex>,
+}
+
+struct EfbDrainRequest {
+    mem1_addr: usize,
+    mem1_len: usize,
+    mem2_addr: usize,
+    mem2_len: usize,
+    done_tx: crossbeam_channel::Sender<()>,
+}
+
+enum WorkerCommand {
+    Action(ActionMessage),
+    DrainEfbCopies(EfbDrainRequest),
+    Shutdown,
+}
+
+impl RenderWorker {
+    fn run(mut self, work_rx: crossbeam_channel::Receiver<WorkerCommand>) {
+        while let Ok(command) = work_rx.recv() {
+            match command {
+                WorkerCommand::Action(message) => self.exec(message),
+                WorkerCommand::DrainEfbCopies(request) => self.drain_efb_copies(request),
+                WorkerCommand::Shutdown => break,
             }
-            #[cfg(feature = "renderdoc-capture")]
-            WorkerMsg::EndEmulatedFrame => {
-                submit_debug_marker(&device, &queue, "Emulated Frame End", "GX FIFO execution ends");
-                renderdoc.end_emulated_frame();
-                continue;
+        }
+
+        self.gx.submit_pending(&self.queue);
+        match self.gx.save_shader_cache() {
+            Ok(n) => tracing::info!(num_variants = n, "saved shader cache"),
+            Err(err) => tracing::warn!(?err, "failed to save shader cache"),
+        }
+        match self.gx.save_pipeline_cache() {
+            Ok(n) => tracing::info!(num_pipelines = n, "saved pipeline cache"),
+            Err(err) => tracing::warn!(?err, "failed to save pipeline cache"),
+        }
+    }
+
+    fn exec(&mut self, message: ActionMessage) {
+        if !message.vertices.is_empty() {
+            self.gx.scratch_vertices.extend_from_slice(&message.vertices);
+        }
+
+        let resets_scratch = action_resets_vertex_scratch(&message.action);
+        self.gx.process_action(&self.device, &self.queue, &message.action);
+
+        match message.action {
+            GxAction::PresentXfb { .. } => {
+                let view = self.gx.xfb_view.clone();
+                *self.shared.output.lock().unwrap() = view;
+                if let Some(cb) = self.frame_ready_cb.get() {
+                    cb(Instant::now());
+                }
             }
-            #[cfg(feature = "renderdoc-capture")]
-            WorkerMsg::CaptureNextEmulatedFrame => {
-                renderdoc.request_next_emulated_frame();
-                continue;
+            GxAction::Draw(boxed) => {
+                let _ = self.recycled_draw_data_tx.send(boxed);
             }
-            #[cfg(feature = "renderdoc-capture")]
-            WorkerMsg::StartFrameCapture => {
-                renderdoc.start_frame_capture();
-                continue;
-            }
-            #[cfg(feature = "renderdoc-capture")]
-            WorkerMsg::EndFrameCapture => {
-                renderdoc.end_frame_capture();
-                continue;
-            }
-            #[cfg(feature = "renderdoc-capture")]
-            WorkerMsg::TriggerCapture => {
-                renderdoc.trigger_capture();
-                continue;
-            }
+            _ => {}
+        }
+
+        if resets_scratch {
+            self.gx.scratch_vertices.clear();
+        }
+    }
+
+    fn drain_efb_copies(&mut self, request: EfbDrainRequest) {
+        let mut ram = unsafe {
+            // The emu thread blocks on `done_tx` and holds the only mutable
+            // RamViewMut while this command runs. FIFO channel ordering also
+            // ensures all prior EFB copy commands have reached the worker.
+            let mem1 = std::slice::from_raw_parts_mut(request.mem1_addr as *mut u8, request.mem1_len);
+            let mem2 = std::slice::from_raw_parts_mut(request.mem2_addr as *mut u8, request.mem2_len);
+            gecko::mmio::RamViewMut { mem1, mem2 }
+        };
+        self.gx.drain_pending_writebacks(&self.device, &self.queue, &mut ram);
+        let _ = request.done_tx.send(());
+    }
+}
+
+impl ThreadedSink {
+    fn pending_vertices(&mut self) -> Vec<DrawVertex> {
+        if self.scratch.len() <= self.scratch_sent_len {
+            return Vec::new();
+        }
+
+        let vertices = self.scratch[self.scratch_sent_len..].to_vec();
+        self.scratch_sent_len = self.scratch.len();
+        vertices
+    }
+}
+
+impl RenderSink for ThreadedSink {
+    fn exec(&mut self, action: GxAction) {
+        let resets_scratch = action_resets_vertex_scratch(&action);
+        let message = ActionMessage {
+            action,
+            vertices: self.pending_vertices(),
         };
 
-        gx.process_action(&device, &queue, &action);
+        self.work_tx
+            .send(WorkerCommand::Action(message))
+            .expect("render worker thread stopped");
 
-        // After a PresentXfb, update the shared output so the main thread
-        // picks up the latest composited frame on its next blit.
-        if matches!(action, GxAction::PresentXfb { .. }) {
-            let mut output = shared.output.lock().unwrap();
-            *output = gx.xfb_view.clone();
+        if resets_scratch {
+            self.scratch.clear();
+            self.scratch_sent_len = 0;
+        }
+    }
+
+    fn flush_efb_copies(&mut self, ram: &mut gecko::mmio::RamViewMut<'_>) {
+        let (done_tx, done_rx) = crossbeam_channel::bounded(0);
+        let request = EfbDrainRequest {
+            mem1_addr: ram.mem1.as_mut_ptr() as usize,
+            mem1_len: ram.mem1.len(),
+            mem2_addr: ram.mem2.as_mut_ptr() as usize,
+            mem2_len: ram.mem2.len(),
+            done_tx,
+        };
+
+        self.work_tx
+            .send(WorkerCommand::DrainEfbCopies(request))
+            .expect("render worker thread stopped");
+        done_rx.recv().expect("render worker thread stopped");
+    }
+
+    fn vertex_scratch(&mut self) -> &mut Vec<DrawVertex> {
+        &mut self.scratch
+    }
+
+    fn take_draw_data(&mut self) -> Box<DrawData> {
+        self.recycled_draw_data_rx.try_recv().unwrap_or_default()
+    }
+}
+
+impl Drop for ThreadedSink {
+    fn drop(&mut self) {
+        if let Some(worker_thread) = self.worker_thread.take() {
+            let _ = self.work_tx.send(WorkerCommand::Shutdown);
+            if let Err(err) = worker_thread.join() {
+                tracing::error!(?err, "render worker thread panicked");
+            }
         }
     }
 }
 
-#[cfg(feature = "renderdoc-capture")]
-fn submit_debug_marker(device: &wgpu::Device, queue: &wgpu::Queue, group: &'static str, marker: &'static str) {
-    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some(group) });
-    encoder.push_debug_group(group);
-    encoder.insert_debug_marker(marker);
-    encoder.pop_debug_group();
-    queue.submit([encoder.finish()]);
+fn action_resets_vertex_scratch(action: &GxAction) -> bool {
+    match action {
+        GxAction::InvalidateCaches
+        | GxAction::CopyXfb { .. }
+        | GxAction::PresentXfb { .. }
+        | GxAction::CopyEfbToTexture { .. } => true,
+        #[cfg(not(target_arch = "wasm32"))]
+        GxAction::DumpTextures { .. } => true,
+        _ => false,
+    }
 }
 
 #[derive(Clone)]
 pub struct Renderer {
-    tx: Sender<WorkerMsg>,
     shared: Arc<Shared>,
     device: wgpu::Device,
     blit_pipeline: wgpu::RenderPipeline,
     blit_bind_group_layout: wgpu::BindGroupLayout,
     blit_sampler: wgpu::Sampler,
     target_aspect: TargetAspect,
-    /// Receiver end of the EFB-to-texture writeback channel. Taken by the
-    /// emulator setup code (via [`Renderer::take_writeback_rx`]) and
-    /// installed into `GraphicsProcessor::efb_writeback_rx`. Wrapped in
-    /// `Arc<Mutex<Option<_>>>` so `Renderer` stays `Clone`. Only built when
-    /// `efb-writeback` is enabled.
-    #[cfg(feature = "efb-writeback")]
-    writeback_rx: Arc<Mutex<Option<Receiver<EfbWriteback>>>>,
+    frame_ready_cb: Arc<OnceLock<FrameReadyCallback>>,
+    #[cfg(feature = "renderdoc-capture")]
+    renderdoc: Arc<Mutex<crate::renderdoc_capture::RenderDocCapture>>,
 }
 
 impl Renderer {
-    /// Create the renderer, spawning the worker thread. The caller must
-    /// provide a wgpu device and queue.
     pub fn new(
         device: wgpu::Device,
         queue: wgpu::Queue,
         surface_format: wgpu::TextureFormat,
         target_aspect: TargetAspect,
-    ) -> Self {
-        #[cfg(feature = "efb-writeback")]
+    ) -> (Self, ThreadedSink) {
         let mut gx = GxRenderer::new(&device, &queue, surface_format);
-        #[cfg(not(feature = "efb-writeback"))]
-        let gx = GxRenderer::new(&device, &queue, surface_format);
-
-        // Writeback channel: GxRenderer sends encoded EFB-to-texture bytes,
-        // GraphicsProcessor consumes them synchronously on the emu thread.
-        // Only created with `efb-writeback`.
-        #[cfg(feature = "efb-writeback")]
-        let writeback_rx = {
-            let (writeback_tx, writeback_rx) = bounded::<EfbWriteback>(CHANNEL_CAPACITY);
-            gx.set_efb_writeback_tx(writeback_tx);
-            writeback_rx
-        };
+        gx.prewarm_pipeline_cache(&device);
 
         // Initial shared output: the XFB view (black until first PresentXfb).
         let shared = Arc::new(Shared {
             output: Mutex::new(gx.xfb_view.clone()),
         });
 
-        // Build the blit pipeline on the main-thread side.
+        // Build the blit pipeline.
         let blit_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("efb_blit_shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("shaders/efb_blit.wgsl").into()),
@@ -217,84 +294,103 @@ impl Renderer {
             ..Default::default()
         });
 
-        let (tx, rx) = bounded(CHANNEL_CAPACITY);
+        let frame_ready_cb: Arc<OnceLock<FrameReadyCallback>> = Arc::new(OnceLock::new());
 
-        // Spawn the worker.
-        let worker_shared = shared.clone();
-        let worker_device = device.clone();
-        let worker_queue = queue.clone();
-        std::thread::Builder::new()
-            .name("gx-renderer".into())
-            .spawn(move || worker(gx, worker_device, worker_queue, worker_shared, rx))
-            .expect("failed to spawn renderer worker");
+        let (work_tx, work_rx) = crossbeam_channel::bounded(WORK_QUEUE_LIMIT);
+        let (recycled_draw_data_tx, recycled_draw_data_rx) = crossbeam_channel::unbounded();
+        let worker = RenderWorker {
+            gx,
+            device: device.clone(),
+            queue,
+            shared: shared.clone(),
+            frame_ready_cb: frame_ready_cb.clone(),
+            recycled_draw_data_tx,
+        };
+        let worker_thread = std::thread::Builder::new()
+            .name("backend-wgpu render".to_string())
+            .spawn(move || worker.run(work_rx))
+            .expect("failed to spawn render worker thread");
 
-        Renderer {
-            tx,
+        let sink = ThreadedSink {
+            work_tx,
+            recycled_draw_data_rx,
+            worker_thread: Some(worker_thread),
+            scratch: Vec::new(),
+            scratch_sent_len: 0,
+        };
+
+        let renderer = Renderer {
             shared,
             device,
             blit_pipeline,
             blit_bind_group_layout,
             blit_sampler,
             target_aspect,
-            #[cfg(feature = "efb-writeback")]
-            writeback_rx: Arc::new(Mutex::new(Some(writeback_rx))),
+            frame_ready_cb,
+            #[cfg(feature = "renderdoc-capture")]
+            renderdoc: Arc::new(Mutex::new(crate::renderdoc_capture::RenderDocCapture::new())),
+        };
+
+        (renderer, sink)
+    }
+
+    #[cfg(feature = "renderdoc-capture")]
+    pub fn begin_renderdoc_emulated_frame(&self) {
+        if let Ok(mut rd) = self.renderdoc.lock() {
+            rd.begin_emulated_frame();
         }
     }
 
-    /// Take the writeback receiver once. Returns `Some` on the first call,
-    /// `None` thereafter. The caller installs it into
-    /// `GraphicsProcessor::efb_writeback_rx`. Only available when the
-    /// `efb-writeback` feature is enabled.
-    #[cfg(feature = "efb-writeback")]
-    pub fn take_writeback_rx(&self) -> Option<Receiver<EfbWriteback>> {
-        self.writeback_rx.lock().ok()?.take()
+    #[cfg(feature = "renderdoc-capture")]
+    pub fn end_renderdoc_emulated_frame(&self) {
+        if let Ok(mut rd) = self.renderdoc.lock() {
+            rd.end_emulated_frame();
+        }
+    }
+
+    #[cfg(feature = "renderdoc-capture")]
+    pub fn capture_next_renderdoc_emulated_frame(&self) {
+        if let Ok(mut rd) = self.renderdoc.lock() {
+            rd.request_next_emulated_frame();
+        }
+    }
+
+    #[cfg(feature = "renderdoc-capture")]
+    pub fn start_renderdoc_frame_capture(&self) {
+        if let Ok(mut rd) = self.renderdoc.lock() {
+            rd.start_frame_capture();
+        }
+    }
+
+    #[cfg(feature = "renderdoc-capture")]
+    pub fn end_renderdoc_frame_capture(&self) {
+        if let Ok(mut rd) = self.renderdoc.lock() {
+            rd.end_frame_capture();
+        }
+    }
+
+    #[cfg(feature = "renderdoc-capture")]
+    pub fn trigger_renderdoc_capture(&self) {
+        if let Ok(mut rd) = self.renderdoc.lock() {
+            rd.trigger_capture();
+        }
+    }
+
+    pub fn set_frame_ready_callback<F>(&self, cb: F)
+    where
+        F: Fn(Instant) + Send + Sync + 'static,
+    {
+        let _ = self.frame_ready_cb.set(Box::new(cb));
     }
 
     pub fn target_aspect(&self) -> TargetAspect {
         self.target_aspect
     }
 
-    #[cfg(feature = "renderdoc-capture")]
-    pub fn begin_renderdoc_emulated_frame(&self) {
-        let (ack_tx, ack_rx) = bounded(0);
-        if self.tx.send(WorkerMsg::BeginEmulatedFrame { ack: ack_tx }).is_err() {
-            tracing::warn!("failed to send RenderDoc frame-begin marker to renderer worker");
-            return;
-        }
-
-        if ack_rx.recv_timeout(Duration::from_secs(1)).is_err() {
-            tracing::warn!("timed out waiting for renderer worker to begin RenderDoc frame");
-        }
-    }
-
-    #[cfg(feature = "renderdoc-capture")]
-    pub fn end_renderdoc_emulated_frame(&self) {
-        let _ = self.tx.send(WorkerMsg::EndEmulatedFrame);
-    }
-
-    #[cfg(feature = "renderdoc-capture")]
-    pub fn capture_next_renderdoc_emulated_frame(&self) {
-        let _ = self.tx.send(WorkerMsg::CaptureNextEmulatedFrame);
-    }
-
-    #[cfg(feature = "renderdoc-capture")]
-    pub fn start_renderdoc_frame_capture(&self) {
-        let _ = self.tx.send(WorkerMsg::StartFrameCapture);
-    }
-
-    #[cfg(feature = "renderdoc-capture")]
-    pub fn end_renderdoc_frame_capture(&self) {
-        let _ = self.tx.send(WorkerMsg::EndFrameCapture);
-    }
-
-    #[cfg(feature = "renderdoc-capture")]
-    pub fn trigger_renderdoc_capture(&self) {
-        let _ = self.tx.send(WorkerMsg::TriggerCapture);
-    }
-
     /// Blit the latest XFB output to the given render target. `target_size`
     /// is the destination view's pixel size; used to letterbox/pillarbox the
-    /// XFB to `self.target_aspect`. Called by the main thread on each redraw.
+    /// XFB to `self.target_aspect`. Called by the windowing thread on each
+    /// redraw.
     pub fn blit(&self, queue: &wgpu::Queue, target: &wgpu::TextureView, target_size: (u32, u32)) {
         let output = self.shared.output.lock().unwrap();
         let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -343,12 +439,6 @@ impl Renderer {
         }
         encoder.pop_debug_group();
         queue.submit([encoder.finish()]);
-    }
-}
-
-impl RenderSink for Renderer {
-    fn exec(&mut self, action: GxAction) {
-        let _ = self.tx.send(WorkerMsg::Action(action));
     }
 }
 

@@ -1,19 +1,17 @@
-include "../../submodules/chipi-spec/gamecube/dsp.chipi"
+include "../../../submodules/chipi-spec/gamecube/dsp.chipi"
 
 target rust {
     dispatch GcDsp {
-        output "$OUT_DIR/dsp_lut.rs"
+        output "$OUT_DIR/dsp_jit_lut.rs"
 
-        context crate::gamecube::GameCube
-        handlers crate::flipper::dsp::interpreter
+        context crate::flipper::dsp::jit::translate::TranslatorCtx
+        handlers crate::flipper::dsp::jit::translate
         handler_const crate::system::GC
         strategy fn_ptr_lut
 
-        invalid_handler crate::flipper::dsp::interpreter::invalid
+        invalid_handler crate::flipper::dsp::jit::translate::invalid
 
-        instruction_type crate::flipper::dsp::instruction::Instruction {
-            output "$OUT_DIR/dsp_instr.rs"
-        }
+        instruction_type crate::flipper::dsp::instruction::Instruction
 
         handler control {
             nop
@@ -181,11 +179,9 @@ target rust {
         }
 
         subdispatch GcDspExt {
-            invalid_handler crate::flipper::dsp::interpreter::invalid_ext
+            invalid_handler crate::flipper::dsp::jit::translate::invalid_ext
 
-            instruction_type crate::flipper::dsp::instruction::GcDspExt {
-                output "$OUT_DIR/dsp_ext_instr.rs"
-            }
+            instruction_type crate::flipper::dsp::instruction::GcDspExt
 
             handler ext_addr {
                 ext_dr
