@@ -202,7 +202,34 @@ impl State {
                     .movable(false)
                     .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
                     .frame(frame)
+                    .default_width(280.0)
                     .show(&ctx, |ui| {
+                        ui.vertical_centered(|ui| {
+                            ui.add_space(4.0);
+                            ui.label(egui::RichText::new("Gecko").size(20.0).strong());
+                            ui.label("GameCube / Wii emulator");
+                            ui.add_space(6.0);
+                            ui.hyperlink_to("https://github.com/ioncodes/gecko", "https://github.com/ioncodes/gecko");
+                            ui.add_space(8.0);
+                        });
+
+                        ui.separator();
+                        ui.add_space(4.0);
+
+                        ui.label(egui::RichText::new("Author").strong());
+                        ui.label("Layle");
+
+                        ui.add_space(8.0);
+
+                        ui.label(egui::RichText::new("Acknowledgements").strong());
+                        ui.label("zayd");
+                        ui.label("vxpm");
+                        ui.label("hazelwiss");
+                        ui.label("Dolphin team");
+
+                        ui.add_space(10.0);
+                        ui.separator();
+                        ui.add_space(4.0);
                         ui.vertical_centered(|ui| {
                             ui.label(
                                 egui::RichText::new("press space to start")

@@ -31,6 +31,7 @@ Gecko is developed with homebrew development and reverse engineering in mind, bu
 - `wgpu` based renderer backend
   - Supports all major platforms
 - `wesl` based specialized shader compiler
+- JIT and shader cache
 - Frame pacing
 - Modular audio backend, defaults to `cpal`
   - Supports mixing audio sinks
