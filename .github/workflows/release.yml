@@ -66,21 +66,21 @@ jobs:
           perl -pi -e 's/^#panic = "abort"$/panic = "abort"/' Cargo.toml
           perl -pi -e 's/^#codegen-units = 1$/codegen-units = 1/' Cargo.toml
 
-      - name: Build debugger + multitool + gecko-app (release)
-        run: cargo build --release --target ${{ matrix.target }} -p debugger -p multitool -p gecko-app
+      - name: Build debugger + multitool + gecko-app + tinyapp (release)
+        run: cargo build --release --target ${{ matrix.target }} -p debugger -p multitool -p gecko-app -p tinyapp
 
-      - name: Build debugger + multitool + gecko-app (dev profile, with tracing output)
-        run: cargo build --profile dev --target ${{ matrix.target }} -p debugger -p multitool -p gecko-app
+      - name: Build debugger + multitool + gecko-app + tinyapp (dev profile, with tracing output)
+        run: cargo build --profile dev --target ${{ matrix.target }} -p debugger -p multitool -p gecko-app -p tinyapp
 
       # - name: Patch chipi dispatch strategy (tinyapp only)
       #   shell: bash
       #   run: perl -pi -e 's/strategy fn_ptr_lut/strategy jump_table/g' crates/gecko/spec/*.bindings.chipi
 
-      - name: Build tinyapp (release)
-        run: cargo build --release --package tinyapp --target ${{ matrix.target }}
+      # - name: Build tinyapp (release)
+      #   run: cargo build --release --package tinyapp --target ${{ matrix.target }}
 
-      - name: Build tinyapp (dev profile, with tracing output)
-        run: cargo build --profile dev --package tinyapp --target ${{ matrix.target }}
+      # - name: Build tinyapp (dev profile, with tracing output)
+      #   run: cargo build --profile dev --package tinyapp --target ${{ matrix.target }}
 
       - name: Package artifacts
         shell: bash
