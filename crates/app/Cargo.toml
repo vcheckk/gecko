@@ -1,0 +1,26 @@
+[package]
+name = "gecko-app"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "gecko"
+path = "src/main.rs"
+
+[dependencies]
+image = { path = "../image" }
+iced = { version = "0.14.0", features = ["tokio", "advanced", "image"] }
+iced_aw = { version = "0.14.1", default-features = false, features = ["menu"] }
+tokio = { version = "1.52.3", features = ["rt-multi-thread", "fs", "macros", "sync"] }
+futures = { version = "0.3.32", default-features = false, features = ["std", "async-await"] }
+serde = { version = "1.0.228", features = ["derive", "rc"] }
+serde_bytes = "0.11.19"
+bincode = { version = "2.0.1", default-features = false, features = ["serde", "std"] }
+toml = "1.1.2"
+walkdir = "2.5.0"
+rfd = { version = "0.17.2", default-features = false, features = ["xdg-portal"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+clap = { version = "4.6.1", features = ["derive"] }
+anyhow = "1.0.102"
+webbrowser = "1.0.5"
