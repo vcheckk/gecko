@@ -1,3 +1,5 @@
+#[cfg(feature = "banner")]
+pub mod banner;
 pub mod dol;
 pub mod dvd;
 pub mod iso;
