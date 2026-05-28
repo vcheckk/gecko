@@ -1,4 +1,6 @@
+use crate::hollywood::ipc::fs::nand;
 use crate::hollywood::ipc::{IPC_EINVAL, IosDevice};
+use std::path::Path;
 
 const SYSCONF_SIZE: usize = 0x4000;
 const FOOTER_OFFSET: usize = 0x3FFC;
@@ -25,11 +27,15 @@ pub struct SysConf {
 }
 
 impl SysConf {
-    pub fn new() -> Self {
-        Self {
-            blob: self::build_blob(),
-            pos: 0,
+    pub fn new(host_fs_root: &Path) -> Self {
+        let blob = self::build_blob();
+
+        let path = host_fs_root.join("shared2/sys/SYSCONF");
+        if !path.exists() {
+            nand::write_new(&path, &blob);
         }
+
+        Self { blob, pos: 0 }
     }
 }
 

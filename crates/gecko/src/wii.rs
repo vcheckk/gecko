@@ -255,6 +255,13 @@ impl Wii {
         let video_mode: u32 = if header.is_ntsc() { 0 } else { 1 };
         emu.mmio.phys_write_u32(0x0000_00CC, video_mode);
 
+        // Generate the System Menu setting.txt for this disc's region if the
+        // host fs root doesn't already carry one.
+        crate::hollywood::ipc::fs::nand::ensure_setting_txt(&emu.starlet.host_fs_root, header.game_code);
+
+        // Create the booting title's content/data dirs so saves can be written.
+        crate::hollywood::ipc::fs::nand::ensure_title_dirs(&emu.starlet.host_fs_root, dvd.tmd_title_id());
+
         // Game ID dup.
         emu.mmio.phys_write_u32(0x0000_3180, game_id);
 

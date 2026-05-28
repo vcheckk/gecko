@@ -1,4 +1,5 @@
 pub mod host;
+pub mod nand;
 
 use crate::hollywood::ipc::{DeviceContext, IosDevice};
 use std::path::{Path, PathBuf};
