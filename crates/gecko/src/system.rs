@@ -175,12 +175,10 @@ impl<const SYSTEM: SystemId> System<SYSTEM> {
             }
         }
 
-        // Fetch and execute next instruction
         self.gekko.cia = self.gekko.pc;
         self.gekko.nia = self.gekko.cia.wrapping_add(4);
         let instr = crate::gekko::instruction::Instruction(self.mmio.fetch_instruction(self.gekko.cia));
         crate::gekko::dispatch(self, instr);
-        self.scheduler.cycles += 2; // TODO: Track properly?
 
         // CPU post-hook
         #[cfg(feature = "hooks")]
