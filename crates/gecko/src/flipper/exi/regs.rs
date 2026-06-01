@@ -106,7 +106,7 @@ impl<const SYSTEM: SystemId> MmioAccess<System<SYSTEM>> for Channel0Status {
 #[chapa::bitfield(u32, order = lsb0)]
 #[derive(Copy, Clone, Debug)]
 pub struct Channel0DmaAddress {
-    #[bits(5..=25, alias = "addr")]
+    #[bits(5..=31, alias = "addr")]
     pub address: u32,
 }
 crate::mmio_reg!(Channel0DmaAddress: u32 @ 0xCC006804);
@@ -209,7 +209,7 @@ impl<const SYSTEM: SystemId> MmioAccess<System<SYSTEM>> for Channel1Status {
 #[chapa::bitfield(u32, order = lsb0)]
 #[derive(Copy, Clone, Debug)]
 pub struct Channel1DmaAddress {
-    #[bits(5..=25, alias = "addr")]
+    #[bits(5..=31, alias = "addr")]
     pub address: u32,
 }
 crate::mmio_reg!(Channel1DmaAddress: u32 @ 0xCC006818);
@@ -314,7 +314,7 @@ impl_channel_status!(Channel0Status, Channel1Status, Channel2Status);
 #[chapa::bitfield(u32, order = lsb0)]
 #[derive(Copy, Clone, Debug)]
 pub struct Channel2DmaAddress {
-    #[bits(5..=25, alias = "addr")]
+    #[bits(5..=31, alias = "addr")]
     pub address: u32,
 }
 crate::mmio_reg!(Channel2DmaAddress: u32 @ 0xCC00682C);
