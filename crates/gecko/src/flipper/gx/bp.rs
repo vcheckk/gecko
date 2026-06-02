@@ -479,15 +479,18 @@ impl GraphicsProcessor {
                 _ => 1.0,
             };
             // XFB copy: queue the copy for present_xfb() to compose at vblank,
-            // and tell the renderer to snapshot the EFB region now.
-            let id = self.xfb_copies.len() as u32;
+            // and tell the renderer to snapshot the EFB region now. The renderer
+            // keys its snapshot textures by this id; using the destination
+            // address makes them persist per XFB buffer across frames, so present_xfb
+            // can show the buffer the VI is scanning even on frames where the game only
+            // copied the other (back) buffer.
             self.xfb_copies.push(super::XfbCopy {
                 dest_addr,
                 dest_stride,
                 src_h,
             });
             renderer.exec(GxAction::CopyXfb {
-                id,
+                id: dest_addr,
                 src_x,
                 src_y,
                 src_w,

@@ -546,7 +546,9 @@ impl GxRenderer {
 
         for part in parts {
             let Some((tex, _)) = self.xfb_copies.get(&part.id) else {
-                tracing::warn!(id = part.id, "present_xfb: XFB copy not found in cache, skipping part");
+                // Expected when the VI scans a buffer we've never snapshotted
+                // (e.g. before the first copy to it); the previous frame is held.
+                tracing::debug!(id = part.id, "present_xfb: XFB copy not found in cache, skipping part");
                 let marker = format!("PresentXfb skip: missing part id={}", part.id);
                 encoder.insert_debug_marker(&marker);
                 continue;

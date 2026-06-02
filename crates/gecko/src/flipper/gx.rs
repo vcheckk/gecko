@@ -221,14 +221,16 @@ pub fn present_xfb<const SYSTEM: SystemId>(sys: &mut System<SYSTEM>) {
 
     let build_parts = |base_addr: u32| -> Vec<XfbPart> {
         let mut parts = Vec::with_capacity(sys.gx.xfb_copies.len());
-        for (id, copy) in sys.gx.xfb_copies.iter().enumerate() {
+        for copy in sys.gx.xfb_copies.iter() {
             if copy.dest_addr < base_addr {
                 continue;
             }
+
             let delta_bytes = (copy.dest_addr - base_addr) as u64;
             if delta_bytes >= xfb_bytes {
                 continue;
             }
+            
             let delta_pixels = (delta_bytes / 2) as u32;
             let offset_x = delta_pixels % stride_in_pixels;
             let offset_y = delta_pixels / stride_in_pixels;
@@ -248,7 +250,7 @@ pub fn present_xfb<const SYSTEM: SystemId>(sys: &mut System<SYSTEM>) {
             }
 
             parts.push(XfbPart {
-                id: id as u32,
+                id: copy.dest_addr,
                 offset_x,
                 offset_y,
             });
@@ -259,13 +261,17 @@ pub fn present_xfb<const SYSTEM: SystemId>(sys: &mut System<SYSTEM>) {
     let min_base = sys.gx.xfb_copies.iter().map(|c| c.dest_addr).min().unwrap_or(0);
 
     let parts = if frame_base != 0 {
-        build_parts(frame_base)
+        let mut p = build_parts(frame_base);
+        if p.is_empty() {
+            p.push(XfbPart { id: frame_base, offset_x: 0, offset_y: 0 });
+        }
+        p
     } else {
         build_parts(min_base)
     };
 
     if parts.is_empty() {
-        tracing::debug!("present_xfb: no copy for the scanned-out buffer, holding last frame");
+        tracing::debug!("present_xfb: no XFB copies matched the frame buffer region");
         sys.gx.xfb_copies.clear();
         return;
     }
