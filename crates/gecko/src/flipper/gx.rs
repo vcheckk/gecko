@@ -213,6 +213,12 @@ pub fn present_xfb<const SYSTEM: SystemId>(sys: &mut System<SYSTEM>) {
     let xfb_bytes = bytes_per_row * frame_h as u64;
     let stride_in_pixels = (bytes_per_row / 2) as u32;
 
+    let frame_base = if sys.vi.dcr.interlaced() && sys.vi.in_even_field() {
+        vi_base.saturating_sub(bytes_per_row as u32)
+    } else {
+        vi_base
+    };
+
     let build_parts = |base_addr: u32| -> Vec<XfbPart> {
         let mut parts = Vec::with_capacity(sys.gx.xfb_copies.len());
         for (id, copy) in sys.gx.xfb_copies.iter().enumerate() {
@@ -231,7 +237,7 @@ pub fn present_xfb<const SYSTEM: SystemId>(sys: &mut System<SYSTEM>) {
             // A non-zero offset_x means this copy belongs to a different
             // buffer that happens to sit nearby in memory, reject it? TODO
             if offset_x != 0 || offset_y >= frame_h as u32 {
-                tracing::warn!(
+                tracing::debug!(
                     copy_dest = copy.dest_addr,
                     base = base_addr,
                     offset_x,
@@ -252,15 +258,14 @@ pub fn present_xfb<const SYSTEM: SystemId>(sys: &mut System<SYSTEM>) {
 
     let min_base = sys.gx.xfb_copies.iter().map(|c| c.dest_addr).min().unwrap_or(0);
 
-    let parts = if vi_base != 0 {
-        let p = build_parts(vi_base);
-        if !p.is_empty() { p } else { build_parts(min_base) }
+    let parts = if frame_base != 0 {
+        build_parts(frame_base)
     } else {
         build_parts(min_base)
     };
 
     if parts.is_empty() {
-        tracing::warn!("present_xfb: no XFB copies matched the frame buffer region");
+        tracing::debug!("present_xfb: no copy for the scanned-out buffer, holding last frame");
         sys.gx.xfb_copies.clear();
         return;
     }
