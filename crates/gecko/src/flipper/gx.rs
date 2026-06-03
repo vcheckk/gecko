@@ -230,7 +230,7 @@ pub fn present_xfb<const SYSTEM: SystemId>(sys: &mut System<SYSTEM>) {
             if delta_bytes >= xfb_bytes {
                 continue;
             }
-            
+
             let delta_pixels = (delta_bytes / 2) as u32;
             let offset_x = delta_pixels % stride_in_pixels;
             let offset_y = delta_pixels / stride_in_pixels;
@@ -263,7 +263,11 @@ pub fn present_xfb<const SYSTEM: SystemId>(sys: &mut System<SYSTEM>) {
     let parts = if frame_base != 0 {
         let mut p = build_parts(frame_base);
         if p.is_empty() {
-            p.push(XfbPart { id: frame_base, offset_x: 0, offset_y: 0 });
+            p.push(XfbPart {
+                id: frame_base,
+                offset_x: 0,
+                offset_y: 0,
+            });
         }
         p
     } else {
