@@ -218,6 +218,65 @@ impl Drop for ThreadedSink {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+pub struct InlineSink {
+    gx: Arc<Mutex<GxRenderer>>,
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    scratch: Vec<DrawVertex>,
+    recycled_draw_data: Vec<Box<DrawData>>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl InlineSink {
+    pub fn new(
+        device: wgpu::Device,
+        queue: wgpu::Queue,
+        surface_format: wgpu::TextureFormat,
+    ) -> (Arc<Mutex<GxRenderer>>, Self) {
+        let gx = Arc::new(Mutex::new(GxRenderer::new(&device, &queue, surface_format)));
+        let sink = InlineSink {
+            gx: gx.clone(),
+            device,
+            queue,
+            scratch: Vec::new(),
+            recycled_draw_data: Vec::new(),
+        };
+        (gx, sink)
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl RenderSink for InlineSink {
+    fn exec(&mut self, action: GxAction) {
+        self.gx.lock().unwrap().process_action_with_external_scratch(
+            &self.device,
+            &self.queue,
+            &action,
+            &mut self.scratch,
+        );
+        
+        if let GxAction::Draw(boxed) = action {
+            self.recycled_draw_data.push(boxed);
+        }
+    }
+
+    fn vertex_scratch(&mut self) -> &mut Vec<DrawVertex> {
+        &mut self.scratch
+    }
+
+    fn flush_efb_copies(&mut self, ram: &mut gecko::mmio::RamViewMut<'_>) {
+        self.gx
+            .lock()
+            .unwrap()
+            .drain_pending_writebacks(&self.device, &self.queue, ram);
+    }
+
+    fn take_draw_data(&mut self) -> Box<DrawData> {
+        self.recycled_draw_data.pop().unwrap_or_default()
+    }
+}
+
 pub fn action_resets_vertex_scratch(action: &GxAction) -> bool {
     match action {
         GxAction::InvalidateCaches
