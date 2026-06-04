@@ -132,9 +132,6 @@ impl State {
     }
 
     fn render(&mut self, window: &Window, waiting: bool) {
-        #[cfg(feature = "renderdoc-capture")]
-        self.renderer.begin_renderdoc_emulated_frame();
-
         if !waiting && let Some(intended) = self.intended_present_time {
             let target = intended + self.pacer_offset;
             let now = Instant::now();
@@ -326,9 +323,6 @@ impl State {
             let next = (base + self.frame_period).max(now);
             self.intended_present_time = Some(next);
         }
-
-        #[cfg(feature = "renderdoc-capture")]
-        self.renderer.end_renderdoc_emulated_frame();
     }
 }
 

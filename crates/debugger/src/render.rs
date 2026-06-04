@@ -107,17 +107,12 @@ impl RenderState {
             debugger_ui.lua_log.extend(host.drain_logs());
         }
 
-        #[cfg(feature = "renderdoc-capture")]
-        self.renderer.begin_renderdoc_emulated_frame();
-
         debugger_ui.debugger.tick(emulator);
 
         let frame = match self.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(f) | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
             status => {
                 eprintln!("surface error: {status:?}");
-                #[cfg(feature = "renderdoc-capture")]
-                self.renderer.end_renderdoc_emulated_frame();
                 return;
             }
         };
@@ -397,9 +392,6 @@ impl RenderState {
         #[cfg(feature = "renderdoc-capture")]
         self.submit_swapchain_present_marker();
         frame.present();
-
-        #[cfg(feature = "renderdoc-capture")]
-        self.renderer.end_renderdoc_emulated_frame();
     }
 
     #[cfg(feature = "renderdoc-capture")]

@@ -50,6 +50,8 @@ struct RenderWorker {
     shared: Arc<Shared>,
     frame_ready_cb: Arc<OnceLock<FrameReadyCallback>>,
     recycled_draw_data_tx: crossbeam_channel::Sender<Box<DrawData>>,
+    #[cfg(feature = "renderdoc-capture")]
+    renderdoc: Arc<Mutex<crate::renderdoc_capture::RenderDocCapture>>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -86,6 +88,10 @@ impl RenderWorker {
         }
 
         self.gx.submit_pending(&self.queue);
+        #[cfg(feature = "renderdoc-capture")]
+        if let Ok(mut rd) = self.renderdoc.lock() {
+            rd.end_emulated_frame();
+        }
         match self.gx.save_shader_cache() {
             Ok(n) => tracing::info!(num_variants = n, "saved shader cache"),
             Err(err) => tracing::warn!(?err, "failed to save shader cache"),
@@ -106,6 +112,12 @@ impl RenderWorker {
 
         match message.action {
             GxAction::PresentXfb { .. } => {
+                #[cfg(feature = "renderdoc-capture")]
+                if let Ok(mut rd) = self.renderdoc.lock() {
+                    rd.end_emulated_frame();
+                    rd.begin_emulated_frame();
+                }
+
                 let view = self.gx.xfb_view.clone();
                 *self.shared.output.lock().unwrap() = view;
                 if let Some(cb) = self.frame_ready_cb.get() {
@@ -316,6 +328,9 @@ impl Renderer {
 
         let frame_ready_cb: Arc<OnceLock<FrameReadyCallback>> = Arc::new(OnceLock::new());
 
+        #[cfg(feature = "renderdoc-capture")]
+        let renderdoc = Arc::new(Mutex::new(crate::renderdoc_capture::RenderDocCapture::new()));
+
         let (work_tx, work_rx) = crossbeam_channel::bounded(WORK_QUEUE_LIMIT);
         let (recycled_draw_data_tx, recycled_draw_data_rx) = crossbeam_channel::unbounded();
         let worker = RenderWorker {
@@ -325,6 +340,8 @@ impl Renderer {
             shared: shared.clone(),
             frame_ready_cb: frame_ready_cb.clone(),
             recycled_draw_data_tx,
+            #[cfg(feature = "renderdoc-capture")]
+            renderdoc: renderdoc.clone(),
         };
         let worker_thread = std::thread::Builder::new()
             .name("backend-wgpu render".to_string())
@@ -348,24 +365,10 @@ impl Renderer {
             target_aspect,
             frame_ready_cb,
             #[cfg(feature = "renderdoc-capture")]
-            renderdoc: Arc::new(Mutex::new(crate::renderdoc_capture::RenderDocCapture::new())),
+            renderdoc,
         };
 
         (renderer, sink)
-    }
-
-    #[cfg(feature = "renderdoc-capture")]
-    pub fn begin_renderdoc_emulated_frame(&self) {
-        if let Ok(mut rd) = self.renderdoc.lock() {
-            rd.begin_emulated_frame();
-        }
-    }
-
-    #[cfg(feature = "renderdoc-capture")]
-    pub fn end_renderdoc_emulated_frame(&self) {
-        if let Ok(mut rd) = self.renderdoc.lock() {
-            rd.end_emulated_frame();
-        }
     }
 
     #[cfg(feature = "renderdoc-capture")]
