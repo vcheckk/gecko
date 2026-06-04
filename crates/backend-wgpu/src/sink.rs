@@ -33,6 +33,24 @@ pub enum TargetAspect {
     Ratio(f32),
 }
 
+impl TargetAspect {
+    pub fn from_arg(arg: &str, is_wii: bool) -> Self {
+        match arg {
+            "auto" => {
+                if is_wii {
+                    TargetAspect::Ratio(16.0 / 9.0)
+                } else {
+                    TargetAspect::Ratio(4.0 / 3.0)
+                }
+            }
+            "4:3" => TargetAspect::Ratio(4.0 / 3.0),
+            "16:9" => TargetAspect::Ratio(16.0 / 9.0),
+            "stretch" => TargetAspect::Stretch,
+            other => panic!("--aspect must be auto|4:3|16:9|stretch, got {other:?}"),
+        }
+    }
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 pub struct ThreadedSink {
     work_tx: crossbeam_channel::Sender<WorkerCommand>,
@@ -255,7 +273,7 @@ impl RenderSink for InlineSink {
             &action,
             &mut self.scratch,
         );
-        
+
         if let GxAction::Draw(boxed) = action {
             self.recycled_draw_data.push(boxed);
         }

@@ -32,6 +32,7 @@ chipi-build = "0.9.1"
 
 [dependencies]
 chapa = "0.1.2"
+dff = { path = "../dff" }
 tracing = { version = "0.1.44", features = ["release_max_level_off"] }
 image = { path = "../image", default-features = false }
 disasm = { path = "../disasm" }

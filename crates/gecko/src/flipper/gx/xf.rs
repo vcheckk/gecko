@@ -176,6 +176,11 @@ impl GraphicsProcessor {
             );
             return;
         };
+
+        if let Some(rec) = self.recorder.as_deref_mut() {
+            rec.use_memory(ram, src_addr as u32, n * 4, super::recorder::MemoryUpdateType::XfData);
+        }
+
         for i in 0..n {
             let off = i * 4;
             let val = u32::from_be_bytes([src[off], src[off + 1], src[off + 2], src[off + 3]]);

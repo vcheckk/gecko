@@ -5,6 +5,7 @@ pub mod fifo;
 #[cfg(feature = "jit")]
 pub mod jit;
 pub mod math;
+pub mod recorder;
 pub mod regs;
 pub mod tev;
 mod texgen;
@@ -33,6 +34,9 @@ pub struct GraphicsProcessor {
     pub xf_mem: Vec<u32>,
     pub fifo: Vec<u8>,
     pub dl_scratch: Vec<u8>,
+
+    // FIFO recording stuff
+    pub recorder: Option<Box<recorder::FifoRecorder>>,
 
     // Current GX state to snapshot into a Draw action later
     pub cur_textures: [Option<draw::TextureDescriptor>; 8],
@@ -131,6 +135,7 @@ impl GraphicsProcessor {
             xf_mem: vec![0; XF_MEM_SIZE],
             fifo: Vec::with_capacity(256),
             dl_scratch: Vec::with_capacity(4096),
+            recorder: None,
             projection: Matrix4::default(),
             cur_textures: Default::default(),
             cur_tluts: [draw::TlutRef::default(); 8],
@@ -193,6 +198,17 @@ pub fn present_xfb<const SYSTEM: SystemId>(sys: &mut System<SYSTEM>) {
 
     if sys.gx.xfb_copies.is_empty() {
         return;
+    }
+
+    if sys.gx.recorder.is_some() {
+        let mut rec = sys.gx.recorder.take().unwrap();
+        rec.on_frame_boundary(
+            &sys.gx,
+            sys.cp.fifo_base(),
+            sys.cp.fifo_end(),
+            SYSTEM == crate::system::WII,
+        );
+        sys.gx.recorder = Some(rec);
     }
 
     #[cfg(feature = "gx-stats")]

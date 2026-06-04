@@ -1588,6 +1588,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "dff"
+version = "0.1.0"
+
+[[package]]
 name = "digest"
 version = "0.10.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2031,6 +2035,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "fifoplayer"
+version = "0.1.0"
+dependencies = [
+ "backend-wgpu",
+ "clap",
+ "dff",
+ "gecko",
+ "pollster",
+ "tracing",
+ "tracing-subscriber",
+ "wgpu",
+ "winit 0.30.13",
+]
+
+[[package]]
 name = "find-msvc-tools"
 version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2276,6 +2295,7 @@ dependencies = [
  "cranelift-native",
  "crc32fast",
  "crossbeam-channel",
+ "dff",
  "disasm",
  "glam 0.32.1",
  "hotpath",

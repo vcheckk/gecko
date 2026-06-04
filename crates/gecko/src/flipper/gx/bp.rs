@@ -1,4 +1,5 @@
 use super::constants::*;
+use super::recorder::MemoryUpdateType;
 use super::regs::*;
 use super::{GraphicsProcessor, draw, texture};
 use crate::host::{GxAction, RenderSink, TextureKey};
@@ -187,6 +188,7 @@ impl GraphicsProcessor {
         if idx == BP_PE_DONE && (val & BP_PE_DONE_FINISH_BIT) != 0 {
             self.raise_interrupt = true;
             renderer.flush_efb_copies(ram);
+            self.sync_recorder_efb_shadow(ram);
         }
 
         // PE token (0x47): store token value only
@@ -194,6 +196,7 @@ impl GraphicsProcessor {
             self.pending_token = (val & 0xFFFF) as u16;
             self.token_dirty = true;
             renderer.flush_efb_copies(ram);
+            self.sync_recorder_efb_shadow(ram);
         }
 
         // PE token interrupt (0x48): store token value + raise interrupt
@@ -203,6 +206,7 @@ impl GraphicsProcessor {
             self.token_dirty = true;
             self.raise_token_interrupt = true;
             renderer.flush_efb_copies(ram);
+            self.sync_recorder_efb_shadow(ram);
         }
 
         // Scissor registers (BP 0x20 = TL, 0x21 = BR, 0x59 = OFFSET).
@@ -226,21 +230,10 @@ impl GraphicsProcessor {
     }
 
     fn snapshot_texture(&mut self, renderer: &mut dyn RenderSink, ram: &RamView<'_>, slot: usize, image3_val: u32) {
-        let image0_reg = if slot < 4 {
-            BP_TX_SETIMAGE0_I0 + slot
-        } else {
-            BP_TX_SETIMAGE0_I4 + (slot - 4)
-        };
-
-        let image0 = TxSetImage0::from_raw(self.bp_regs[image0_reg]);
+        let image0 =
+            TxSetImage0::from_raw(self.bp_regs[self::tx_slot_reg(BP_TX_SETIMAGE0_I0, BP_TX_SETIMAGE0_I4, slot)]);
         let image3 = TxSetImage3::from_raw(image3_val);
-
-        let mode0_reg = if slot < 4 {
-            BP_TX_SETMODE0_I0 + slot
-        } else {
-            BP_TX_SETMODE0_I4 + (slot - 4)
-        };
-        let mode0 = TxSetMode0::from_raw(self.bp_regs[mode0_reg]);
+        let mode0 = TxSetMode0::from_raw(self.bp_regs[self::tx_slot_reg(BP_TX_SETMODE0_I0, BP_TX_SETMODE0_I4, slot)]);
 
         let width = (image0.width() + 1) as u32;
         let height = (image0.height() + 1) as u32;
@@ -276,6 +269,12 @@ impl GraphicsProcessor {
         // texture for this id).
         let raw_size = texture::raw_data_size(width, height, format);
         let tex_slice = ram.slice(ram_addr, raw_size);
+
+        if tex_slice.is_some()
+            && let Some(rec) = self.recorder.as_deref_mut()
+        {
+            rec.use_memory(ram, ram_addr as u32, raw_size, MemoryUpdateType::TextureMap);
+        }
 
         let changed = match tex_slice {
             Some(tex) => self::texture_data_changed(&mut self.texture_hashes, tex, cache_id, palette, tlut, format),
@@ -336,6 +335,17 @@ impl GraphicsProcessor {
         });
     }
 
+    pub fn refresh_bound_textures(&mut self, renderer: &mut dyn RenderSink, ram: &RamView<'_>) {
+        for slot in 0..self.cur_textures.len() {
+            if self.cur_textures[slot].is_none() {
+                continue;
+            }
+
+            let image3_val = self.bp_regs[self::tx_slot_reg(BP_TX_SETIMAGE3_I0, BP_TX_SETIMAGE3_I4, slot)];
+            self.snapshot_texture(renderer, ram, slot, image3_val);
+        }
+    }
+
     /// If the slot currently binds a paletted texture, rerun the snapshot
     /// pipeline so `texture_data_changed` rehashes the (now possibly fresh)
     /// palette bytes + TLUT format and decodes a new RGBA if anything moved.
@@ -346,12 +356,7 @@ impl GraphicsProcessor {
         if !desc.format.is_paletted() {
             return;
         }
-        let image3_reg = if slot < 4 {
-            BP_TX_SETIMAGE3_I0 + slot
-        } else {
-            BP_TX_SETIMAGE3_I4 + (slot - 4)
-        };
-        let image3_val = self.bp_regs[image3_reg];
+        let image3_val = self.bp_regs[self::tx_slot_reg(BP_TX_SETIMAGE3_I0, BP_TX_SETIMAGE3_I4, slot)];
         self.snapshot_texture(renderer, ram, slot, image3_val);
     }
 
@@ -489,6 +494,11 @@ impl GraphicsProcessor {
                 dest_stride,
                 src_h,
             });
+
+            if let Some(rec) = self.recorder.as_deref_mut() {
+                rec.note_xfb_copy();
+            }
+
             renderer.exec(GxAction::CopyXfb {
                 id: dest_addr,
                 src_x,
@@ -515,6 +525,26 @@ impl GraphicsProcessor {
             let z_update = self.cur_zmode.update_enable();
 
             let depth_copy = self.cur_pe_control.pixel_format().is_depth_only();
+
+            if let Some(rec) = self.recorder.as_deref_mut()
+                && rec.is_recording()
+            {
+                let resolved = if depth_copy {
+                    texture::CopyFormat::from_u8_depth(copy_format)
+                } else {
+                    texture::CopyFormat::from_u8_color(copy_format)
+                };
+                if let Some(fmt) = resolved {
+                    let (w, h) = if half { (src_w / 2, src_h / 2) } else { (src_w, src_h) };
+                    let row_bytes = texture::encoded_row_bytes(w, fmt);
+                    let row_count = texture::encoded_row_count(h, fmt);
+
+                    if row_count > 0 {
+                        let len = (row_count - 1) * dest_stride as usize + row_bytes;
+                        rec.note_efb_copy(dest_addr as u32, len);
+                    }
+                }
+            }
             renderer.exec(GxAction::CopyEfbToTexture {
                 dest_addr,
                 src_x,
@@ -539,6 +569,14 @@ impl GraphicsProcessor {
             // next snapshot at this address re decodes once the deferred
             // RAM writeback lands.
             self.texture_hashes.retain(|k, _| k.ram_addr != dest_addr);
+        }
+    }
+
+    fn sync_recorder_efb_shadow(&mut self, ram: &RamViewMut<'_>) {
+        if let Some(rec) = self.recorder.as_deref_mut()
+            && rec.is_recording()
+        {
+            rec.flush_efb_shadow(&ram.as_view());
         }
     }
 
@@ -577,6 +615,13 @@ impl GraphicsProcessor {
         self.cur_scissor_offset_x = reg.x() as i32 * 2 - 342;
         self.cur_scissor_offset_y = reg.y() as i32 * 2 - 342;
     }
+}
+
+/// Texture slot to BP register index: slots 0-3 live at `base_i0`, slots 4-7
+/// at `base_i4` (TX_SETMODE*/TX_SETIMAGE*/TX_SETTLUT all share this layout).
+#[inline(always)]
+fn tx_slot_reg(base_i0: usize, base_i4: usize, slot: usize) -> usize {
+    if slot < 4 { base_i0 + slot } else { base_i4 + (slot - 4) }
 }
 
 fn slot_palette(palette_mem: &[u16], tmem_offset: u16) -> &[u16] {
@@ -675,6 +720,12 @@ impl GraphicsProcessor {
             );
             return;
         };
+
+        // FIFO recorder: capture the palette's source RAM so the replayed
+        // LOADTLUT reads the same bytes.
+        if let Some(rec) = self.recorder.as_deref_mut() {
+            rec.use_memory(ram, ram_base as u32, byte_count, MemoryUpdateType::Tmem);
+        }
         if dst_base.saturating_add(entries) > self.palette_mem.len() {
             tracing::warn!(
                 dst_base,

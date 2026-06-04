@@ -11,6 +11,8 @@ members = [
     "crates/scripting",
     "crates/dbglib",
     "crates/debugger",
+    "crates/dff",
+    "crates/fifoplayer",
     "crates/mcp",
 
     # Stuff we rarely use
