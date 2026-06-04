@@ -28,8 +28,15 @@ pub struct SysConf {
 
 impl SysConf {
     pub fn new(host_fs_root: &Path) -> Self {
-        let blob = self::build_blob();
+        Self::with_blob(host_fs_root, self::build_blob(1))
+    }
 
+    pub fn for_game_code(host_fs_root: &Path, game_code: [u8; 4]) -> Self {
+        let region = nand::RegionSetting::from_game_code(game_code);
+        Self::with_blob(host_fs_root, self::build_blob(region.language()))
+    }
+
+    fn with_blob(host_fs_root: &Path, blob: Vec<u8>) -> Self {
         let path = host_fs_root.join("shared2/sys/SYSCONF");
         if !path.exists() {
             nand::write_new(&path, &blob);
@@ -147,14 +154,14 @@ impl EntryData {
     }
 }
 
-fn build_blob() -> Vec<u8> {
+fn build_blob(language: u8) -> Vec<u8> {
     let entries: [(&[u8], EntryData); 11] = [
         (b"BT.DINF", EntryData::BigArray(self::build_bt_dinf())),
         (b"BT.MOT", EntryData::Byte(1)),
         (b"BT.SENS", EntryData::Long(3)),
         (b"BT.BAR", EntryData::Byte(1)),
         (b"BT.SPKV", EntryData::Byte(0x58)),
-        (b"IPL.LNG", EntryData::Byte(1)),
+        (b"IPL.LNG", EntryData::Byte(language)),
         (b"IPL.AR", EntryData::Byte(0)),
         (b"IPL.E60", EntryData::Bool(false)),
         (b"IPL.PGS", EntryData::Bool(false)),

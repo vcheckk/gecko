@@ -17,13 +17,42 @@ pub fn ensure_skeleton(root: &Path) {
     }
 }
 
-pub fn ensure_setting_txt(root: &Path, game_code: [u8; 4]) {
+pub fn sync_setting_txt(root: &Path, game_code: [u8; 4]) {
     let path = root.join(SETTING_TXT_PATH);
-    if path.exists() {
-        return;
+    let setting = RegionSetting::from_game_code(game_code);
+
+    if let Ok(existing) = std::fs::read(&path) {
+        match self::decode_area(&existing) {
+            Some(area) if area == setting.area => return,
+            Some(area) => tracing::info!(
+                old = %area,
+                new = setting.area,
+                "NAND: setting.txt region mismatch, regenerating for disc"
+            ),
+            None => tracing::warn!("NAND: undecodable setting.txt, regenerating"),
+        }
     }
 
-    self::write_new(&path, &RegionSetting::from_game_code(game_code).encode());
+    self::write_new(&path, &setting.encode());
+}
+
+fn decode_area(data: &[u8]) -> Option<String> {
+    let mut key = SETTING_SEED;
+
+    let decoded: Vec<u8> = data
+        .iter()
+        .take(0x100)
+        .map(|&b| {
+            let plain = b ^ (key as u8);
+            key = key.rotate_left(1);
+            plain
+        })
+        .collect();
+
+    let text = String::from_utf8_lossy(&decoded);
+    text.lines()
+        .find_map(|line| line.strip_prefix("AREA="))
+        .map(|value| value.trim_end().to_owned())
 }
 
 pub fn ensure_title_dirs(root: &Path, title_id: u64) {
@@ -51,7 +80,7 @@ pub fn write_new(path: &Path, data: &[u8]) {
     }
 }
 
-struct RegionSetting {
+pub(crate) struct RegionSetting {
     area: &'static str,
     video: &'static str,
     code: &'static str,
@@ -59,7 +88,15 @@ struct RegionSetting {
 }
 
 impl RegionSetting {
-    fn from_game_code(game_code: [u8; 4]) -> Self {
+    pub(crate) fn language(&self) -> u8 {
+        match self.area {
+            "JPN" => 0,
+            "KOR" => 9,
+            _ => 1,
+        }
+    }
+
+    pub(crate) fn from_game_code(game_code: [u8; 4]) -> Self {
         match game_code[3] {
             b'J' => Self {
                 area: "JPN",

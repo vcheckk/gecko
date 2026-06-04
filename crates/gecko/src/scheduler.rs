@@ -143,7 +143,7 @@ impl Scheduler<{ crate::system::WII }> {
 impl<const SYSTEM: SystemId> Scheduler<SYSTEM> {
     fn with_default_events() -> Self {
         let mut s = Self::empty();
-        let initial_refresh_rate = RefreshRate::Hz60; // TODO: Detect IPL and schedule accordingly
+        let initial_refresh_rate = RefreshRate::Hz60;
         s.schedule_at(
             initial_refresh_rate.cycles_per_frame(SYSTEM),
             self::vsync_handler::<SYSTEM>,
@@ -175,6 +175,13 @@ pub fn vsync_handler<const SYSTEM: SystemId>(sys: &mut System<SYSTEM>) {
 
     sys.vi_present_seen_this_frame = false;
     let rate = sys.vi.dcr.video_format().refresh_rate();
+    sys.scheduler
+        .schedule_in(rate.cycles_per_frame(SYSTEM), self::vsync_handler::<SYSTEM>);
+}
+
+pub fn reseed_vsync<const SYSTEM: SystemId>(sys: &mut System<SYSTEM>) {
+    let rate = sys.vi.dcr.video_format().refresh_rate();
+    sys.scheduler.cancel(self::vsync_handler::<SYSTEM>);
     sys.scheduler
         .schedule_in(rate.cycles_per_frame(SYSTEM), self::vsync_handler::<SYSTEM>);
 }

@@ -235,7 +235,7 @@ impl<const SYSTEM: SystemId> System<SYSTEM> {
         if self.mmio.is_code_chunk(phys) {
             return;
         }
-        
+
         self.mmio.phys_slice_mut(phys, 32).fill(0);
     }
 
