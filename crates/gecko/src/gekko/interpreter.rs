@@ -18,7 +18,7 @@ pub use ps_ops::ps_ops;
 pub use psq::store_load_psq;
 pub use rotate::rotate;
 pub use store_load::{eciwx, ecowx, lswi, lswx, lwarx, store_load, store_load_fp, stswi, stswx, stwcx_dot};
-pub use system::{mfsrin, mftb, msr, mtsrin, nop, sc, segment, spr, tw, twi};
+pub use system::{dcbz, mfsrin, mftb, msr, mtsrin, nop, sc, segment, spr, tw, twi};
 
 #[cold]
 #[inline(never)]

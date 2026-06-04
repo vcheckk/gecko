@@ -76,6 +76,7 @@ pub struct ExternFuncs {
     pub read_timebase: FuncId,
     pub cause_icbi: FuncId,
     pub cause_smc_write: FuncId,
+    pub dcbz: FuncId,
 }
 
 pub struct JitEngine<const SYSTEM: SystemId> {
@@ -156,6 +157,7 @@ impl<const SYSTEM: SystemId> JitEngine<SYSTEM> {
             read_timebase: (&'static str, *const u8),
             cause_icbi: (&'static str, *const u8),
             cause_smc_write: (&'static str, *const u8),
+            dcbz: (&'static str, *const u8),
         }
         let syms: SymTable = match SYSTEM {
             GC => SymTable {
@@ -209,6 +211,7 @@ impl<const SYSTEM: SystemId> JitEngine<SYSTEM> {
                 read_timebase: ("gecko_jit_read_timebase_gc", runtime::read_timebase_gc as *const u8),
                 cause_icbi: ("gecko_jit_cause_icbi_gc", runtime::cause_icbi_gc as *const u8),
                 cause_smc_write: ("gecko_jit_cause_smc_write_gc", runtime::cause_smc_write_gc as *const u8),
+                dcbz: ("gecko_jit_dcbz_gc", runtime::dcbz_gc as *const u8),
             },
             WII => SymTable {
                 cause_invalid_opcode: (
@@ -267,6 +270,7 @@ impl<const SYSTEM: SystemId> JitEngine<SYSTEM> {
                     "gecko_jit_cause_smc_write_wii",
                     runtime::cause_smc_write_wii as *const u8,
                 ),
+                dcbz: ("gecko_jit_dcbz_wii", runtime::dcbz_wii as *const u8),
             },
             _ => unreachable!(),
         };
@@ -304,6 +308,7 @@ impl<const SYSTEM: SystemId> JitEngine<SYSTEM> {
             syms.read_timebase,
             syms.cause_icbi,
             syms.cause_smc_write,
+            syms.dcbz,
         ] {
             jit_builder.symbol(name, addr);
         }
@@ -474,6 +479,9 @@ impl<const SYSTEM: SystemId> JitEngine<SYSTEM> {
             cause_icbi: module
                 .declare_function(syms.cause_icbi.0, Linkage::Import, &ctx_u32_sig)
                 .expect("declare cause_icbi"),
+            dcbz: module
+                .declare_function(syms.dcbz.0, Linkage::Import, &ctx_u32_sig)
+                .expect("declare dcbz"),
             cause_smc_write: module
                 .declare_function(syms.cause_smc_write.0, Linkage::Import, &mem_write_sig)
                 .expect("declare cause_smc_write"),

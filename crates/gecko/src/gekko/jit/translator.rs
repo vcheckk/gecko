@@ -83,6 +83,7 @@ pub(crate) struct LocalFuncs {
     pub(crate) read_timebase: FuncRef,
     pub(crate) cause_icbi: FuncRef,
     pub(crate) cause_smc_write: FuncRef,
+    pub(crate) dcbz: FuncRef,
     pub(crate) fp_guard_emitted: std::cell::Cell<bool>,
 }
 
@@ -146,6 +147,7 @@ pub fn translate<const SYSTEM: SystemId>(
         read_timebase: module.declare_func_in_func(extern_funcs.read_timebase, &mut ctx.func),
         cause_icbi: module.declare_func_in_func(extern_funcs.cause_icbi, &mut ctx.func),
         cause_smc_write: module.declare_func_in_func(extern_funcs.cause_smc_write, &mut ctx.func),
+        dcbz: module.declare_func_in_func(extern_funcs.dcbz, &mut ctx.func),
         fp_guard_emitted: std::cell::Cell::new(false),
     };
 
@@ -1689,7 +1691,7 @@ pub(crate) enum LogicalOp {
 
 fn pointer_iter_loop_cycles_per_iter(instrs: &[u32]) -> i64 {
     use crate::gekko::cycles::{DEFAULT_CYCLES, cycles_for_op};
-    use crate::gekko::lut::{OP_DCBA, OP_DCBF, OP_DCBI, OP_DCBST, OP_DCBT, OP_DCBTST, OP_DCBZ, OP_ICBI};
+    use crate::gekko::lut::{OP_DCBA, OP_DCBF, OP_DCBI, OP_DCBST, OP_DCBT, OP_DCBTST, OP_ICBI};
 
     let cache = instrs.first().copied().map(Instruction).map(|i| i.xo10()).unwrap_or(0);
     let cache_op = match cache {
@@ -1698,7 +1700,6 @@ fn pointer_iter_loop_cycles_per_iter(instrs: &[u32]) -> i64 {
         54 => OP_DCBST,
         278 => OP_DCBT,
         246 => OP_DCBTST,
-        1014 => OP_DCBZ,
         982 => OP_ICBI,
         758 => OP_DCBA,
         _ => return 3 * DEFAULT_CYCLES,
