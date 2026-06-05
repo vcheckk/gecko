@@ -66,11 +66,11 @@ jobs:
           perl -pi -e 's/^#panic = "abort"$/panic = "abort"/' Cargo.toml
           perl -pi -e 's/^#codegen-units = 1$/codegen-units = 1/' Cargo.toml
 
-      - name: Build debugger + multitool + gecko-app + tinyapp (release)
-        run: cargo build --release --target ${{ matrix.target }} -p debugger -p multitool -p gecko-app -p tinyapp
+      - name: Build debugger + multitool + gecko-app + tinyapp + fifoplayer (release)
+        run: cargo build --release --target ${{ matrix.target }} -p debugger -p multitool -p gecko-app -p tinyapp -p fifoplayer
 
-      - name: Build debugger + multitool + gecko-app + tinyapp (dev profile, with tracing output)
-        run: cargo build --profile dev --target ${{ matrix.target }} -p debugger -p multitool -p gecko-app -p tinyapp
+      - name: Build debugger + multitool + gecko-app + tinyapp + fifoplayer (dev profile, with tracing output)
+        run: cargo build --profile dev --target ${{ matrix.target }} -p debugger -p multitool -p gecko-app -p tinyapp -p fifoplayer
 
       # - name: Patch chipi dispatch strategy (tinyapp only)
       #   shell: bash
@@ -97,6 +97,7 @@ jobs:
             cp "target/${{ matrix.target }}/$profile/debugger$EXT" "$staging/"
             cp "target/${{ matrix.target }}/$profile/multitool$EXT" "$staging/"
             cp "target/${{ matrix.target }}/$profile/gecko$EXT" "$staging/"
+            cp "target/${{ matrix.target }}/$profile/fifoplayer$EXT" "$staging/"
             cp LICENSE README.md "$staging/"
             (cd "$staging" && 7z a "../artifacts/gecko-$suffix.zip" *)
           }
@@ -120,10 +121,17 @@ jobs:
           path: artifacts
           merge-multiple: true
 
+      - name: Delete previous release and tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release delete release --cleanup-tag --yes --repo ${{ github.repository }} || true
+
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: build-${{ github.sha }}
-          name: Build ${{ github.sha }}
+          tag_name: release
+          target_commitish: ${{ github.sha }}
+          name: Release (master)
           generate_release_notes: true
           files: artifacts/*

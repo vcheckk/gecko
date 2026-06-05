@@ -546,7 +546,9 @@ impl GxRenderer {
 
         for part in parts {
             let Some((tex, _)) = self.xfb_copies.get(&part.id) else {
-                tracing::warn!(id = part.id, "present_xfb: XFB copy not found in cache, skipping part");
+                // Expected when the VI scans a buffer we've never snapshotted
+                // (e.g. before the first copy to it); the previous frame is held.
+                tracing::debug!(id = part.id, "present_xfb: XFB copy not found in cache, skipping part");
                 let marker = format!("PresentXfb skip: missing part id={}", part.id);
                 encoder.insert_debug_marker(&marker);
                 continue;
@@ -616,6 +618,17 @@ impl GxRenderer {
         stride: u32,
         depth_copy: bool,
     ) {
+        tracing::debug!(
+            dest_addr = format!("{dest_addr:#010X}"),
+            src_x,
+            src_y,
+            src_w,
+            src_h,
+            copy_format,
+            mipmap,
+            depth_copy,
+            "efb_to_texture copy"
+        );
         // Clamp the source to EFB bounds (mirrors execute_copy_xfb).
         let width = src_w.min(crate::EFB_WIDTH.saturating_sub(src_x));
         let height = src_h.min(crate::EFB_HEIGHT.saturating_sub(src_y));

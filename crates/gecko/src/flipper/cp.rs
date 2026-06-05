@@ -27,6 +27,7 @@ pub struct CommandProcessor {
     pub fifo_read_ptr_hi: regs::FifoReadPtrHi,
     pub fifo_bp_lo: regs::FifoBpLo,
     pub fifo_bp_hi: regs::FifoBpHi,
+    pub clear: regs::CpClear,
 
     pub gather_pipe: [u8; GP_PIPE_CAPACITY],
     pub gather_pos: u32,
@@ -53,6 +54,7 @@ impl CommandProcessor {
             fifo_read_ptr_hi: regs::FifoReadPtrHi::from_raw(0),
             fifo_bp_lo: regs::FifoBpLo::from_raw(0),
             fifo_bp_hi: regs::FifoBpHi::from_raw(0),
+            clear: regs::CpClear::from_raw(0),
             gather_pipe: [0; GP_PIPE_CAPACITY],
             gather_pos: 0,
         }

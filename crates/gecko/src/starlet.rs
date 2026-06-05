@@ -152,6 +152,13 @@ fn default_host_fs_root() -> PathBuf {
     if let Some(custom) = std::env::var_os("GECKO_FS_ROOT") {
         return PathBuf::from(custom);
     }
+
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            return dir.join("fs");
+        }
+    }
+
     PathBuf::from("fs")
 }
 
@@ -159,14 +166,15 @@ impl System<{ crate::WII }> {
     pub fn initialize_starlet_devices(&mut self) {
         use crate::hollywood::ipc::{self, stm};
 
+        let fs_root = self.starlet.host_fs_root.clone();
+        ipc::fs::nand::ensure_skeleton(&fs_root);
+
         self.starlet.register("/dev/stm/immediate", Box::new(stm::Immediate));
         self.starlet.register("/dev/stm/eventhook", Box::new(stm::EventHook));
-        self.starlet.register(
-            "/dev/fs",
-            Box::new(ipc::fs::FileSystem::new(self.starlet.host_fs_root.clone())),
-        );
         self.starlet
-            .register("/shared2/sys/SYSCONF", Box::new(ipc::sysconf::SysConf::new()));
+            .register("/dev/fs", Box::new(ipc::fs::FileSystem::new(fs_root.clone())));
+        self.starlet
+            .register("/shared2/sys/SYSCONF", Box::new(ipc::sysconf::SysConf::new(&fs_root)));
         self.starlet
             .register("/dev/di", Box::new(ipc::di::DiskInterface::new()));
         self.starlet.register("/dev/es", Box::new(ipc::es::ETicketServices));
@@ -216,6 +224,7 @@ fn ensure_delivery_scheduled<const SYSTEM: SystemId>(sys: &mut System<SYSTEM>, d
 }
 
 fn process_command<const SYSTEM: SystemId>(sys: &mut System<SYSTEM>, cmd_paddr: u32) -> i32 {
+    use crate::hollywood::ipc::fs::FS_ENOENT;
     use crate::hollywood::ipc::{IPC_EINVAL, IPC_ENOENT};
 
     const IOS_OPEN: u32 = 1;
@@ -247,8 +256,13 @@ fn process_command<const SYSTEM: SystemId>(sys: &mut System<SYSTEM>, cmd_paddr: 
             } else if let Some(real) = HostBackedFile::try_open(&starlet.host_fs_root, &path, mode) {
                 starlet.allocate_owned_fd(&path, Box::new(real))
             } else {
-                tracing::error!(%path, "IOS_Open: no device registered");
-                IPC_ENOENT
+                let rc = if path.starts_with("/dev/") {
+                    IPC_ENOENT
+                } else {
+                    FS_ENOENT
+                };
+                tracing::debug!(%path, rc, "IOS_Open: not found");
+                rc
             };
             tracing::debug!(%path, mode, fd, "IOS_Open");
 

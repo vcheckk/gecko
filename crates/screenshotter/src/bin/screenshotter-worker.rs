@@ -1,10 +1,10 @@
+use backend_wgpu::sink::InlineSink;
 use backend_wgpu::{GxRenderer, capture};
 use gecko::HostInput;
 use gecko::flipper::si::pad;
 use gecko::flipper::vi::regs::RefreshRate;
 use gecko::gamecube::GameCube;
 use gecko::hollywood::ipc::usb as wiimote;
-use gecko::host::{GxAction, RenderSink};
 use gecko::system::{System, SystemId};
 use gecko::wii::Wii;
 use std::path::PathBuf;
@@ -13,28 +13,6 @@ use std::sync::{Arc, Mutex};
 const IPL: &[u8] = include_bytes!("../../../../private/IPL.decoded.bin");
 const DSP: &[u8] = include_bytes!("../../../../private/dsp_rom.bin");
 const COEF: &[u8] = include_bytes!("../../../../private/dsp_coef.bin");
-
-struct SyncSink {
-    gx: Arc<Mutex<GxRenderer>>,
-    device: wgpu::Device,
-    queue: wgpu::Queue,
-    scratch: Vec<gecko::host::DrawVertex>,
-}
-
-impl RenderSink for SyncSink {
-    fn exec(&mut self, action: GxAction) {
-        self.gx.lock().unwrap().process_action_with_external_scratch(
-            &self.device,
-            &self.queue,
-            &action,
-            &mut self.scratch,
-        );
-    }
-
-    fn vertex_scratch(&mut self) -> &mut Vec<gecko::host::DrawVertex> {
-        &mut self.scratch
-    }
-}
 
 fn take_screenshot(device: &wgpu::Device, queue: &wgpu::Queue, gx: &GxRenderer, code: &str, frame: u32) {
     let _ = device.poll(wgpu::PollType::Wait {
@@ -100,13 +78,7 @@ fn run_one(device: &wgpu::Device, queue: &wgpu::Queue, surface_format: wgpu::Tex
     let out_dir = format!("screenshotdb/{}", code);
     std::fs::create_dir_all(&out_dir).expect("Failed to create screenshotdb directory");
 
-    let gx = Arc::new(Mutex::new(GxRenderer::new(device, queue, surface_format)));
-    let sink = SyncSink {
-        gx: gx.clone(),
-        device: device.clone(),
-        queue: queue.clone(),
-        scratch: Vec::new(),
-    };
+    let (gx, sink) = InlineSink::new(device.clone(), queue.clone(), surface_format);
 
     if is_wii {
         let mut wii = Wii::apploader_hle(image).build();

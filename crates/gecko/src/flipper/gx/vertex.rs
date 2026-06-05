@@ -69,6 +69,26 @@ impl GraphicsProcessor {
 
         let vertex_count = data.len() / vf.vertex_stride;
 
+        // Resolve any texture slots whose descriptor regs changed since the
+        // last draw. Done lazily here (not at BP write time) because games
+        // write SETMODE0/SETIMAGE0-3 in arbitrary order; only at draw time is
+        // the descriptor guaranteed consistent. Runs before the recorder so
+        // recorded draws reference the resolved textures.
+        if self.tex_dirty != 0 {
+            self.snapshot_dirty_textures(renderer, &mmio.ram_view());
+        }
+
+        if let Some(rec) = self.recorder.as_deref_mut()
+            && rec.is_recording()
+        {
+            let view = mmio.ram_view();
+            self::record_draw_arrays(rec, &view, &vf, data, vertex_count);
+            for desc in self.cur_textures.iter().flatten() {
+                let len = super::texture::raw_data_size(desc.width, desc.height, desc.format);
+                rec.use_draw_texture(&view, desc.ram_addr as u32, len);
+            }
+        }
+
         #[cfg(feature = "gx-stats")]
         {
             self.stats.draw_calls += 1;
@@ -153,6 +173,16 @@ impl GraphicsProcessor {
         boxed.material_color = self.cached_material_color;
         boxed.lights = self.cached_lights;
         boxed.active_texcoords = (self.xf_mem[crate::flipper::gx::constants::XF_NUM_TEXGENS] as u8).min(8);
+        // Z texture: only applied by hardware on the late-Z path; collapse to
+        // disabled under early-Z so the backend can keep early-Z pipelines.
+        let ztex2 = TevZtex2::from_raw(self.bp_regs[BP_TEV_ZTEX2]);
+        boxed.ztex_bias = TevZtex1::from_raw(self.bp_regs[BP_TEV_ZTEX1]).bias();
+        boxed.ztex_type = ztex2.tex_type();
+        boxed.ztex_op = if self.cur_pe_control.early_ztest() {
+            0
+        } else {
+            ztex2.op()
+        };
         boxed.frame_dirty = self.frame_state_dirty;
         self.frame_state_dirty = false;
         renderer.exec(GxAction::Draw(boxed));
@@ -567,6 +597,115 @@ impl GraphicsProcessor {
         }
 
         self.lighting_dirty = false;
+    }
+}
+
+fn record_draw_arrays(
+    rec: &mut super::recorder::FifoRecorder,
+    ram: &RamView<'_>,
+    vf: &VertexFormat,
+    data: &[u8],
+    vertex_count: usize,
+) {
+    let attr_stream_size = |attr: AttributeType, direct_size: usize| -> usize {
+        match attr {
+            AttributeType::Direct => direct_size,
+            AttributeType::Index8 => 1,
+            AttributeType::Index16 => 2,
+            AttributeType::None => 0,
+        }
+    };
+
+    let mut offset = 0usize;
+    offset += vf.has_pnmtxidx as usize;
+    for has in vf.has_tex_mtx_idx {
+        offset += has as usize;
+    }
+
+    let mut scan = |offset: usize, attr: AttributeType, base: usize, stride: usize, data_size: usize| {
+        self::scan_indexed_component(
+            rec,
+            ram,
+            data,
+            vf.vertex_stride,
+            vertex_count,
+            offset,
+            attr,
+            base,
+            stride,
+            data_size,
+        );
+    };
+
+    scan(offset, vf.pos_attr, vf.pos_base, vf.pos_stride, vf.pos_data_size);
+    offset += attr_stream_size(vf.pos_attr, vf.pos_data_size);
+
+    scan(offset, vf.nrm_attr, vf.nrm_base_addr, vf.nrm_stride, vf.nrm_data_size);
+    offset += vf.vat_a.nrm_stream_size(vf.nrm_attr);
+
+    scan(offset, vf.clr0_attr, vf.clr0_base, vf.clr0_stride, vf.clr0_data_size);
+    offset += attr_stream_size(vf.clr0_attr, vf.clr0_data_size);
+
+    scan(offset, vf.clr1_attr, vf.clr1_base, vf.clr1_stride, vf.clr1_data_size);
+    offset += attr_stream_size(vf.clr1_attr, vf.clr1_data_size);
+
+    for tc in 0..8 {
+        scan(
+            offset,
+            vf.tex_attrs[tc],
+            vf.tex_bases[tc],
+            vf.tex_strides[tc],
+            vf.tex_data_sizes[tc],
+        );
+        offset += attr_stream_size(vf.tex_attrs[tc], vf.tex_data_sizes[tc]);
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn scan_indexed_component(
+    rec: &mut super::recorder::FifoRecorder,
+    ram: &RamView<'_>,
+    data: &[u8],
+    vertex_stride: usize,
+    vertex_count: usize,
+    offset: usize,
+    attr: AttributeType,
+    base: usize,
+    stride: usize,
+    data_size: usize,
+) {
+    let idx_size = match attr {
+        AttributeType::Index8 => 1,
+        AttributeType::Index16 => 2,
+        _ => return,
+    };
+
+    // All-ones indices skip the vertex on real hardware.
+    let mut max_index: Option<usize> = None;
+    for v in 0..vertex_count {
+        let p = v * vertex_stride + offset;
+        if p + idx_size > data.len() {
+            break;
+        }
+        let index = if idx_size == 1 {
+            match data[p] {
+                0xFF => continue,
+                i => i as usize,
+            }
+        } else {
+            match u16::from_be_bytes([data[p], data[p + 1]]) {
+                0xFFFF => continue,
+                i => i as usize,
+            }
+        };
+        if max_index.is_none_or(|m| index > m) {
+            max_index = Some(index);
+        }
+    }
+
+    if let Some(max) = max_index {
+        let len = stride * max + data_size;
+        rec.use_memory(ram, base as u32, len, super::recorder::MemoryUpdateType::VertexStream);
     }
 }
 

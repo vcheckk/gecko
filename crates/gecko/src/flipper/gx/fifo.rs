@@ -34,6 +34,7 @@ fn drain_buf<const SYSTEM: SystemId>(
         }
 
         let cmd = fifo[pos];
+        let cmd_start = pos;
 
         match cmd {
             NOP_CMD | INV_VTX_CACHE_CMD => {
@@ -158,6 +159,12 @@ fn drain_buf<const SYSTEM: SystemId>(
                 tracing::error!(cmd = cmd, "unknown FIFO command");
                 pos += 1;
             }
+        }
+
+        if let Some(rec) = gp.recorder.as_deref_mut()
+            && cmd != CALL_DL_CMD
+        {
+            rec.record_command(&fifo[cmd_start..pos]);
         }
     }
 

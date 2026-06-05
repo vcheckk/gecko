@@ -5,6 +5,7 @@ pub mod fifo;
 #[cfg(feature = "jit")]
 pub mod jit;
 pub mod math;
+pub mod recorder;
 pub mod regs;
 pub mod tev;
 mod texgen;
@@ -34,8 +35,17 @@ pub struct GraphicsProcessor {
     pub fifo: Vec<u8>,
     pub dl_scratch: Vec<u8>,
 
+    // FIFO recording stuff
+    pub recorder: Option<Box<recorder::FifoRecorder>>,
+
     // Current GX state to snapshot into a Draw action later
     pub cur_textures: [Option<draw::TextureDescriptor>; 8],
+    // Bitmask of slots whose TX_SETMODE0/SETIMAGE0-3/SETTLUT regs changed
+    // since the last snapshot. Games write these regs in arbitrary order
+    // (SMG's J3D binds SETIMAGE3 before SETIMAGE0), so the descriptor is
+    // only consistent at draw time; `snapshot_dirty_textures` resolves them
+    // right before each draw call.
+    pub tex_dirty: u8,
     // Per-texture-slot TLUT binding (tmem offset + palette pixel format),
     // populated by BP_TX_SETTLUT writes.
     pub cur_tluts: [draw::TlutRef; 8],
@@ -131,8 +141,10 @@ impl GraphicsProcessor {
             xf_mem: vec![0; XF_MEM_SIZE],
             fifo: Vec::with_capacity(256),
             dl_scratch: Vec::with_capacity(4096),
+            recorder: None,
             projection: Matrix4::default(),
             cur_textures: Default::default(),
+            tex_dirty: 0,
             cur_tluts: [draw::TlutRef::default(); 8],
             palette_mem: vec![0u16; TLUT_MEM_ENTRIES],
             cur_tev_color_env: Default::default(),
@@ -195,6 +207,17 @@ pub fn present_xfb<const SYSTEM: SystemId>(sys: &mut System<SYSTEM>) {
         return;
     }
 
+    if sys.gx.recorder.is_some() {
+        let mut rec = sys.gx.recorder.take().unwrap();
+        rec.on_frame_boundary(
+            &sys.gx,
+            sys.cp.fifo_base(),
+            sys.cp.fifo_end(),
+            SYSTEM == crate::system::WII,
+        );
+        sys.gx.recorder = Some(rec);
+    }
+
     #[cfg(feature = "gx-stats")]
     {
         sys.gx.stats.xfb_presents += 1;
@@ -213,16 +236,24 @@ pub fn present_xfb<const SYSTEM: SystemId>(sys: &mut System<SYSTEM>) {
     let xfb_bytes = bytes_per_row * frame_h as u64;
     let stride_in_pixels = (bytes_per_row / 2) as u32;
 
+    let frame_base = if sys.vi.dcr.interlaced() && sys.vi.in_even_field() {
+        vi_base.saturating_sub(bytes_per_row as u32)
+    } else {
+        vi_base
+    };
+
     let build_parts = |base_addr: u32| -> Vec<XfbPart> {
         let mut parts = Vec::with_capacity(sys.gx.xfb_copies.len());
-        for (id, copy) in sys.gx.xfb_copies.iter().enumerate() {
+        for copy in sys.gx.xfb_copies.iter() {
             if copy.dest_addr < base_addr {
                 continue;
             }
+
             let delta_bytes = (copy.dest_addr - base_addr) as u64;
             if delta_bytes >= xfb_bytes {
                 continue;
             }
+
             let delta_pixels = (delta_bytes / 2) as u32;
             let offset_x = delta_pixels % stride_in_pixels;
             let offset_y = delta_pixels / stride_in_pixels;
@@ -231,7 +262,7 @@ pub fn present_xfb<const SYSTEM: SystemId>(sys: &mut System<SYSTEM>) {
             // A non-zero offset_x means this copy belongs to a different
             // buffer that happens to sit nearby in memory, reject it? TODO
             if offset_x != 0 || offset_y >= frame_h as u32 {
-                tracing::warn!(
+                tracing::debug!(
                     copy_dest = copy.dest_addr,
                     base = base_addr,
                     offset_x,
@@ -242,7 +273,7 @@ pub fn present_xfb<const SYSTEM: SystemId>(sys: &mut System<SYSTEM>) {
             }
 
             parts.push(XfbPart {
-                id: id as u32,
+                id: copy.dest_addr,
                 offset_x,
                 offset_y,
             });
@@ -252,15 +283,22 @@ pub fn present_xfb<const SYSTEM: SystemId>(sys: &mut System<SYSTEM>) {
 
     let min_base = sys.gx.xfb_copies.iter().map(|c| c.dest_addr).min().unwrap_or(0);
 
-    let parts = if vi_base != 0 {
-        let p = build_parts(vi_base);
-        if !p.is_empty() { p } else { build_parts(min_base) }
+    let parts = if frame_base != 0 {
+        let mut p = build_parts(frame_base);
+        if p.is_empty() {
+            p.push(XfbPart {
+                id: frame_base,
+                offset_x: 0,
+                offset_y: 0,
+            });
+        }
+        p
     } else {
         build_parts(min_base)
     };
 
     if parts.is_empty() {
-        tracing::warn!("present_xfb: no XFB copies matched the frame buffer region");
+        tracing::debug!("present_xfb: no XFB copies matched the frame buffer region");
         sys.gx.xfb_copies.clear();
         return;
     }

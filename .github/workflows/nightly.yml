@@ -93,11 +93,11 @@ jobs:
           perl -pi -e 's/^#panic = "abort"$/panic = "abort"/' Cargo.toml
           perl -pi -e 's/^#codegen-units = 1$/codegen-units = 1/' Cargo.toml
 
-      - name: Build debugger + multitool + gecko-app + tinyapp (release)
-        run: cargo build --release --target ${{ matrix.target }} -p debugger -p multitool -p gecko-app -p tinyapp
+      - name: Build debugger + multitool + gecko-app + tinyapp + fifoplayer (release)
+        run: cargo build --release --target ${{ matrix.target }} -p debugger -p multitool -p gecko-app -p tinyapp -p fifoplayer
 
-      - name: Build debugger + multitool + gecko-app + tinyapp (dev profile, with tracing output)
-        run: cargo build --profile dev --target ${{ matrix.target }} -p debugger -p multitool -p gecko-app -p tinyapp
+      - name: Build debugger + multitool + gecko-app + tinyapp + fifoplayer (dev profile, with tracing output)
+        run: cargo build --profile dev --target ${{ matrix.target }} -p debugger -p multitool -p gecko-app -p tinyapp -p fifoplayer
 
       - name: Package artifacts
         shell: bash
@@ -114,6 +114,7 @@ jobs:
             cp "target/${{ matrix.target }}/$profile/debugger$EXT" "$staging/"
             cp "target/${{ matrix.target }}/$profile/multitool$EXT" "$staging/"
             cp "target/${{ matrix.target }}/$profile/gecko$EXT" "$staging/"
+            cp "target/${{ matrix.target }}/$profile/fifoplayer$EXT" "$staging/"
             cp LICENSE README.md "$staging/"
             (cd "$staging" && 7z a "../artifacts/gecko-$suffix.zip" *)
           }

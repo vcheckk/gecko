@@ -33,6 +33,24 @@ pub enum TargetAspect {
     Ratio(f32),
 }
 
+impl TargetAspect {
+    pub fn from_arg(arg: &str, is_wii: bool) -> Self {
+        match arg {
+            "auto" => {
+                if is_wii {
+                    TargetAspect::Ratio(16.0 / 9.0)
+                } else {
+                    TargetAspect::Ratio(4.0 / 3.0)
+                }
+            }
+            "4:3" => TargetAspect::Ratio(4.0 / 3.0),
+            "16:9" => TargetAspect::Ratio(16.0 / 9.0),
+            "stretch" => TargetAspect::Stretch,
+            other => panic!("--aspect must be auto|4:3|16:9|stretch, got {other:?}"),
+        }
+    }
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 pub struct ThreadedSink {
     work_tx: crossbeam_channel::Sender<WorkerCommand>,
@@ -50,6 +68,8 @@ struct RenderWorker {
     shared: Arc<Shared>,
     frame_ready_cb: Arc<OnceLock<FrameReadyCallback>>,
     recycled_draw_data_tx: crossbeam_channel::Sender<Box<DrawData>>,
+    #[cfg(feature = "renderdoc-capture")]
+    renderdoc: Arc<Mutex<crate::renderdoc_capture::RenderDocCapture>>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -86,6 +106,10 @@ impl RenderWorker {
         }
 
         self.gx.submit_pending(&self.queue);
+        #[cfg(feature = "renderdoc-capture")]
+        if let Ok(mut rd) = self.renderdoc.lock() {
+            rd.end_emulated_frame();
+        }
         match self.gx.save_shader_cache() {
             Ok(n) => tracing::info!(num_variants = n, "saved shader cache"),
             Err(err) => tracing::warn!(?err, "failed to save shader cache"),
@@ -106,6 +130,12 @@ impl RenderWorker {
 
         match message.action {
             GxAction::PresentXfb { .. } => {
+                #[cfg(feature = "renderdoc-capture")]
+                if let Ok(mut rd) = self.renderdoc.lock() {
+                    rd.end_emulated_frame();
+                    rd.begin_emulated_frame();
+                }
+
                 let view = self.gx.xfb_view.clone();
                 *self.shared.output.lock().unwrap() = view;
                 if let Some(cb) = self.frame_ready_cb.get() {
@@ -203,6 +233,65 @@ impl Drop for ThreadedSink {
                 tracing::error!(?err, "render worker thread panicked");
             }
         }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub struct InlineSink {
+    gx: Arc<Mutex<GxRenderer>>,
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    scratch: Vec<DrawVertex>,
+    recycled_draw_data: Vec<Box<DrawData>>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl InlineSink {
+    pub fn new(
+        device: wgpu::Device,
+        queue: wgpu::Queue,
+        surface_format: wgpu::TextureFormat,
+    ) -> (Arc<Mutex<GxRenderer>>, Self) {
+        let gx = Arc::new(Mutex::new(GxRenderer::new(&device, &queue, surface_format)));
+        let sink = InlineSink {
+            gx: gx.clone(),
+            device,
+            queue,
+            scratch: Vec::new(),
+            recycled_draw_data: Vec::new(),
+        };
+        (gx, sink)
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl RenderSink for InlineSink {
+    fn exec(&mut self, action: GxAction) {
+        self.gx.lock().unwrap().process_action_with_external_scratch(
+            &self.device,
+            &self.queue,
+            &action,
+            &mut self.scratch,
+        );
+
+        if let GxAction::Draw(boxed) = action {
+            self.recycled_draw_data.push(boxed);
+        }
+    }
+
+    fn vertex_scratch(&mut self) -> &mut Vec<DrawVertex> {
+        &mut self.scratch
+    }
+
+    fn flush_efb_copies(&mut self, ram: &mut gecko::mmio::RamViewMut<'_>) {
+        self.gx
+            .lock()
+            .unwrap()
+            .drain_pending_writebacks(&self.device, &self.queue, ram);
+    }
+
+    fn take_draw_data(&mut self) -> Box<DrawData> {
+        self.recycled_draw_data.pop().unwrap_or_default()
     }
 }
 
@@ -316,6 +405,9 @@ impl Renderer {
 
         let frame_ready_cb: Arc<OnceLock<FrameReadyCallback>> = Arc::new(OnceLock::new());
 
+        #[cfg(feature = "renderdoc-capture")]
+        let renderdoc = Arc::new(Mutex::new(crate::renderdoc_capture::RenderDocCapture::new()));
+
         let (work_tx, work_rx) = crossbeam_channel::bounded(WORK_QUEUE_LIMIT);
         let (recycled_draw_data_tx, recycled_draw_data_rx) = crossbeam_channel::unbounded();
         let worker = RenderWorker {
@@ -325,6 +417,8 @@ impl Renderer {
             shared: shared.clone(),
             frame_ready_cb: frame_ready_cb.clone(),
             recycled_draw_data_tx,
+            #[cfg(feature = "renderdoc-capture")]
+            renderdoc: renderdoc.clone(),
         };
         let worker_thread = std::thread::Builder::new()
             .name("backend-wgpu render".to_string())
@@ -348,24 +442,10 @@ impl Renderer {
             target_aspect,
             frame_ready_cb,
             #[cfg(feature = "renderdoc-capture")]
-            renderdoc: Arc::new(Mutex::new(crate::renderdoc_capture::RenderDocCapture::new())),
+            renderdoc,
         };
 
         (renderer, sink)
-    }
-
-    #[cfg(feature = "renderdoc-capture")]
-    pub fn begin_renderdoc_emulated_frame(&self) {
-        if let Ok(mut rd) = self.renderdoc.lock() {
-            rd.begin_emulated_frame();
-        }
-    }
-
-    #[cfg(feature = "renderdoc-capture")]
-    pub fn end_renderdoc_emulated_frame(&self) {
-        if let Ok(mut rd) = self.renderdoc.lock() {
-            rd.end_emulated_frame();
-        }
     }
 
     #[cfg(feature = "renderdoc-capture")]

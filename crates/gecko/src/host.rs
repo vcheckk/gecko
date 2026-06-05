@@ -186,6 +186,12 @@ pub struct DrawData {
     pub ambient_color: [[f32; 4]; 2],
     pub material_color: [[f32; 4]; 2],
     pub lights: [LightData; 8],
+    // Z-texture state (BP ZTEX1/ZTEX2). `ztex_op` is 0 (disabled) / 1 (add) /
+    // 2 (replace); already collapsed to 0 when the PE runs early-Z, since the
+    // hardware only applies the Z texture on the late-Z path.
+    pub ztex_bias: u32,
+    pub ztex_type: u8,
+    pub ztex_op: u8,
     pub frame_dirty: bool,
 }
 

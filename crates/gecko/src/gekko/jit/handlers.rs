@@ -755,8 +755,6 @@ pub fn nop<const OP: u32, const SYSTEM: SystemId>(t: &mut JitTranslator, instr: 
         | lut::OP_DCBT
         | lut::OP_DCBTST
         | lut::OP_DCBA
-        | lut::OP_DCBZ
-        | lut::OP_DCBZ_L
         | lut::OP_TLBIE
         | lut::OP_TLBIA
         | lut::OP_TLBSYNC
@@ -767,6 +765,20 @@ pub fn nop<const OP: u32, const SYSTEM: SystemId>(t: &mut JitTranslator, instr: 
         _ => {}
     }
     let _ = builder;
+}
+
+/// dcbz / dcbz_l zero the targeted 32-byte cache line. We have no dcache, so
+/// the zeros go straight to backing memory via the slow store path.
+/// TODO: What happens if games zero out 0x80000000..0x80008000?
+#[inline(always)]
+pub fn dcbz<const OP: u32, const SYSTEM: SystemId>(t: &mut JitTranslator, instr: Instruction) {
+    t.op_cycles = crate::gekko::cycles::cycles_for_op(OP);
+    let (builder, local) = unsafe { parts(t.builder_ptr, t.local_ptr) };
+
+    let ea = translator::emit_x_form_ea::<SYSTEM>(builder, t.ctx_ptr, instr);
+    builder.ins().call(local.dcbz, &[t.ctx_ptr, ea]);
+
+    t.handled_natively = true;
 }
 
 #[inline(always)]

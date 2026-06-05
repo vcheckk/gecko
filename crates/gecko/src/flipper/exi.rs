@@ -244,6 +244,8 @@ pub fn run_dma<const CHANNEL: usize, const SYSTEM: SystemId>(sys: &mut System<SY
         _ => unreachable!(),
     };
 
+    let address = crate::mmio::virt_to_phys(address);
+
     tracing::debug!(
         channel = CHANNEL,
         cs,

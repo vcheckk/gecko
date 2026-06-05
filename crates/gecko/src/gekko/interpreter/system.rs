@@ -55,6 +55,7 @@ pub fn spr<const OP: u32, const SYSTEM: SystemId>(ctx: &mut System<SYSTEM>, inst
                         }
                         #[cfg(not(feature = "jit"))]
                         let _ = written;
+                        ctx.gekko.spr.dmal.set_trigger(false);
                     }
                 }
                 _ => ctx.gekko.spr.write(spr_num, val),
@@ -156,6 +157,16 @@ pub fn tw<const SYSTEM: SystemId>(ctx: &mut System<SYSTEM>, instr: Instruction) 
 #[inline(always)]
 pub fn nop<const OP: u32, const SYSTEM: SystemId>(ctx: &mut System<SYSTEM>, _instr: Instruction) {
     ctx.scheduler.cycles += crate::gekko::cycles::cycles_for_op(OP) as u64;
+}
+
+/// dcbz / dcbz_l zero the targeted 32-byte cache line via `System::dcbz_line`.
+/// TODO: What happens if games zero out 0x80000000..0x80008000?
+#[inline(always)]
+pub fn dcbz<const OP: u32, const SYSTEM: SystemId>(ctx: &mut System<SYSTEM>, instr: Instruction) {
+    ctx.scheduler.cycles += crate::gekko::cycles::cycles_for_op(OP) as u64;
+    let base = ctx.gekko.read_gpr_or_zero(instr.ra());
+    let ea = base.wrapping_add(ctx.gekko.read_gpr(instr.rb()));
+    ctx.dcbz_line(ea);
 }
 
 #[inline(always)]

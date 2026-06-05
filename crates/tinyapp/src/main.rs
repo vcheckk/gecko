@@ -170,22 +170,11 @@ struct Args {
     /// Force interpreter dispatch for CPU/DSP/Vertex (default: JIT)
     #[arg(long)]
     interpreter: bool,
-}
 
-fn resolve_aspect(arg: &str, system: SystemId) -> TargetAspect {
-    match arg {
-        "auto" => {
-            if system == system::WII {
-                TargetAspect::Ratio(16.0 / 9.0)
-            } else {
-                TargetAspect::Ratio(4.0 / 3.0)
-            }
-        }
-        "4:3" => TargetAspect::Ratio(4.0 / 3.0),
-        "16:9" => TargetAspect::Ratio(16.0 / 9.0),
-        "stretch" => TargetAspect::Stretch,
-        other => panic!("--aspect must be auto|4:3|16:9|stretch, got {other:?}"),
-    }
+    /// Record a Dolphin-compatible .dff FIFO dump to this path, from the
+    /// first presented frame until the app exits
+    #[arg(long)]
+    fifo_record: Option<String>,
 }
 
 fn main() {
@@ -327,7 +316,7 @@ fn run<const SYSTEM: SystemId>(
     args: &Args,
     game_id: Option<String>,
 ) {
-    let target_aspect = resolve_aspect(&args.aspect, SYSTEM);
+    let target_aspect = TargetAspect::from_arg(&args.aspect, SYSTEM == system::WII);
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
         backends: wgpu::Backends::all(),
         ..wgpu::InstanceDescriptor::new_without_display_handle()
@@ -414,11 +403,20 @@ fn run<const SYSTEM: SystemId>(
     let start_gate = Arc::new(AtomicBool::new(!args.wait));
     let emu_start_gate = start_gate.clone();
     let emu_shutdown = shutdown_requested.clone();
+    let fifo_record = args.fifo_record.clone();
     drop(proxy);
     let emu_handle = std::thread::Builder::new()
         .name("emu".into())
         .spawn(move || {
-            thread::emu_thread::<SYSTEM>(emulator, emu_input, game_id, throttle, emu_start_gate, emu_shutdown)
+            thread::emu_thread::<SYSTEM>(
+                emulator,
+                emu_input,
+                game_id,
+                throttle,
+                emu_start_gate,
+                emu_shutdown,
+                fifo_record,
+            )
         })
         .expect("failed to spawn emulator thread");
 
