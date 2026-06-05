@@ -51,7 +51,7 @@ fn pack_u32_slice_to_uvec4x4(data: &[u32]) -> [UVec4; 4] {
 }
 
 impl GxRenderer {
-    fn current_pipeline_key(&self) -> PipelineKey {
+    fn current_pipeline_key(&self, ztex: bool) -> PipelineKey {
         let blend = self.current_blend_mode;
         let zmode = self.current_zmode;
         PipelineKey {
@@ -67,6 +67,7 @@ impl GxRenderer {
             color_update: blend.color_update(),
             alpha_update: blend.alpha_update(),
             cull_mode: self.current_cull_mode,
+            ztex,
         }
     }
 
@@ -271,7 +272,7 @@ impl GxRenderer {
                     self.shader_cache.insert(shader_key, module);
                     tracing::info!(?shader_key, "compiled specialized shader variant");
                 }
-                let pipeline_key = self.current_pipeline_key();
+                let pipeline_key = self.current_pipeline_key(draw.ztex_op != 0);
                 let full_key = FullPipelineKey {
                     shader: shader_key,
                     fixed: pipeline_key,
@@ -338,6 +339,10 @@ impl GxRenderer {
                         ambient_color1: Vec4::from(draw.ambient_color[1]),
                         material_color0: Vec4::from(draw.material_color[0]),
                         material_color1: Vec4::from(draw.material_color[1]),
+                        ztex_bias: draw.ztex_bias,
+                        ztex_type: draw.ztex_type as u32,
+                        ztex_op: draw.ztex_op as u32,
+                        _pad2: 0,
                     };
 
                     let fstart = self.frame_uniform_bytes.len();
@@ -554,6 +559,13 @@ impl GxRenderer {
                         });
                         if let Some(view) = efb_match.or_else(|| tex_entry.map(|(_, _, v)| v)) {
                             tex_views[slot] = view;
+                        } else {
+                            tracing::warn!(
+                                slot,
+                                ram_addr = format!("{:#010X}", tid.ram_addr),
+                                variant = format!("{:08X}", tid.variant),
+                                "bind group: texture id missing from cache, using fallback"
+                            );
                         }
 
                         if let Some(sk) = &bg_key.sampler_keys[slot] {

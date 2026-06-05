@@ -40,6 +40,12 @@ pub struct GraphicsProcessor {
 
     // Current GX state to snapshot into a Draw action later
     pub cur_textures: [Option<draw::TextureDescriptor>; 8],
+    // Bitmask of slots whose TX_SETMODE0/SETIMAGE0-3/SETTLUT regs changed
+    // since the last snapshot. Games write these regs in arbitrary order
+    // (SMG's J3D binds SETIMAGE3 before SETIMAGE0), so the descriptor is
+    // only consistent at draw time; `snapshot_dirty_textures` resolves them
+    // right before each draw call.
+    pub tex_dirty: u8,
     // Per-texture-slot TLUT binding (tmem offset + palette pixel format),
     // populated by BP_TX_SETTLUT writes.
     pub cur_tluts: [draw::TlutRef; 8],
@@ -138,6 +144,7 @@ impl GraphicsProcessor {
             recorder: None,
             projection: Matrix4::default(),
             cur_textures: Default::default(),
+            tex_dirty: 0,
             cur_tluts: [draw::TlutRef::default(); 8],
             palette_mem: vec![0u16; TLUT_MEM_ENTRIES],
             cur_tev_color_env: Default::default(),

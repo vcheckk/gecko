@@ -31,18 +31,28 @@ impl GraphicsProcessor {
             "BP register write"
         );
 
-        // TX_SETIMAGE3 is written last for each texture slot, so we use it as
-        // the trigger to snapshot the full texture descriptor
-        let texture_slot = if idx >= BP_TX_SETIMAGE3_I0 && idx < BP_TX_SETIMAGE3_I0 + 4 {
-            Some(idx - BP_TX_SETIMAGE3_I0)
-        } else if idx >= BP_TX_SETIMAGE3_I4 && idx < BP_TX_SETIMAGE3_I4 + 4 {
-            Some(idx - BP_TX_SETIMAGE3_I4 + 4)
+        // Texture descriptor regs (SETMODE0 + SETIMAGE0-3): games write
+        // these in arbitrary order (SMG's J3D binds SETIMAGE3 before
+        // SETIMAGE0), so snapshotting at any single reg write can pair a new
+        // address with a stale size/format. Mark the slot dirty instead;
+        // `snapshot_dirty_textures` resolves it right before the next draw,
+        // when the full descriptor is consistent.
+        let texture_slot = if idx >= BP_TX_SETMODE0_I0 && idx < BP_TX_SETMODE0_I0 + 4 {
+            Some(idx - BP_TX_SETMODE0_I0)
+        } else if idx >= BP_TX_SETMODE0_I4 && idx < BP_TX_SETMODE0_I4 + 4 {
+            Some(idx - BP_TX_SETMODE0_I4 + 4)
+        } else if idx >= BP_TX_SETIMAGE0_I0 && idx < BP_TX_SETIMAGE3_I0 + 4 {
+            // IMAGE0-3 are four contiguous 4-register blocks (0x88..0x98),
+            // each indexed by slot, so `& 3` recovers the slot in any block.
+            Some((idx - BP_TX_SETIMAGE0_I0) & 3)
+        } else if idx >= BP_TX_SETIMAGE0_I4 && idx < BP_TX_SETIMAGE3_I4 + 4 {
+            Some(((idx - BP_TX_SETIMAGE0_I4) & 3) + 4)
         } else {
             None
         };
 
         if let Some(slot) = texture_slot {
-            self.snapshot_texture(renderer, &ram.as_view(), slot, val);
+            self.tex_dirty |= 1 << slot;
         }
 
         // TX_SETTLUT: per-texture-slot binding of the palette (tmem offset +
@@ -59,19 +69,24 @@ impl GraphicsProcessor {
         };
         if let Some(slot) = tlut_slot {
             self.cur_tluts[slot] = draw::TlutRef::from_raw(val);
-            self.resnapshot_paletted_slot(renderer, &ram.as_view(), slot);
+            self.tex_dirty |= 1 << slot;
         }
 
         // LOADTLUT: writing TLUT1 triggers a copy from main RAM (address in
         // TLUT0, stored pre-shifted by 5) into our palette TMEM. Any paletted
         // texture already bound is now looking at fresh palette bytes, so we
         // must redecode it. We don't know which slots' TLUT regions overlap
-        // the load, so rescan all bound paletted slots (saw this in Dolphin @
+        // the load, so rescan all paletted slots (saw this in Dolphin @
         // TMEM::InvalidateAll on LOADTLUT1).
         if idx == BP_LOAD_TLUT1 {
             self.load_tlut(&ram.as_view(), val);
             for slot in 0..self.cur_textures.len() {
-                self.resnapshot_paletted_slot(renderer, &ram.as_view(), slot);
+                let image0 = TxSetImage0::from_raw(
+                    self.bp_regs[self::tx_slot_reg(BP_TX_SETIMAGE0_I0, BP_TX_SETIMAGE0_I4, slot)],
+                );
+                if image0.format().is_paletted() {
+                    self.tex_dirty |= 1 << slot;
+                }
             }
         }
 
@@ -87,6 +102,8 @@ impl GraphicsProcessor {
             }
             BP_PE_ZCOMPARE => {
                 self.cur_pe_control = PeControl::from_raw(val);
+                // early_ztest feeds DrawData::ztex_op
+                self.frame_state_dirty = true;
             }
             BP_PE_ALPHA_COMPARE => {
                 self.cur_alpha_compare = AlphaCompare::from_raw(val);
@@ -175,6 +192,13 @@ impl GraphicsProcessor {
         // TEV KSEL (constant color selection) registers: recalculate konst colors
         if idx >= BP_TEV_KSEL_0 && idx <= BP_TEV_KSEL_0 + 7 {
             self.konst_dirty = true;
+            self.frame_state_dirty = true;
+        }
+
+        // Z-texture state: bias (ZTEX1) + type/op (ZTEX2). Op != 0 makes the
+        // TEV replace/offset the fragment depth with a value decoded from the
+        // last texture lookup (SMG clears its EFB depth this way).
+        if idx == BP_TEV_ZTEX1 || idx == BP_TEV_ZTEX2 {
             self.frame_state_dirty = true;
         }
 
@@ -346,18 +370,18 @@ impl GraphicsProcessor {
         }
     }
 
-    /// If the slot currently binds a paletted texture, rerun the snapshot
-    /// pipeline so `texture_data_changed` rehashes the (now possibly fresh)
-    /// palette bytes + TLUT format and decodes a new RGBA if anything moved.
-    fn resnapshot_paletted_slot(&mut self, renderer: &mut dyn RenderSink, ram: &RamView<'_>, slot: usize) {
-        let Some(desc) = self.cur_textures[slot] else {
-            return;
-        };
-        if !desc.format.is_paletted() {
-            return;
+    /// Resolve every slot whose descriptor regs changed since the last
+    /// snapshot. Called right before each draw call, when SETMODE0 +
+    /// SETIMAGE0-3 + SETTLUT are guaranteed to describe one consistent
+    /// texture regardless of the order the game wrote them in.
+    pub fn snapshot_dirty_textures(&mut self, renderer: &mut dyn RenderSink, ram: &RamView<'_>) {
+        while self.tex_dirty != 0 {
+            let slot = self.tex_dirty.trailing_zeros() as usize;
+            self.tex_dirty &= !(1 << slot);
+
+            let image3_val = self.bp_regs[self::tx_slot_reg(BP_TX_SETIMAGE3_I0, BP_TX_SETIMAGE3_I4, slot)];
+            self.snapshot_texture(renderer, ram, slot, image3_val);
         }
-        let image3_val = self.bp_regs[self::tx_slot_reg(BP_TX_SETIMAGE3_I0, BP_TX_SETIMAGE3_I4, slot)];
-        self.snapshot_texture(renderer, ram, slot, image3_val);
     }
 
     fn load_tev_env(&mut self, idx: usize, val: u32) {

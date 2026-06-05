@@ -35,6 +35,12 @@ struct FrameUniforms {
     ambient_color1: vec4<f32>,
     material_color0: vec4<f32>,
     material_color1: vec4<f32>,
+    // Z-texture: bias (24-bit), texel format (0=u8/1=u16/2=u24), op
+    // (0=disabled, 1=add, 2=replace).
+    ztex_bias: u32,
+    ztex_type: u32,
+    ztex_op: u32,
+    _pad2: u32,
 };
 
 struct DrawUniforms {

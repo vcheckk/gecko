@@ -618,6 +618,17 @@ impl GxRenderer {
         stride: u32,
         depth_copy: bool,
     ) {
+        tracing::debug!(
+            dest_addr = format!("{dest_addr:#010X}"),
+            src_x,
+            src_y,
+            src_w,
+            src_h,
+            copy_format,
+            mipmap,
+            depth_copy,
+            "efb_to_texture copy"
+        );
         // Clamp the source to EFB bounds (mirrors execute_copy_xfb).
         let width = src_w.min(crate::EFB_WIDTH.saturating_sub(src_x));
         let height = src_h.min(crate::EFB_HEIGHT.saturating_sub(src_y));

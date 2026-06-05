@@ -34,6 +34,11 @@ struct Args {
     #[arg(long)]
     screenshot: Option<PathBuf>,
 
+    /// Headless: dump the decoded texture cache as PNGs into this directory
+    /// after playback
+    #[arg(long)]
+    dump_textures: Option<PathBuf>,
+
     /// Display aspect ratio: auto (16:9 Wii / 4:3 GC), 4:3, 16:9, stretch
     #[arg(long, default_value = "auto")]
     aspect: String,
@@ -91,7 +96,7 @@ fn run<const SYSTEM: gecko::SystemId>(file: dff::DffFile, args: Args) {
     let end = args.end.unwrap_or(last).clamp(start, last);
 
     if let Some(ref out) = args.screenshot {
-        self::run_headless::<SYSTEM>(&file, start, end, out);
+        self::run_headless::<SYSTEM>(&file, start, end, out, args.dump_textures.as_deref());
     } else {
         self::run_windowed::<SYSTEM>(file, start, end, args.once, &args.aspect);
     }
@@ -113,7 +118,13 @@ fn init_wgpu() -> (wgpu::Instance, wgpu::Adapter, wgpu::Device, wgpu::Queue) {
     (instance, adapter, device, queue)
 }
 
-fn run_headless<const SYSTEM: gecko::SystemId>(file: &dff::DffFile, start: usize, end: usize, out: &PathBuf) {
+fn run_headless<const SYSTEM: gecko::SystemId>(
+    file: &dff::DffFile,
+    start: usize,
+    end: usize,
+    out: &PathBuf,
+    dump_textures: Option<&std::path::Path>,
+) {
     let (_instance, _adapter, device, queue) = self::init_wgpu();
 
     let (gx, sink) = InlineSink::new(device.clone(), queue.clone(), wgpu::TextureFormat::Rgba8Unorm);
@@ -129,6 +140,11 @@ fn run_headless<const SYSTEM: gecko::SystemId>(file: &dff::DffFile, start: usize
         }
     }
     eprintln!("played frames {start}..={end}, {presented} presents");
+
+    if let Some(dir) = dump_textures {
+        use gecko::host::RenderSink;
+        sink.exec(gecko::host::GxAction::DumpTextures { dir: dir.to_path_buf() });
+    }
 
     let _ = device.poll(wgpu::PollType::Wait {
         submission_index: None,

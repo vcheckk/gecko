@@ -69,6 +69,15 @@ impl GraphicsProcessor {
 
         let vertex_count = data.len() / vf.vertex_stride;
 
+        // Resolve any texture slots whose descriptor regs changed since the
+        // last draw. Done lazily here (not at BP write time) because games
+        // write SETMODE0/SETIMAGE0-3 in arbitrary order; only at draw time is
+        // the descriptor guaranteed consistent. Runs before the recorder so
+        // recorded draws reference the resolved textures.
+        if self.tex_dirty != 0 {
+            self.snapshot_dirty_textures(renderer, &mmio.ram_view());
+        }
+
         if let Some(rec) = self.recorder.as_deref_mut()
             && rec.is_recording()
         {
@@ -164,6 +173,16 @@ impl GraphicsProcessor {
         boxed.material_color = self.cached_material_color;
         boxed.lights = self.cached_lights;
         boxed.active_texcoords = (self.xf_mem[crate::flipper::gx::constants::XF_NUM_TEXGENS] as u8).min(8);
+        // Z texture: only applied by hardware on the late-Z path; collapse to
+        // disabled under early-Z so the backend can keep early-Z pipelines.
+        let ztex2 = TevZtex2::from_raw(self.bp_regs[BP_TEV_ZTEX2]);
+        boxed.ztex_bias = TevZtex1::from_raw(self.bp_regs[BP_TEV_ZTEX1]).bias();
+        boxed.ztex_type = ztex2.tex_type();
+        boxed.ztex_op = if self.cur_pe_control.early_ztest() {
+            0
+        } else {
+            ztex2.op()
+        };
         boxed.frame_dirty = self.frame_state_dirty;
         self.frame_state_dirty = false;
         renderer.exec(GxAction::Draw(boxed));
