@@ -4,10 +4,10 @@
 
 A cross-platform GameCube/Wii emulator and debugger written in Rust.
 
-<img src="images/ffcccb.png" width="50%">
+<img src="images/ffcccb.png" width="50%"><img src="images/galaxy.png" width="50%">
 
 <img src="images/wario.png" width="30%"> <img src="images/sunshine.png" width="30%"> <img src="images/windwaker.png" width="30%">
-<img src="images/luigi.png" width="30%"> <img src="images/re4.png" width="30%"> <img src="images/debugger.png" width="30%">
+<img src="images/luigi.png" width="30%"> <img src="images/twilight.png" width="30%"> <img src="images/debugger.png" width="30%">
 
 </div>
 
